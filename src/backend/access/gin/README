@@ -137,14 +137,21 @@ with ordinary key entries.
 * In a key entry at the btree leaf level, at the next SHORTALIGN boundary,
 there is an array of zero or more ItemPointers, which store the heap tuple
 TIDs for which the indexable items contain this key.  This is called the
-"posting list".  The TIDs in a posting list must appear in sorted order.
-If the list would be too big for the index tuple to fit on an index page,
-the ItemPointers are pushed out to a separate posting page or pages, and
-none appear in the key entry itself.  The separate pages are called a
-"posting tree"; they are organized as a btree of ItemPointer values.
-Note that in either case, the ItemPointers associated with a key can
-easily be read out in sorted order; this is relied on by the scan
-algorithms.
+"posting list".
+
+  The TIDs in a posting list must appear in sorted order.
+Since TIDs are ascending sorted, block numbers are also ascending. At second
+and further ItemPointers increment to block number is stored instead of
+block number itself. Block and offset numbers are varbyte encoded. Since
+block number increment an offset numbers are typically low numbers, significant
+compression is achieved.
+
+If the list would be too big for the index tuple to fit on an index page, the
+ItemPointers are pushed out to a separate posting page or pages, and none
+appear in the key entry itself.  The separate pages are called a "posting
+tree" (see below); Note that in either case, the ItemPointers associated with
+a key can easily be read out in sorted order; this is relied on by the scan
+algorithms. 
 
 * The index tuple header fields of a leaf key entry are abused as follows:
 
@@ -209,6 +216,23 @@ the entries for that tuple.  (Thus, a heap tuple whose entries do not all
 fit on one pending-list page must have those pages to itself, even if this
 results in wasting much of the space on the preceding page and the last
 page for the tuple.)
+
+Posting tree
+------------
+
+If a posting list is too large to store in-line in a key entry, a posting tree
+is created. A posting tree is a B-tree structure, where the ItemPointer is
+used as the key. At the leaf-level, item pointers are stored compressed, in
+"varbyte encoding".
+
+they are organized as a btree of ItemPointer values. ItemPointers in leaf
+page of posting tree are compressed in the same way as it is in posting list.
+However, for insertions into pages finding position for ItemPointer is
+frequently required. It would be slow to rescan full page for each insertion.
+That's why at the end of page GinDataLeafIndexCount of "item indexes" are
+stored. Item index is a triple of ItemPointer, offset number of ItemPointer
+and offset in page. Therefore, when inserting we can quickly find relevant
+item index and then scan only small fraction of page.
 
 Limitations
 -----------

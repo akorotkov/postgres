@@ -6651,8 +6651,16 @@ StartupXLOG(void)
 			bool		recoveryApply = true;
 			ErrorContextCallback errcallback;
 			TimestampTz xtime;
+			int i;
 
 			InRedo = true;
+
+			elog(LOG, "PID = %d", MyProcPid);
+			for (i = 20; i >= 0; i--)
+			{
+				elog(LOG, "%d", i);
+				sleep(1);
+			}
 
 			ereport(LOG,
 					(errmsg("redo starts at %X/%X",

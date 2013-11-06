@@ -263,6 +263,9 @@ ginFindParents(GinBtree btree, GinBtreeStack *stack,
 /*
  * Insert value (stored in GinBtree) to tree described by stack
  *
+ * The stack represents the path from the root to the correct leaf page
+ * where the new value should be inserted.
+ *
  * During an index build, buildStats is non-null and the counters
  * it contains are incremented as needed.
  *
@@ -296,7 +299,7 @@ ginInsertValue(GinBtree btree, GinBtreeStack *stack, GinStatsData *buildStats)
 		savedRightLink = GinPageGetOpaque(page)->rightlink;
 
 		START_CRIT_SECTION();
-		fit = btree->placeToPage(btree, stack->buffer, stack->off, &rdata);
+		fit = btree->placeToPage(btree, stack->buffer, stack, &rdata);
 		if (fit)
 		{
 			MarkBufferDirty(stack->buffer);
@@ -366,8 +369,13 @@ ginInsertValue(GinBtree btree, GinBtreeStack *stack, GinStatsData *buildStats)
 
 				START_CRIT_SECTION();
 
+				/*
+				 * Replace the old left page with the copy. But don't free
+				 * the copy until after writing the WAL record, as the data
+				 * being WAL-logged points to the temporary copy.
+				 */
+				memcpy(lpage, newlpage, BLCKSZ);
 				GinInitBuffer(stack->buffer, GinPageGetOpaque(newlpage)->flags & ~GIN_LEAF);
-				PageRestoreTempPage(newlpage, lpage);
 				btree->fillRoot(btree, stack->buffer, lbuffer, rbuffer);
 
 				MarkBufferDirty(rbuffer);
@@ -389,6 +397,7 @@ ginInsertValue(GinBtree btree, GinBtreeStack *stack, GinStatsData *buildStats)
 				LockBuffer(stack->buffer, GIN_UNLOCK);
 				END_CRIT_SECTION();
 
+				pfree(newlpage);
 				freeGinBtreeStack(stack);
 
 				/* During index build, count the newly-added root page */
@@ -415,7 +424,12 @@ ginInsertValue(GinBtree btree, GinBtreeStack *stack, GinStatsData *buildStats)
 				GinPageGetOpaque(newlpage)->rightlink = BufferGetBlockNumber(rbuffer);
 
 				START_CRIT_SECTION();
-				PageRestoreTempPage(newlpage, lpage);
+				/*
+				 * Replace the old left page with the copy. But don't free
+				 * the copy until after writing the WAL record, as the data
+				 * being WAL-logged points to the temporary copy.
+				 */
+				memcpy(lpage, newlpage, BLCKSZ);
 
 				MarkBufferDirty(rbuffer);
 				MarkBufferDirty(stack->buffer);
@@ -430,6 +444,7 @@ ginInsertValue(GinBtree btree, GinBtreeStack *stack, GinStatsData *buildStats)
 				}
 				UnlockReleaseBuffer(rbuffer);
 				END_CRIT_SECTION();
+				pfree(newlpage);
 			}
 		}
 

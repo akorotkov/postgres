@@ -41,20 +41,46 @@ gin_desc(StringInfo buf, uint8 xl_info, char *rec)
 			desc_node(buf, ((ginxlogCreatePostingTree *) rec)->node, ((ginxlogCreatePostingTree *) rec)->blkno);
 			break;
 		case XLOG_GIN_INSERT:
-			appendStringInfoString(buf, "Insert item, ");
-			desc_node(buf, ((ginxlogInsert *) rec)->node, ((ginxlogInsert *) rec)->blkno);
-			appendStringInfo(buf, " offset: %u nitem: %u isdata: %c isleaf %c isdelete %c updateBlkno:%u",
-							 ((ginxlogInsert *) rec)->offset,
-							 ((ginxlogInsert *) rec)->nitem,
-							 (((ginxlogInsert *) rec)->isData) ? 'T' : 'F',
-							 (((ginxlogInsert *) rec)->isLeaf) ? 'T' : 'F',
-							 (((ginxlogInsert *) rec)->isDelete) ? 'T' : 'F',
-							 ((ginxlogInsert *) rec)->updateBlkno);
+			if (!((ginxlogInsertCommon *) rec)->isData)
+			{
+				ginxlogInsertEntry *data = (ginxlogInsertEntry *) rec;
+				appendStringInfoString(buf, "Insert entry, ");
+				desc_node(buf, data->common.node, data->common.blkno);
+				appendStringInfo(buf, " offset %u, isleaf %c, isdelete %c, updateBlkno %u",
+								 data->offset,
+								 data->common.isLeaf ? 'T' : 'F',
+								 data->isDelete ? 'T' : 'F',
+								 data->common.updateBlkno);
+			}
+			else if (!((ginxlogInsertCommon *) rec)->isLeaf)
+			{
+				ginxlogInsertDataInternal *data = (ginxlogInsertDataInternal *) rec;
+				appendStringInfoString(buf, "Insert non-leaf data, ");
+				desc_node(buf, data->common.node, data->common.blkno);
+				appendStringInfo(buf, " offset %u, child %u, key %u/%u, updateBlkno %u",
+								 data->offset,
+								 PostingItemGetBlockNumber(&data->newitem),
+								 ItemPointerGetBlockNumber(&data->newitem.key),
+								 ItemPointerGetOffsetNumber(&data->newitem.key),
+								 data->common.updateBlkno);
+			}
+			else
+			{
+				ginxlogInsertDataLeaf *data = (ginxlogInsertDataLeaf *) rec;
+				appendStringInfoString(buf, "Insert leaf data, ");
+				desc_node(buf, data->common.node, data->common.blkno);
+				appendStringInfo(buf, " begin %u, len %u, restOffset %u",
+								 data->beginOffset,
+								 data->newlen,
+								 data->restOffset);
+			}
 			break;
 		case XLOG_GIN_SPLIT:
 			appendStringInfoString(buf, "Page split, ");
 			desc_node(buf, ((ginxlogSplit *) rec)->node, ((ginxlogSplit *) rec)->lblkno);
-			appendStringInfo(buf, " isrootsplit: %c", (((ginxlogSplit *) rec)->isRootSplit) ? 'T' : 'F');
+			appendStringInfo(buf, " rblkno: %u, isrootsplit: %c",
+							 ((ginxlogSplit *) rec)->rblkno,
+							 (((ginxlogSplit *) rec)->isRootSplit) ? 'T' : 'F');
 			break;
 		case XLOG_GIN_VACUUM_PAGE:
 			appendStringInfoString(buf, "Vacuum page, ");

@@ -32,11 +32,8 @@
 typedef struct GinPageOpaqueData
 {
 	BlockNumber rightlink;		/* next page if any */
-	OffsetNumber maxoff;		/* number entries on GIN_DATA page: number of
-								 * heap ItemPointers on GIN_DATA|GIN_LEAF page
-								 * or number of PostingItems on GIN_DATA &
-								 * ~GIN_LEAF page. On GIN_LIST page, number of
-								 * heap tuples. */
+	OffsetNumber maxoff;		/* number of PostingItems on GIN_DATA & ~GIN_LEAF page.
+								 * On GIN_LIST page, number of heap tuples. */
 	uint16		flags;			/* see bit definitions below */
 } GinPageOpaqueData;
 
@@ -48,6 +45,7 @@ typedef GinPageOpaqueData *GinPageOpaque;
 #define GIN_META		  (1 << 3)
 #define GIN_LIST		  (1 << 4)
 #define GIN_LIST_FULLROW  (1 << 5)		/* makes sense only on GIN_LIST page */
+#define GIN_COMPRESSED	  (1 << 6)
 
 /* Page numbers of fixed-location pages */
 #define GIN_METAPAGE_BLKNO	(0)
@@ -115,6 +113,8 @@ typedef struct GinMetaPageData
 #define GinPageSetList(page)   ( GinPageGetOpaque(page)->flags |= GIN_LIST )
 #define GinPageHasFullRow(page)    ( GinPageGetOpaque(page)->flags & GIN_LIST_FULLROW )
 #define GinPageSetFullRow(page)   ( GinPageGetOpaque(page)->flags |= GIN_LIST_FULLROW )
+#define GinPageIsCompressed(page)    ( GinPageGetOpaque(page)->flags & GIN_COMPRESSED )
+#define GinPageSetCompressed(page)   ( GinPageGetOpaque(page)->flags |= GIN_COMPRESSED )
 
 #define GinPageIsDeleted(page) ( GinPageGetOpaque(page)->flags & GIN_DELETED)
 #define GinPageSetDeleted(page)    ( GinPageGetOpaque(page)->flags |= GIN_DELETED)
@@ -211,13 +211,15 @@ typedef signed char GinNullCategory;
 #define GinSetPostingTree(itup, blkno)	( GinSetNPosting((itup),GIN_TREE_POSTING), ItemPointerSetBlockNumber(&(itup)->t_tid, blkno) )
 #define GinGetPostingTree(itup) GinItemPointerGetBlockNumber(&(itup)->t_tid)
 
-#define GinGetPostingOffset(itup)	GinItemPointerGetBlockNumber(&(itup)->t_tid)
-#define GinSetPostingOffset(itup,n) ItemPointerSetBlockNumber(&(itup)->t_tid,n)
-#define GinGetPosting(itup)			((ItemPointer) ((char*)(itup) + GinGetPostingOffset(itup)))
+#define GIN_ITUP_COMPRESSED		(1 << 31)
+#define GinGetPostingOffset(itup)	(GinItemPointerGetBlockNumber(&(itup)->t_tid) & (~GIN_ITUP_COMPRESSED))
+#define GinSetPostingOffset(itup,n) ItemPointerSetBlockNumber(&(itup)->t_tid,(n)|GIN_ITUP_COMPRESSED)
+#define GinGetPosting(itup)			((Pointer) ((char*)(itup) + GinGetPostingOffset(itup)))
+#define GinItupIsCompressed(itup)	(GinItemPointerGetBlockNumber(&(itup)->t_tid) & GIN_ITUP_COMPRESSED)
 
 #define GinMaxItemSize \
 	MAXALIGN_DOWN(((BLCKSZ - SizeOfPageHeaderData - \
-		MAXALIGN(sizeof(GinPageOpaqueData))) / 3 - sizeof(ItemIdData)))
+		MAXALIGN(sizeof(GinPageOpaqueData))) / 6 - sizeof(ItemIdData)))
 
 /*
  * Access macros for non-leaf entry tuples
@@ -228,23 +230,60 @@ typedef signed char GinNullCategory;
 
 /*
  * Data (posting tree) pages
+ *
+ * Posting tree pages don't store regular tuples. Non-leaf pages contain
+ * PostingItems, which are pairs of ItemPointers and child block numbers,
+ * and leaf pages contain a compressed posting list, and a small "leaf-item"
+ * index to allow quick seeking into the compressed posting list.
+ *
+ * The compressed posting list is stored after the regular page header.
+ * Although we don't store regular tuples, pd_lower is used to indicate
+ * the end of the posting list. After that, free space follows. At the
+ * end of the page (before special space), the leaf-item index is stored.
+ * pd_upper points to that location. This layout is compatible with the
+ * "standard" heap and index page layout described in bufpage.h, so that
+ * we can e.g set buffer_std when writing WAL records:
+ *
+ * +----------------+-------------+-------------------+
+ * | PageHeaderData | right bound | compressed ...	  |
+ * +----------------+--+----------+-------------------+
+ * |  posting list ... |							  |
+ * +-------------------+------------------------------+
+ * |				   ^ pd_lower					  |
+ * |												  |
+ * |		  v pd_upper							  |
+ * +----------+---------------------+-----------------+
+ * |		  |	leaf-item index ... | "special space" |
+ * +----------+---------------------+-----------------+
+ *									^ pd_special
+ *
+ * In the special space is the GinPageOpaque struct.
  */
+#define GinDataLeafPageGetPostingList(page) \
+	(PageGetContents(page) + sizeof(ItemPointerData))
+#define GinDataLeafPageGetPostingListEnd(page) \
+	(page + ((PageHeader) page)->pd_lower)
+#define GinDataLeafPageGetPostingListSize(page) \
+	(((PageHeader) page)->pd_lower - MAXALIGN(SizeOfPageHeaderData) - sizeof(ItemPointerData))
+#define GinDataLeafPageSetPostingListSize(page, size) \
+	(((PageHeader) page)->pd_lower = (size) + MAXALIGN(SizeOfPageHeaderData) + sizeof(ItemPointerData))
+
+#define GinDataLeafPageGetFreeSpace(page) PageGetExactFreeSpace(page)
+
 #define GinDataPageGetRightBound(page)	((ItemPointer) PageGetContents(page))
 #define GinDataPageGetData(page)	\
 	(PageGetContents(page) + MAXALIGN(sizeof(ItemPointerData)))
 /* non-leaf pages contain PostingItems */
 #define GinDataPageGetPostingItem(page, i)	\
 	((PostingItem *) (GinDataPageGetData(page) + ((i)-1) * sizeof(PostingItem)))
-/* leaf pages contain ItemPointers */
-#define GinDataPageGetItemPointer(page, i)	\
+/* old uncompressed leaf pages contain ItemPointers */
+#define GinDataPageGetItemPointer(page, i)  \
 	((ItemPointer) (GinDataPageGetData(page) + ((i)-1) * sizeof(ItemPointerData)))
-#define GinSizeOfDataPageItem(page) \
-	(GinPageIsLeaf(page) ? sizeof(ItemPointerData) : sizeof(PostingItem))
 
-#define GinDataPageGetFreeSpace(page)	\
+#define GinNonLeafDataPageGetFreeSpace(page)	\
 	(BLCKSZ - MAXALIGN(SizeOfPageHeaderData) \
 	 - MAXALIGN(sizeof(ItemPointerData)) \
-	 - GinPageGetOpaque(page)->maxoff * GinSizeOfDataPageItem(page) \
+	 - GinPageGetOpaque(page)->maxoff * sizeof(PostingItem)	\
 	 - MAXALIGN(sizeof(GinPageOpaqueData)))
 
 #define GinMaxLeafDataItems \
@@ -252,6 +291,33 @@ typedef signed char GinNullCategory;
 	  MAXALIGN(sizeof(ItemPointerData)) - \
 	  MAXALIGN(sizeof(GinPageOpaqueData))) \
 	 / sizeof(ItemPointerData))
+
+#define MAX_COMPRESSED_ITEM_POINTER_SIZE 8
+
+/*
+ * Each item index claims that at offset 'pageOffset' previously read TID was
+ * iptr.
+ */
+typedef struct
+{
+	ItemPointerData iptr;
+	uint16 pageOffset;
+} GinDataLeafItemIndex;
+
+#define GinDataLeafIndexCount 32
+
+#define GinDataLeafMaxPostingListSize	\
+	(BLCKSZ - MAXALIGN(SizeOfPageHeaderData) \
+	 - sizeof(ItemPointerData) \
+	 - MAXALIGN(sizeof(GinPageOpaqueData)) \
+	 - MAXALIGN(sizeof(GinDataLeafItemIndex) * GinDataLeafIndexCount))
+
+#define GinDataPageFreeSpacePre(page, ptr) \
+	(((PageHeader) page)->pd_upper - ((ptr) - (page)))
+
+#define GinPageGetIndexes(page) \
+	((GinDataLeafItemIndex *)(page + ((PageHeader) page)->pd_upper))
+
 
 /*
  * List pages
@@ -326,28 +392,55 @@ typedef struct ginxlogCreatePostingTree
 {
 	RelFileNode node;
 	BlockNumber blkno;
-	uint32		nitem;
-	/* follows list of heap's ItemPointer */
+	uint32		size;
+	/* A compressed posting list follows */
 } ginxlogCreatePostingTree;
 
 #define XLOG_GIN_INSERT  0x20
 
-typedef struct ginxlogInsert
+/*
+ * The format of the insertion record varies depending on the page type.
+ * ginxlogInsertCommon is the common part between all variants.
+ */
+typedef struct
 {
 	RelFileNode node;
 	BlockNumber blkno;
+	/*
+	 * if this insertion completes an incomplete split, updateBlkno is the
+	 * right block of the split.
+	 */
 	BlockNumber updateBlkno;
-	OffsetNumber offset;
-	bool		isDelete;
 	bool		isData;
 	bool		isLeaf;
-	OffsetNumber nitem;
+} ginxlogInsertCommon;
 
-	/*
-	 * follows: tuples or ItemPointerData or PostingItem or list of
-	 * ItemPointerData
-	 */
-} ginxlogInsert;
+typedef struct
+{
+	ginxlogInsertCommon common;
+	OffsetNumber offset;
+	PostingItem newitem;
+} ginxlogInsertDataInternal;
+
+typedef struct
+{
+	ginxlogInsertCommon common;
+	/* does this replace the old tuple at same offset, rather than insert? */
+	bool		isDelete;
+	OffsetNumber offset;
+	IndexTupleData tuple;
+} ginxlogInsertEntry;
+
+typedef struct
+{
+	ginxlogInsertCommon common;
+	uint16		beginOffset;
+	uint16		newlen;
+	uint16		restOffset;
+
+	/* variable length new portion of the compressed posting list follows */
+	char		newdata[1];
+} ginxlogInsertDataLeaf;
 
 #define XLOG_GIN_SPLIT	0x30
 
@@ -358,6 +451,10 @@ typedef struct ginxlogSplit
 	BlockNumber rootBlkno;
 	BlockNumber rblkno;
 	BlockNumber rrlink;
+	/*
+	 * 'separator' is the number of entries on the left page, and 'nitem'
+	 * is the total. On a data leaf page, these are # of bytes.
+	 */
 	OffsetNumber separator;
 	OffsetNumber nitem;
 
@@ -467,7 +564,8 @@ typedef struct GinBtreeStack
 {
 	BlockNumber blkno;
 	Buffer		buffer;
-	OffsetNumber off;
+	OffsetNumber off, pageOffset;
+	ItemPointerData iptr;
 	/* predictNumber contains predicted number of pages on current level */
 	uint32		predictNumber;
 	struct GinBtreeStack *parent;
@@ -485,7 +583,7 @@ typedef struct GinBtreeData
 	/* insert methods */
 	OffsetNumber (*findChildPtr) (GinBtree, Page, BlockNumber, OffsetNumber);
 	BlockNumber (*getLeftMostPage) (GinBtree, Page);
-	bool		(*placeToPage) (GinBtree, Buffer, OffsetNumber, XLogRecData **);
+	bool		(*placeToPage) (GinBtree, Buffer, GinBtreeStack *, XLogRecData **);
 	Page		(*splitPage) (GinBtree, Buffer, Buffer, OffsetNumber, XLogRecData **);
 	void		(*fillRoot) (GinBtree, Buffer, Buffer, Buffer);
 
@@ -522,22 +620,19 @@ extern void ginInsertValue(GinBtree btree, GinBtreeStack *stack,
 extern void ginFindParents(GinBtree btree, GinBtreeStack *stack, BlockNumber rootBlkno);
 
 /* ginentrypage.c */
-extern IndexTuple GinFormTuple(GinState *ginstate,
-			 OffsetNumber attnum, Datum key, GinNullCategory category,
-			 ItemPointerData *ipd, uint32 nipd, bool errorTooBig);
-extern void GinShortenTuple(IndexTuple itup, uint32 nipd);
 extern void ginPrepareEntryScan(GinBtree btree, OffsetNumber attnum,
 					Datum key, GinNullCategory category,
 					GinState *ginstate);
 extern void ginEntryFillRoot(GinBtree btree, Buffer root, Buffer lbuf, Buffer rbuf);
 extern IndexTuple ginPageGetLinkItup(Buffer buf);
+extern void ginReadTuple(GinState *ginstate, OffsetNumber attnum,
+	IndexTuple itup, ItemPointerData *ipd);
+extern ItemPointerData updateItemIndexes(Page page);
+extern void incrUpdateItemIndexes(Page page, int oldOffset, int newOffset);
 
 /* gindatapage.c */
-extern uint32 ginMergeItemPointers(ItemPointerData *dst,
-					 ItemPointerData *a, uint32 na,
-					 ItemPointerData *b, uint32 nb);
-
-extern void GinDataPageAddItemPointer(Page page, ItemPointer data, OffsetNumber offset);
+extern BlockNumber createPostingTree(Relation index, ItemPointerData *items, uint32 nitems, GinStatsData *buildStats);
+extern void dataCompressLeafPage(Page page);
 extern void GinDataPageAddPostingItem(Page page, PostingItem *data, OffsetNumber offset);
 extern void GinPageDeletePostingItem(Page page, OffsetNumber offset);
 
@@ -726,6 +821,75 @@ extern void ginHeapTupleFastCollect(GinState *ginstate,
 						ItemPointer ht_ctid);
 extern void ginInsertCleanup(GinState *ginstate,
 				 bool vac_delay, IndexBulkDeleteResult *stats);
+
+/* ginpostinglist.c */
+extern char *ginDataPageLeafWriteItemPointer(char *ptr, ItemPointer iptr, ItemPointer prev);
+extern int ginDataPageLeafGetItemPointerSize(ItemPointer iptr, ItemPointer prev);
+extern uint32 ginMergeItemPointers(ItemPointerData *dst,
+					 ItemPointerData *a, uint32 na,
+					 ItemPointerData *b, uint32 nb);
+
+typedef char *CompressedPostingList;
+
+/*
+ * Function for reading packed ItemPointers. Used in various .c files and
+ * have to be inline for being fast.
+ *
+ * Read next item pointer from leaf data page. Replaces current item pointer
+ * with the next one. Zero item pointer should be passed in order to read the
+ * first item pointer.
+ *
+ * XXX: this needs a non-inlined version for the !PG_USE_INLINE case.
+ */
+static inline CompressedPostingList
+ginDataPageLeafReadItemPointer(CompressedPostingList ptr, ItemPointer iptr)
+{
+	uint32		blockNumberIncr;
+	uint16		offset;
+	int			i;
+	uint8		v;
+	ItemPointerData prev = *iptr;
+
+	i = 0;
+	blockNumberIncr = 0;
+	do
+	{
+		v = *ptr;
+		ptr++;
+		blockNumberIncr |= (uint32) (v & (~HIGHBIT)) << i;
+		Assert(i < 28 || ((i == 28) && ((v & (~HIGHBIT)) < (1 << 4))));
+		i += 7;
+	}
+	while (IS_HIGHBIT_SET(v));
+
+	Assert((uint64)iptr->ip_blkid.bi_lo + ((uint64)iptr->ip_blkid.bi_hi << 16) +
+			(uint64)blockNumberIncr < ((uint64)1 << 32));
+
+	blockNumberIncr += iptr->ip_blkid.bi_lo + (iptr->ip_blkid.bi_hi << 16);
+
+	iptr->ip_blkid.bi_lo = blockNumberIncr & 0xFFFF;
+	iptr->ip_blkid.bi_hi = (blockNumberIncr >> 16) & 0xFFFF;
+
+	i = 0;
+	offset = 0;
+	do
+	{
+		v = *ptr;
+		ptr++;
+		offset |= (uint16) (v & (~HIGHBIT)) << i;
+		Assert(i < 14 || ((i == 14) && ((v & (~HIGHBIT)) < (1 << 2))));
+		i += 7;
+	} while(IS_HIGHBIT_SET(v));
+
+	Assert(OffsetNumberIsValid(offset));
+
+	iptr->ip_posid = offset;
+
+	Assert(blockNumberIncr > BlockIdGetBlockNumber(&prev.ip_blkid) ||
+		   offset > prev.ip_posid);
+
+	return ptr;
+}
 
 /*
  * Merging the results of several gin scans compares item pointers a lot,

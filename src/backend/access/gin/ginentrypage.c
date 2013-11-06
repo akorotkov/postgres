@@ -18,151 +18,31 @@
 #include "utils/rel.h"
 
 /*
- * Form a tuple for entry tree.
- *
- * If the tuple would be too big to be stored, function throws a suitable
- * error if errorTooBig is TRUE, or returns NULL if errorTooBig is FALSE.
- *
- * See src/backend/access/gin/README for a description of the index tuple
- * format that is being built here.  We build on the assumption that we
- * are making a leaf-level key entry containing a posting list of nipd items.
- * If the caller is actually trying to make a posting-tree entry, non-leaf
- * entry, or pending-list entry, it should pass nipd = 0 and then overwrite
- * the t_tid fields as necessary.  In any case, ipd can be NULL to skip
- * copying any itempointers into the posting list; the caller is responsible
- * for filling the posting list afterwards, if ipd = NULL and nipd > 0.
+ * Read item pointers from leaf data page. Information is stored in the same
+ * manner as in leaf data pages.
  */
-IndexTuple
-GinFormTuple(GinState *ginstate,
-			 OffsetNumber attnum, Datum key, GinNullCategory category,
-			 ItemPointerData *ipd, uint32 nipd,
-			 bool errorTooBig)
+void
+ginReadTuple(GinState *ginstate, OffsetNumber attnum,
+			 IndexTuple itup, ItemPointerData *ipd)
 {
-	Datum		datums[2];
-	bool		isnull[2];
-	IndexTuple	itup;
-	uint32		newsize;
+	Pointer		ptr;
+	int			nipd = GinGetNPosting(itup), i;
+	ItemPointerData ip = {{0,0},0};
 
-	/* Build the basic tuple: optional column number, plus key datum */
-	if (ginstate->oneCol)
+	ptr = GinGetPosting(itup);
+
+	if (GinItupIsCompressed(itup))
 	{
-		datums[0] = key;
-		isnull[0] = (category != GIN_CAT_NORM_KEY);
+		for (i = 0; i < nipd; i++)
+		{
+			ptr = ginDataPageLeafReadItemPointer(ptr, &ip);
+			ipd[i] = ip;
+		}
 	}
 	else
 	{
-		datums[0] = UInt16GetDatum(attnum);
-		isnull[0] = false;
-		datums[1] = key;
-		isnull[1] = (category != GIN_CAT_NORM_KEY);
+		memcpy(ipd, ptr, sizeof(ItemPointerData) * nipd);
 	}
-
-	itup = index_form_tuple(ginstate->tupdesc[attnum - 1], datums, isnull);
-
-	/*
-	 * Determine and store offset to the posting list, making sure there is
-	 * room for the category byte if needed.
-	 *
-	 * Note: because index_form_tuple MAXALIGNs the tuple size, there may well
-	 * be some wasted pad space.  Is it worth recomputing the data length to
-	 * prevent that?  That would also allow us to Assert that the real data
-	 * doesn't overlap the GinNullCategory byte, which this code currently
-	 * takes on faith.
-	 */
-	newsize = IndexTupleSize(itup);
-
-	if (IndexTupleHasNulls(itup))
-	{
-		uint32		minsize;
-
-		Assert(category != GIN_CAT_NORM_KEY);
-		minsize = GinCategoryOffset(itup, ginstate) + sizeof(GinNullCategory);
-		newsize = Max(newsize, minsize);
-	}
-
-	newsize = SHORTALIGN(newsize);
-
-	GinSetPostingOffset(itup, newsize);
-
-	GinSetNPosting(itup, nipd);
-
-	/*
-	 * Add space needed for posting list, if any.  Then check that the tuple
-	 * won't be too big to store.
-	 */
-	newsize += sizeof(ItemPointerData) * nipd;
-	newsize = MAXALIGN(newsize);
-	if (newsize > Min(INDEX_SIZE_MASK, GinMaxItemSize))
-	{
-		if (errorTooBig)
-			ereport(ERROR,
-					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-			errmsg("index row size %lu exceeds maximum %lu for index \"%s\"",
-				   (unsigned long) newsize,
-				   (unsigned long) Min(INDEX_SIZE_MASK,
-									   GinMaxItemSize),
-				   RelationGetRelationName(ginstate->index))));
-		pfree(itup);
-		return NULL;
-	}
-
-	/*
-	 * Resize tuple if needed
-	 */
-	if (newsize != IndexTupleSize(itup))
-	{
-		itup = repalloc(itup, newsize);
-		/*
-		 * PostgreSQL 9.3 and earlier did not clear this new space, so we
-		 * might find uninitialized padding when reading tuples from disk.
-		 */
-		memset((char *) itup + IndexTupleSize(itup),
-			   0, newsize - IndexTupleSize(itup));
-
-		/* set new size in tuple header */
-		itup->t_info &= ~INDEX_SIZE_MASK;
-		itup->t_info |= newsize;
-	}
-
-	/*
-	 * Insert category byte, if needed
-	 */
-	if (category != GIN_CAT_NORM_KEY)
-	{
-		Assert(IndexTupleHasNulls(itup));
-		GinSetNullCategory(itup, ginstate, category);
-	}
-
-	/*
-	 * Copy in the posting list, if provided
-	 */
-	if (ipd)
-		memcpy(GinGetPosting(itup), ipd, sizeof(ItemPointerData) * nipd);
-
-	return itup;
-}
-
-/*
- * Sometimes we reduce the number of posting list items in a tuple after
- * having built it with GinFormTuple.  This function adjusts the size
- * fields to match.
- */
-void
-GinShortenTuple(IndexTuple itup, uint32 nipd)
-{
-	uint32		newsize;
-
-	Assert(nipd <= GinGetNPosting(itup));
-
-	newsize = GinGetPostingOffset(itup) + sizeof(ItemPointerData) * nipd;
-	newsize = MAXALIGN(newsize);
-
-	Assert(newsize <= (itup->t_info & INDEX_SIZE_MASK));
-
-	itup->t_info &= ~INDEX_SIZE_MASK;
-	itup->t_info |= newsize;
-
-	GinSetNPosting(itup, nipd);
 }
 
 /*
@@ -490,36 +370,39 @@ entryPreparePage(GinBtree btree, Page page, OffsetNumber off)
  * If the tuple doesn't fit, returns false without modifying the page.
  */
 static bool
-entryPlaceToPage(GinBtree btree, Buffer buf, OffsetNumber off,
+entryPlaceToPage(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 				 XLogRecData **prdata)
 {
 	Page		page = BufferGetPage(buf);
-	OffsetNumber placed;
+	OffsetNumber placed, off = stack->off;
 	int			cnt = 0;
 
 	/* these must be static so they can be returned to caller */
 	static XLogRecData rdata[3];
-	static ginxlogInsert data;
+	static ginxlogInsertEntry data;
+
+	/* quick exit if it doesn't fit */
+	if (!entryIsEnoughSpace(btree, buf, stack->off))
+		return false;
 
 	/* quick exit if it doesn't fit */
 	if (!entryIsEnoughSpace(btree, buf, off))
 		return false;
 
 	*prdata = rdata;
-	data.updateBlkno = entryPreparePage(btree, page, off);
+	data.common.updateBlkno = entryPreparePage(btree, page, off);
 
 	placed = PageAddItem(page, (Item) btree->entry, IndexTupleSize(btree->entry), off, false, false);
 	if (placed != off)
 		elog(ERROR, "failed to add item to index page in \"%s\"",
 			 RelationGetRelationName(btree->index));
 
-	data.node = btree->index->rd_node;
-	data.blkno = BufferGetBlockNumber(buf);
-	data.offset = off;
-	data.nitem = 1;
+	data.common.node = btree->index->rd_node;
+	data.common.blkno = BufferGetBlockNumber(buf);
+	data.common.isData = FALSE;
+	data.common.isLeaf = GinPageIsLeaf(page) ? TRUE : FALSE;
 	data.isDelete = btree->isDelete;
-	data.isData = false;
-	data.isLeaf = GinPageIsLeaf(page) ? TRUE : FALSE;
+	data.offset = off;
 
 	/*
 	 * Prevent full page write if child's split occurs. That is needed to
@@ -528,7 +411,7 @@ entryPlaceToPage(GinBtree btree, Buffer buf, OffsetNumber off,
 	 * data.updateBlkno contains new block number (of newly created right
 	 * page) for recently splited page.
 	 */
-	if (data.updateBlkno == InvalidBlockNumber)
+	if (data.common.updateBlkno == InvalidBlockNumber)
 	{
 		rdata[0].buffer = buf;
 		rdata[0].buffer_std = TRUE;
@@ -540,7 +423,7 @@ entryPlaceToPage(GinBtree btree, Buffer buf, OffsetNumber off,
 
 	rdata[cnt].buffer = InvalidBuffer;
 	rdata[cnt].data = (char *) &data;
-	rdata[cnt].len = sizeof(ginxlogInsert);
+	rdata[cnt].len = offsetof(ginxlogInsertEntry, tuple);
 	rdata[cnt].next = &rdata[cnt + 1];
 	cnt++;
 
