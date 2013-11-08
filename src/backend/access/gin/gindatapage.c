@@ -1044,7 +1044,9 @@ dataSplitPageInternal(GinBtree btree, Buffer lbuf, Buffer rbuf,
 	GinPageGetOpaque(rpage)->maxoff = nitems - separator;
 
 	/* set up right bound for left page */
-	*GinDataPageGetRightBound(lpage) = btree->pitem.key;
+	bound = GinDataPageGetRightBound(lpage);
+	*bound = GinDataPageGetPostingItem(lpage,
+								  GinPageGetOpaque(lpage)->maxoff)->key;
 
 	/* set up right bound for right page */
 	*GinDataPageGetRightBound(rpage) = oldbound;
@@ -1072,8 +1074,7 @@ dataSplitPageInternal(GinBtree btree, Buffer lbuf, Buffer rbuf,
 
 	/* Prepare a downlink tuple for insertion to the parent */
 	PostingItemSetBlockNumber(&(btree->pitem), BufferGetBlockNumber(lbuf));
-	btree->pitem.key =
-		GinDataPageGetPostingItem(lpage, GinPageGetOpaque(lpage)->maxoff)->key;
+	btree->pitem.key = *GinDataPageGetRightBound(lpage);
 	btree->rightblkno = BufferGetBlockNumber(rbuf);
 
 	return lpage;
