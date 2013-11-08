@@ -631,8 +631,11 @@ extern ItemPointerData updateItemIndexes(Page page);
 extern void incrUpdateItemIndexes(Page page, int oldOffset, int newOffset);
 
 /* gindatapage.c */
-extern BlockNumber createPostingTree(Relation index, ItemPointerData *items, uint32 nitems, GinStatsData *buildStats);
 extern void dataCompressLeafPage(Page page);
+extern BlockNumber createPostingTree(Relation index,
+				  ItemPointerData *items, uint32 nitems,
+				  GinStatsData *buildStats);
+extern void GinDataPageAddItemPointer(Page page, ItemPointer data, OffsetNumber offset);
 extern void GinDataPageAddPostingItem(Page page, PostingItem *data, OffsetNumber offset);
 extern void GinPageDeletePostingItem(Page page, OffsetNumber offset);
 

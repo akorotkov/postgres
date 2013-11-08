@@ -278,9 +278,7 @@ buildFreshLeafTuple(GinState *ginstate,
 		/*
 		 * Initialize a new posting tree with the TIDs.
 		 */
-		postingRoot = createPostingTree(ginstate->index,
-										items,
-										nitem,
+		postingRoot = createPostingTree(ginstate->index, items, nitem,
 										buildStats);
 
 		/* And save the root link in the result tuple */
