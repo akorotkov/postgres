@@ -152,9 +152,9 @@ ginVacuumPostingListUncompressed(GinVacuumState *gvs, ItemPointerData *items,
 				{
 					for (j = 0; j < i; j++)
 					{
-						ptr = ginDataPageLeafWriteItemPointer(ptr, items + i,
+						ptr = ginDataPageLeafWriteItemPointer(ptr, items + j,
 																	&prevIptr);
-						prevIptr = items[i];
+						prevIptr = items[j];
 					}
 				}
 				copying = true;
@@ -411,12 +411,12 @@ ginVacuumPostingTreeLeaves(GinVacuumState *gvs, BlockNumber blkno, bool isRoot, 
 	{
 		Pointer cleaned = NULL;
 		Size newSize;
-		Size oldSize;
 		Pointer beginPtr;
 
+		beginPtr = GinDataLeafPageGetPostingList(page);
 		if (GinPageIsCompressed(page))
 		{
-			beginPtr = GinDataLeafPageGetPostingList(page);
+			Size oldSize;
 			oldSize = GinDataLeafPageGetPostingListSize(page);
 			(void) ginVacuumPostingListCompressed(gvs, beginPtr, oldSize, 0,
 										&cleaned, &newSize);
@@ -434,7 +434,11 @@ ginVacuumPostingTreeLeaves(GinVacuumState *gvs, BlockNumber blkno, bool isRoot, 
 		{
 			START_CRIT_SECTION();
 
-			GinPageSetCompressed(page);
+			if (!GinPageIsCompressed(page))
+			{
+				GinPageSetCompressed(page);
+				((PageHeader) page)->pd_upper -= sizeof(GinDataLeafItemIndex) * GinDataLeafIndexCount;
+			}
 
 			if (newSize > 0)
 				memcpy(beginPtr, cleaned, newSize);
