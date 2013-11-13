@@ -1264,7 +1264,6 @@ createPostingTree(Relation index, ItemPointerData *items, uint32 nitems,
 		rdata[1].buffer = InvalidBuffer;
 		rdata[1].data = buf;
 		rdata[1].len = GinDataLeafPageGetPostingListSize(page);
-		rdata[1].next = NULL;
 
 		recptr = XLogInsert(RM_GIN_ID, XLOG_GIN_CREATE_PTREE, rdata);
 		PageSetLSN(page, recptr);
@@ -1281,7 +1280,7 @@ createPostingTree(Relation index, ItemPointerData *items, uint32 nitems,
 	/*
 	 * Add any remaining TIDs to the newly-created posting tree.
 	 */
-	if (itemsCount < nitems)
+	if (nitems > nrootitems)
 	{
 		GinPostingTreeScan *gdi;
 
@@ -1289,8 +1288,8 @@ createPostingTree(Relation index, ItemPointerData *items, uint32 nitems,
 		gdi->btree.isBuild = (buildStats != NULL);
 
 		ginInsertItemPointers(gdi,
-							  items + itemsCount,
-							  nitems - itemsCount,
+							  items + nrootitems,
+							  nitems - nrootitems,
 							  buildStats);
 
 		pfree(gdi);

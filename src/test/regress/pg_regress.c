@@ -1655,6 +1655,8 @@ run_schedule(const char *schedule, test_function tfunc)
 		}
 	}
 
+	free_stringlist(&ignorelist);
+
 	fclose(scf);
 }
 
@@ -1955,7 +1957,7 @@ regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc
 	 * We call the initialization function here because that way we can set
 	 * default parameters and let them be overwritten by the commandline.
 	 */
-	ifunc();
+	ifunc(argc, argv);
 
 	if (getenv("PG_REGRESS_DIFF_OPTS"))
 		pretty_diff_opts = getenv("PG_REGRESS_DIFF_OPTS");

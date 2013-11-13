@@ -763,7 +763,7 @@ typedef struct RangeTblEntry
 	 * collations.  Note that in this case, ORDINALITY is not permitted, so
 	 * there is no extra ordinal column to be allowed for.
 	 *
-     * Otherwise, those fields are NIL, and the result column types must be
+	 * Otherwise, those fields are NIL, and the result column types must be
 	 * derived from the funcexpr while treating the ordinal column, if
 	 * present, as a special case.  (see get_rte_attribute_*)
 	 */
@@ -1284,8 +1284,16 @@ typedef enum AlterTableType
 	AT_DropInherit,				/* NO INHERIT parent */
 	AT_AddOf,					/* OF <type_name> */
 	AT_DropOf,					/* NOT OF */
+	AT_ReplicaIdentity,			/* REPLICA IDENTITY */
 	AT_GenericOptions			/* OPTIONS (...) */
 } AlterTableType;
+
+typedef struct ReplicaIdentityStmt
+{
+	NodeTag		type;
+	char		identity_type;
+	char	   *name;
+} ReplicaIdentityStmt;
 
 typedef struct AlterTableCmd	/* one subcommand of an ALTER TABLE */
 {
