@@ -188,7 +188,9 @@ ginRedoInsert(XLogRecPtr lsn, XLogRecord *record)
 				Assert(GinPageIsLeaf(page));
 
 				if (!GinPageIsCompressed(page))
-					dataCompressLeafPage(page);
+				{
+					Assert(dataCompressLeafPage(page));
+				}
 
 				beginPtr = GinDataLeafPageGetPostingList(page) + data->beginOffset;
 				restPtr = GinDataLeafPageGetPostingList(page) + data->restOffset;

@@ -503,7 +503,7 @@ incrUpdateItemIndexes(Page page, int off, int len)
 	}
 }
 
-void
+bool
 dataCompressLeafPage(Page page)
 {
 	char		pageCopy[BLCKSZ];
@@ -511,9 +511,22 @@ dataCompressLeafPage(Page page)
 	ItemPointerData prev_iptr;
 	ItemPointer iptr;
 	Pointer		ptr, cur;
+	Size		size;
 
 	memcpy(pageCopy, page, BLCKSZ);
 	maxoff = GinPageGetOpaque(pageCopy)->maxoff;
+
+	/* Check if we've enough of space to store compressed representation */
+	MemSet(&prev_iptr, 0, sizeof(ItemPointerData));
+	for (i = FirstOffsetNumber; i <= maxoff; i++)
+	{
+		iptr = GinDataPageGetItemPointer(pageCopy, i);
+		size += ginDataPageLeafGetItemPointerSize(&iptr, &prev_iptr);
+		prev_iptr = *iptr;
+	}
+
+	if (size > GinDataLeafMaxPostingListSize)
+		return false;
 
 	ptr = GinDataLeafPageGetPostingList(page);
 	cur = ptr;
@@ -525,12 +538,14 @@ dataCompressLeafPage(Page page)
 	for (i = FirstOffsetNumber; i <= maxoff; i++)
 	{
 		iptr = GinDataPageGetItemPointer(pageCopy, i);
+		if (GinDataPageFreeSpacePre(page, cur) < 0)
 		cur = ginDataPageLeafWriteItemPointer(cur, iptr, &prev_iptr);
 		prev_iptr = *iptr;
 	}
 	GinDataLeafPageSetPostingListSize(page, cur - ptr);
 	Assert(GinDataPageFreeSpacePre(page, cur) >= 0);
 	updateItemIndexes(page);
+	return true;
 }
 
 /*
@@ -554,6 +569,7 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack, XLogRecDat
 	ItemPointerData	rbound;
 	int			oldsize;
 	int			newsize;
+	bool		compress = false;
 
 	/* these must be static so they can be returned to caller */
 	static XLogRecData rdata[2];
@@ -563,10 +579,18 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack, XLogRecDat
 
 	if (!GinPageIsCompressed(page))
 	{
-		dataCompressLeafPage(page);
+		if (!dataCompressLeafPage(page))
+		{
+			ereport(ERROR,
+					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+			errmsg("can't compress block %u of gin index \"%s\", consider REINDEX",
+					BufferGetBlockNumber(buf),
+				   RelationGetRelationName(btree->ginstate->index))));
+		}
 		findInLeafPageCompressed(btree, page, &stack->iptr, &ptr);
 		stack->off = InvalidOffsetNumber;
 		stack->pageOffset = ptr - page;
+		compress = true;
 	}
 
 	endPtr = GinDataLeafPageGetPostingListEnd(page);
@@ -650,7 +674,18 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack, XLogRecDat
 	}
 	maxitems = i;
 	if (maxitems == 0)
+	{
+		if (compress)
+		{
+			ereport(ERROR,
+					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+			errmsg("can't place new TIDs to compressed block %u of gin index \"%s\", consider REINDEX",
+					BufferGetBlockNumber(buf),
+				   RelationGetRelationName(btree->ginstate->index))));
+		}
+
 		return false; /* no entries fit on this page */
+	}
 
 	/*
 	 * We have to re-encode the first old item pointer after the ones we're
