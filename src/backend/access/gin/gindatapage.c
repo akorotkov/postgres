@@ -998,6 +998,7 @@ dataSplitPageInternal(GinBtree btree, Buffer lbuf, Buffer rbuf,
 	int			nitems = GinPageGetOpaque(oldpage)->maxoff;
 	Size		pageSize = PageGetPageSize(oldpage);
 	ItemPointerData oldbound = *GinDataPageGetRightBound(oldpage);
+	ItemPointer	bound;
 	Page		lpage;
 	Page		rpage;
 	OffsetNumber separator;
@@ -1201,21 +1202,21 @@ createPostingTree(Relation index, ItemPointerData *items, uint32 nitems,
 				cur;
 	ItemPointerData prev_iptr = {{0,0},0};
 	Size		size;
-	int			itemsCount;
+	int			nrootitems;
 
 	/*
 	 * Calculate how many TIDs will fit on the first page
 	 */
 	MemSet(&prev_iptr, 0, sizeof(ItemPointerData));
 	size = 0;
-	itemsCount = 0;
-	while (itemsCount < nitems)
+	nrootitems = 0;
+	while (nrootitems < nitems)
 	{
-		size += ginDataPageLeafGetItemPointerSize(&items[itemsCount], &prev_iptr);
+		size += ginDataPageLeafGetItemPointerSize(&items[nrootitems], &prev_iptr);
 		if (size > GinDataLeafMaxPostingListSize)
 			break;
-		prev_iptr = items[itemsCount];
-		itemsCount++;
+		prev_iptr = items[nrootitems];
+		nrootitems++;
 	}
 
 	/*
@@ -1232,7 +1233,7 @@ createPostingTree(Relation index, ItemPointerData *items, uint32 nitems,
 	ptr = GinDataLeafPageGetPostingList(page);
 	cur = ptr;
 	MemSet(&prev_iptr, 0, sizeof(ItemPointerData));
-	for (i = 0; i < itemsCount; i++)
+	for (i = 0; i < nrootitems; i++)
 	{
 		cur = ginDataPageLeafWriteItemPointer(cur, &items[i], &prev_iptr);
 		prev_iptr = items[i];

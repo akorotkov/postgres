@@ -43,7 +43,7 @@ typedef struct
  * Returns the number of items remaining.
  */
 static int
-ginVacuumPostingList(GinVacuumState *gvs,
+ginVacuumPostingListCompressed(GinVacuumState *gvs,
 					 CompressedPostingList src, int nbytes, int nitems,
 					 CompressedPostingList *cleaned, Size *newSize)
 {
@@ -54,7 +54,7 @@ ginVacuumPostingList(GinVacuumState *gvs,
 	int			remaining = 0;
 	int			i = 0;
 
-	Assert(*cleaned == NULL || *cleaned == src);
+	Assert(*cleaned == NULL);
 
 	/*
 	 * The end of the posting list can be specified as either number of
@@ -112,6 +112,73 @@ ginVacuumPostingList(GinVacuumState *gvs,
 		*newSize = dst - *cleaned;
 		Assert(*newSize <= nbytes);
 	}
+	return remaining;
+}
+
+/*
+ * Vacuums a list of item pointers. The original size of the list is 'nitem',
+ * returns the number of items remaining afterwards.
+ *
+ * If *cleaned == NULL on entry, the original array is left unmodified; if
+ * any items are removed, a palloc'd copy of the result is stored in *cleaned.
+ * Otherwise *cleaned should point to the original array, in which case it's
+ * modified directly.
+ */
+static int
+ginVacuumPostingListUncompressed(GinVacuumState *gvs, ItemPointerData *items,
+		int nitem, CompressedPostingList *cleaned, Size *newSize)
+{
+	int			i, j,
+				remaining = 0;
+	Pointer		dst = NULL, ptr;
+	ItemPointerData prevIptr = {{0,0},0};
+	bool		copying = false;
+
+	Assert(*cleaned == NULL);
+
+	/*
+	 * just scan over ItemPointer array
+	 */
+	for (i = 0; i < nitem; i++)
+	{
+		if (gvs->callback(items + i, gvs->callback_state))
+		{
+			gvs->result->tuples_removed += 1;
+			if (!dst)
+			{
+				dst = palloc(MAX_COMPRESSED_ITEM_POINTER_SIZE * nitem);
+				ptr = dst;
+				if (i != 0)
+				{
+					for (j = 0; j < i; j++)
+					{
+						ptr = ginDataPageLeafWriteItemPointer(ptr, items + i,
+																	&prevIptr);
+						prevIptr = items[i];
+					}
+				}
+				copying = true;
+			}
+		}
+		else
+		{
+			gvs->result->num_index_tuples += 1;
+			if (copying)
+			{
+				ptr = ginDataPageLeafWriteItemPointer(ptr, items + i,
+															&prevIptr);
+				prevIptr = items[i];
+			}
+			remaining++;
+		}
+	}
+
+	if (copying)
+	{
+		*cleaned = dst;
+		*newSize = ptr - dst;
+	}
+
 	return remaining;
 }
 
@@ -351,14 +418,23 @@ ginVacuumPostingTreeLeaves(GinVacuumState *gvs, BlockNumber blkno, bool isRoot, 
 		{
 			beginPtr = GinDataLeafPageGetPostingList(page);
 			oldSize = GinDataLeafPageGetPostingListSize(page);
-			(void) ginVacuumPostingList(gvs, beginPtr, oldSize, 0,
+			(void) ginVacuumPostingListCompressed(gvs, beginPtr, oldSize, 0,
 										&cleaned, &newSize);
+		}
+		else
+		{
+			(void) ginVacuumPostingListUncompressed(gvs,
+					(ItemPointer)GinDataPageGetData(page),
+					GinPageGetOpaque(page)->maxoff,
+					&cleaned, &newSize);
 		}
 
 		/* saves changes about deleted tuple ... */
 		if (cleaned)
 		{
 			START_CRIT_SECTION();
+
+			GinPageSetCompressed(page);
 
 			if (newSize > 0)
 				memcpy(beginPtr, cleaned, newSize);
@@ -688,7 +764,7 @@ ginVacuumEntryPage(GinVacuumState *gvs, Buffer buffer, BlockNumber *roots, uint3
 			roots[*nroot] = GinGetDownlink(itup);
 			(*nroot)++;
 		}
-		else if (GinGetNPosting(itup) > 0 && GinItupIsCompressed(itup))
+		else if (GinGetNPosting(itup) > 0)
 		{
 			/*
 			 * if we already created a temporary page, make changes in place
@@ -697,12 +773,19 @@ ginVacuumEntryPage(GinVacuumState *gvs, Buffer buffer, BlockNumber *roots, uint3
 			Pointer cleaned = NULL;
 			int		newN;
 
-			newN = ginVacuumPostingList(gvs,
-										GinGetPosting(itup),
-										0,
-										GinGetNPosting(itup),
-										&cleaned,
-										&cleanedSize);
+			if (GinItupIsCompressed(itup))
+				newN = ginVacuumPostingListCompressed(gvs,
+											GinGetPosting(itup),
+											0,
+											GinGetNPosting(itup),
+											&cleaned,
+											&cleanedSize);
+			else
+				newN = ginVacuumPostingListUncompressed(gvs,
+											(ItemPointer)GinGetPosting(itup),
+											GinGetNPosting(itup),
+											&cleaned,
+											&cleanedSize);
 
 			if (cleaned)
 			{
