@@ -964,7 +964,8 @@ WHERE p2.opfmethod = p1.oid AND p3.amprocfamily = p2.oid AND
            p4.amproclefttype = p3.amproclefttype AND
            p4.amprocrighttype = p3.amprocrighttype)
     NOT BETWEEN
-      (CASE WHEN p1.amname IN ('btree', 'gist', 'gin') THEN p1.amsupport - 1
+      (CASE WHEN p1.amname IN ('btree', 'gist') THEN p1.amsupport - 1
+            WHEN p1.amname = 'gin' THEN p1.amsupport - 2
             ELSE p1.amsupport END)
       AND p1.amsupport;
 
@@ -986,7 +987,8 @@ FROM pg_am am JOIN pg_opclass op ON opcmethod = am.oid
          amproclefttype = amprocrighttype AND amproclefttype = opcintype
 WHERE am.amname = 'btree' OR am.amname = 'gist' OR am.amname = 'gin'
 GROUP BY amname, amsupport, opcname, amprocfamily
-HAVING (count(*) != amsupport AND count(*) != amsupport - 1)
+HAVING (count(*) != amsupport AND count(*) != amsupport - 1 AND
+       (count(*) != amsupport - 2 OR am.amname <> 'gin'))
     OR amprocfamily IS NULL;
 
 -- Unfortunately, we can't check the amproc link very well because the
