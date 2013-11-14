@@ -154,7 +154,7 @@ ginMergeItemPointers(ItemPointerData *dst,
  * first item pointer.
  */
 #ifndef PG_USE_INLINE
-static inline CompressedPostingList
+CompressedPostingList
 ginDataPageLeafReadItemPointer(CompressedPostingList ptr, ItemPointer iptr)
 {
 	uint32		blockNumberIncr;

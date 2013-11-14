@@ -557,7 +557,6 @@ dataCompressLeafPage(Page page)
 	for (i = FirstOffsetNumber; i <= maxoff; i++)
 	{
 		iptr = GinDataPageGetItemPointer(pageCopy, i);
-		if (GinDataPageFreeSpacePre(page, cur) < 0)
 		cur = ginDataPageLeafWriteItemPointer(cur, iptr, &prev_iptr);
 		prev_iptr = *iptr;
 	}
