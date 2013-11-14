@@ -233,6 +233,41 @@ gin_tsquery_consistent(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(res);
 }
 
+Datum
+gin_tsquery_pre_consistent(PG_FUNCTION_ARGS)
+{
+	bool	   *check = (bool *) PG_GETARG_POINTER(0);
+
+	/* StrategyNumber strategy = PG_GETARG_UINT16(1); */
+	TSQuery		query = PG_GETARG_TSQUERY(2);
+
+	Pointer    *extra_data = (Pointer *) PG_GETARG_POINTER(4);
+	bool	    recheck;
+	bool		res = FALSE;
+
+	if (query->size > 0)
+	{
+		QueryItem  *item;
+		GinChkVal	gcv;
+
+		/*
+		 * check-parameter array has one entry for each value (operand) in the
+		 * query.
+		 */
+		gcv.first_item = item = GETQUERY(query);
+		gcv.check = check;
+		gcv.map_item_operand = (int *) (extra_data[0]);
+		gcv.need_recheck = &recheck;
+
+		res = TS_execute(GETQUERY(query),
+						 &gcv,
+						 false,
+						 checkcondition_gin);
+	}
+	PG_RETURN_BOOL(res);
+}
+
+
 /*
  * Formerly, gin_extract_tsvector had only two arguments.  Now it has three,
  * but we still need a pg_proc entry with two args to support reloading

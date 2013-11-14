@@ -245,8 +245,16 @@ freeScanKeys(GinScanOpaque so)
 	{
 		GinScanEntry entry = so->entries[i];
 
-		if (entry->buffer != InvalidBuffer)
-			ReleaseBuffer(entry->buffer);
+		if (entry->gdi)
+		{
+			freeGinBtreeStack(entry->gdi->stack);
+			pfree(entry->gdi);
+		}
+		else
+		{
+			if (entry->buffer != InvalidBuffer)
+				ReleaseBuffer(entry->buffer);
+		}
 		if (entry->list)
 			pfree(entry->list);
 		if (entry->matchIterator)

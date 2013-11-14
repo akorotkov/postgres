@@ -31,6 +31,12 @@ typedef struct pendingPosition
 } pendingPosition;
 
 
+static bool scanPage(GinState *ginstate, GinScanEntry entry, ItemPointer item,
+		Page page, bool equalOk);
+static int scan_entry_cmp(const void *p1, const void *p2);
+static void entryGetItem(GinState *ginstate, GinScanEntry entry);
+
+
 /*
  * Convenience function for invoking a key's consistentFn
  */
@@ -418,6 +424,7 @@ restartScanEntry:
 	ItemPointerSetMin(&entry->curItem);
 	entry->offset = InvalidOffsetNumber;
 	entry->list = NULL;
+	entry->gdi = NULL;
 	entry->nlist = 0;
 	entry->matchBitmap = NULL;
 	entry->matchResult = NULL;
@@ -500,14 +507,13 @@ restartScanEntry:
 			gdi = ginPrepareScanPostingTree(ginstate->index, rootPostingTree, TRUE);
 
 			entry->buffer = ginScanBeginPostingTree(gdi);
+			entry->gdi = gdi;
 
 			/*
 			 * We keep buffer pinned because we need to prevent deletion of
 			 * page during scan. See GIN's vacuum implementation. RefCount is
 			 * increased to keep buffer pinned after freeGinBtreeStack() call.
 			 */
-			IncrBufferRefCount(entry->buffer);
-
 			page = BufferGetPage(entry->buffer);
 
 			/*
@@ -537,8 +543,6 @@ restartScanEntry:
 			entry->predictNumberResult = gdi->stack->predictNumber * entry->nlist;
 
 			LockBuffer(entry->buffer, GIN_UNLOCK);
-			freeGinBtreeStack(gdi->stack);
-			pfree(gdi);
 			entry->isFinished = FALSE;
 		}
 		else if (GinGetNPosting(itup) > 0)
@@ -573,6 +577,7 @@ startScan(IndexScanDesc scan)
 	GinScanOpaque so = (GinScanOpaque) scan->opaque;
 	GinState   *ginstate = &so->ginstate;
 	uint32		i;
+	bool		useFastScan = false;
 
 	for (i = 0; i < so->totalentries; i++)
 		startScanEntry(ginstate, so->entries[i]);
@@ -600,6 +605,55 @@ startScan(IndexScanDesc scan)
 
 	for (i = 0; i < so->nkeys; i++)
 		startScanKey(ginstate, so->keys + i);
+
+	/*
+	 * Check if we can use a fast scan: no partial matches and at least one
+	 * preConsistent method.
+	 */
+	for (i = 0; i < so->nkeys; i++)
+	{
+		GinScanKey key = &so->keys[i];
+
+		if (so->ginstate.consistentSupportUnknown[key->attnum - 1])
+		{
+			useFastScan = true;
+			break;
+		}
+	}
+
+	if (useFastScan)
+	{
+		for (i = 0; i < so->totalentries; i++)
+		{
+			GinScanEntry entry = so->entries[i];
+			if (entry->isPartialMatch)
+			{
+				useFastScan = false;
+				break;
+			}
+		}
+	}
+
+	if (useFastScan)
+	{
+		/*
+		 * We are going to use fast scan. Do some preliminaries. Start scan
+		 * of each entry and sort entries by descending item pointers.
+		 */
+		so->sortedEntries = (GinScanEntry *)palloc(sizeof(GinScanEntry) *
+															so->totalentries);
+		memcpy(so->sortedEntries, so->entries, sizeof(GinScanEntry) *
+															so->totalentries);
+		for (i = 0; i < so->totalentries; i++)
+		{
+			if (!so->sortedEntries[i]->isFinished)
+				entryGetItem(&so->ginstate, so->sortedEntries[i]);
+		}
+		qsort(so->sortedEntries, so->totalentries, sizeof(GinScanEntry),
+																scan_entry_cmp);
+	}
+
+	so->useFastScan = useFastScan;
 }
 
 /*
@@ -622,6 +676,13 @@ entryGetNextItem(GinState *ginstate, GinScanEntry entry)
 
 		LockBuffer(entry->buffer, GIN_SHARE);
 		page = BufferGetPage(entry->buffer);
+
+		if (scanPage(ginstate, entry, &entry->curItem, BufferGetPage(entry->buffer), false))
+		{
+			LockBuffer(entry->buffer, GIN_UNLOCK);
+			return;
+		}
+
 		for (;;)
 		{
 			/*
@@ -632,8 +693,10 @@ entryGetNextItem(GinState *ginstate, GinScanEntry entry)
 			{
 				UnlockReleaseBuffer(entry->buffer);
 				ItemPointerSetInvalid(&entry->curItem);
+
 				entry->buffer = InvalidBuffer;
 				entry->isFinished = TRUE;
+				entry->gdi->stack->buffer = InvalidBuffer;
 				return;
 			}
 
@@ -987,7 +1050,7 @@ keyGetItem(GinState *ginstate, MemoryContext tempCtx, GinScanKey key)
  * keyGetItem() the combination logic is known only to the consistentFn.
  */
 static bool
-scanGetItem(IndexScanDesc scan, ItemPointer advancePast,
+scanGetItemRegular(IndexScanDesc scan, ItemPointer advancePast,
 			ItemPointerData *item, bool *recheck)
 {
 	GinScanOpaque so = (GinScanOpaque) scan->opaque;
@@ -1113,6 +1176,401 @@ scanGetItem(IndexScanDesc scan, ItemPointer advancePast,
 	}
 
 	return TRUE;
+}
+
+/*
+ * Finds part of page containing requested item using small index at the end
+ * of page.
+ */
+static bool
+scanPage(GinState *ginstate, GinScanEntry entry, ItemPointer item, Page page,
+																bool equalOk)
+{
+	int i;
+	ItemPointerData iptr = {{0,0},0};
+	Pointer ptr, endPtr;
+	bool found;
+	int cmp;
+
+	/* Check if requested item can present in this page */
+	if (!GinPageRightMost(page))
+	{
+		cmp = ginCompareItemPointers(GinDataPageGetRightBound(page), item);
+		if (cmp < 0 || (cmp <= 0 && !equalOk))
+			return false;
+	}
+
+	/* Locate range in page using index */
+	ptr = GinDataPageGetData(page);
+	endPtr = GinDataLeafPageGetPostingListEnd(page);
+	for (i = 0; i < GinDataLeafIndexCount; i++)
+	{
+		GinDataLeafItemIndex *index = &GinPageGetIndexes(page)[i];
+		if (index->pageOffset == 0)
+			break;
+
+		cmp = ginCompareItemPointers(&index->iptr, item);
+		if (cmp < 0 || (cmp <= 0 && !equalOk))
+		{
+			ptr = GinDataPageGetData(page) + index->pageOffset;
+			iptr = index->iptr;
+		}
+		else
+		{
+			endPtr = GinDataPageGetData(page) + index->pageOffset;
+			break;
+		}
+	}
+
+	/*
+	 * Read data from page range into entry->list
+	 */
+	entry->offset = InvalidOffsetNumber;
+	found = false;
+	i = 0;
+	while (ptr < endPtr)
+	{
+		ptr = ginDataPageLeafReadItemPointer(ptr, &iptr);
+		entry->list[i] = iptr;
+		cmp = ginCompareItemPointers(item, &iptr);
+		if ((cmp < 0 || (cmp <= 0 && equalOk)) &&
+				entry->offset == InvalidOffsetNumber)
+		{
+			found = true;
+			entry->offset = i;
+		}
+		i++;
+	}
+	entry->nlist = i;
+	if (!found)
+		return false;
+
+	entry->curItem = entry->list[entry->offset - 1];
+	return true;
+}
+
+/*
+ * Find item pointer of entry with is greater or equal to given item pointer.
+ */
+static void
+entryFindItem(GinState *ginstate, GinScanEntry entry, ItemPointer item)
+{
+	Page page = NULL;
+
+	if (entry->nlist == 0)
+	{
+		entry->isFinished = TRUE;
+		return;
+	}
+
+	/* Try to find in loaded part of page */
+	if (ginCompareItemPointers(&entry->list[entry->nlist - 1], item) >= 0)
+	{
+		if (ginCompareItemPointers(&entry->curItem, item) >= 0)
+			return;
+		while (entry->offset < entry->nlist)
+		{
+			if (ginCompareItemPointers(&entry->list[entry->offset], item) >= 0)
+			{
+				entry->curItem = entry->list[entry->offset];
+				entry->offset++;
+				return;
+			}
+			entry->offset++;
+		}
+	}
+
+	if (!BufferIsValid(entry->buffer))
+	{
+		entry->isFinished = TRUE;
+		return;
+	}
+
+	/* Check rest of page */
+	LockBuffer(entry->buffer, GIN_SHARE);
+	if (scanPage(ginstate, entry, item, BufferGetPage(entry->buffer), true))
+	{
+		LockBuffer(entry->buffer, GIN_UNLOCK);
+		return;
+	}
+
+	/* Try to traverse to another leaf page */
+	entry->gdi->btree.items = item;
+	entry->gdi->btree.curitem = 0;
+	entry->gdi->stack->buffer = entry->buffer;
+	entry->gdi->stack = ginReFindLeafPage(&entry->gdi->btree, entry->gdi->stack);
+	entry->buffer = entry->gdi->stack->buffer;
+
+	page = BufferGetPage(entry->buffer);
+
+	if (scanPage(ginstate, entry, item, BufferGetPage(entry->buffer), true))
+	{
+		LockBuffer(entry->buffer, GIN_UNLOCK);
+		return;
+	}
+
+	/* At last try to traverse by right links */
+	for (;;)
+	{
+		/*
+		 * It's needed to go by right link. During that we should refind
+		 * first ItemPointer greater that stored
+		 */
+		BlockNumber blkno;
+
+		blkno = GinPageGetOpaque(page)->rightlink;
+
+		LockBuffer(entry->buffer, GIN_UNLOCK);
+		if (blkno == InvalidBlockNumber)
+		{
+			ReleaseBuffer(entry->buffer);
+			ItemPointerSetInvalid(&entry->curItem);
+			entry->buffer = InvalidBuffer;
+			entry->gdi->stack->buffer = InvalidBuffer;
+			entry->isFinished = TRUE;
+			return;
+		}
+
+		entry->buffer = ReleaseAndReadBuffer(entry->buffer,
+											 ginstate->index,
+											 blkno);
+		entry->gdi->stack->buffer = entry->buffer;
+		entry->gdi->stack->blkno = blkno;
+		LockBuffer(entry->buffer, GIN_SHARE);
+		page = BufferGetPage(entry->buffer);
+
+		if (scanPage(ginstate, entry, item, BufferGetPage(entry->buffer), true))
+		{
+			LockBuffer(entry->buffer, GIN_UNLOCK);
+			return;
+		}
+	}
+}
+
+/*
+ * Do preConsistent check for all the key where applicable.
+ */
+static bool
+preConsistentCheck(GinScanOpaque so)
+{
+	GinState *ginstate = &so->ginstate;
+	int i, j;
+	bool recheck;
+
+	for (j = 0; j < so->nkeys; j++)
+	{
+		GinScanKey key = &so->keys[j];
+		bool hasFalse = false;
+
+		if (!so->ginstate.consistentSupportUnknown[j])
+			continue;
+
+		for (i = 0; i < key->nentries; i++)
+		{
+			GinScanEntry entry = key->scanEntry[i];
+			key->entryRes[i] = entry->preValue;
+			if (!entry->preValue)
+				hasFalse = true;
+		}
+
+		if (!hasFalse)
+			continue;
+
+		if (!DatumGetBool(FunctionCall8Coll(&ginstate->consistentFn[key->attnum - 1],
+									 ginstate->supportCollation[key->attnum - 1],
+											  PointerGetDatum(key->entryRes),
+											  UInt16GetDatum(key->strategy),
+											  key->query,
+											  UInt32GetDatum(key->nuserentries),
+											  PointerGetDatum(key->extra_data),
+											   PointerGetDatum(&recheck),
+												  PointerGetDatum(key->queryValues),
+											 PointerGetDatum(key->queryCategories)
+
+			)))
+			return false;
+	}
+	return true;
+}
+
+/*
+ * Compare entries position. At first consider isFinished flag, then compare
+ * item pointers.
+ */
+static int
+cmpEntries(GinScanEntry e1, GinScanEntry e2)
+{
+	if (e1->isFinished == TRUE)
+	{
+		if (e2->isFinished == TRUE)
+			return 0;
+		else
+			return 1;
+	}
+	if (e2->isFinished)
+		return -1;
+	return ginCompareItemPointers(&e1->curItem, &e2->curItem);
+}
+
+/*
+ * Shift value of some entry which index in so->sortedEntries is equal or greater
+ * to i. If find flag is set that we should find an item pointer greater or
+ * equal than so->sortedEntries[i - 1].
+ */
+static void
+entryShift(int i, GinScanOpaque so, bool find)
+{
+	int minIndex = -1, j;
+	uint32 minPredictNumberResult = 0;
+	GinState *ginstate = &so->ginstate;
+
+	/*
+	 * It's more efficient to move entry with smallest posting list/tree. So
+	 * fint one.
+	 */
+	for (j = i; j < so->totalentries; j++)
+	{
+		if (minIndex < 0 ||
+			so->sortedEntries[j]->predictNumberResult < minPredictNumberResult)
+		{
+			minIndex = j;
+			minPredictNumberResult = so->sortedEntries[j]->predictNumberResult;
+		}
+	}
+
+	/* Do shift of required type */
+	if (find)
+		entryFindItem(ginstate, so->sortedEntries[minIndex],
+											&so->sortedEntries[i - 1]->curItem);
+	else
+		entryGetItem(ginstate, so->sortedEntries[minIndex]);
+
+	/* Restore order of so->sortedEntries */
+	while (minIndex > 0 &&
+		cmpEntries(so->sortedEntries[minIndex], so->sortedEntries[minIndex - 1]) > 0)
+	{
+		GinScanEntry tmp;
+		tmp = so->sortedEntries[minIndex];
+		so->sortedEntries[minIndex] = so->sortedEntries[minIndex - 1];
+		so->sortedEntries[minIndex - 1] = tmp;
+		minIndex--;
+	}
+}
+
+/*
+ * Get next item pointer using fast scan.
+ */
+static bool
+scanGetItemFast(IndexScanDesc scan, ItemPointer advancePast,
+			ItemPointerData *item, bool *recheck)
+{
+	GinScanOpaque so = (GinScanOpaque) scan->opaque;
+	int i, j, k;
+	bool preConsistentFalse;
+
+	for (;;)
+	{
+		/*
+		 * Our entries is ordered is ordered by descending of item pointers.
+		 * The first goal is to find border where preConsistent becomes false.
+		 */
+		preConsistentFalse = false;
+		j = 0;
+		k = 0;
+		for (i = 0; i < so->totalentries; i++)
+			so->sortedEntries[i]->preValue = true;
+		for (i = 1; i < so->totalentries; i++)
+		{
+			if (cmpEntries(so->sortedEntries[i], so->sortedEntries[i - 1]) < 0)
+			{
+				k = i;
+				for (; j < i; j++)
+					so->sortedEntries[j]->preValue = false;
+
+				if (!preConsistentCheck(so))
+				{
+					preConsistentFalse = true;
+					break;
+				}
+			}
+		}
+
+		/*
+		 * If we found false in preConsistent then we can safely move entries
+		 * which was true in preConsistent argument.
+		 */
+		if (so->sortedEntries[i - 1]->isFinished == TRUE)
+			return false;
+		if (preConsistentFalse)
+		{
+			entryShift(i, so, true);
+			continue;
+		}
+
+		/* Call consistent method */
+		for (i = 0; i < so->nkeys; i++)
+		{
+			GinScanKey	key = so->keys + i;
+			for (i = 0; i < key->nentries; i++)
+			{
+				GinScanEntry entry = key->scanEntry[i];
+				if (entry->isFinished == FALSE &&
+					ginCompareItemPointers(&entry->curItem,
+					&so->sortedEntries[so->totalentries - 1]->curItem) == 0)
+				{
+					key->entryRes[i] = TRUE;
+				}
+				else
+				{
+					key->entryRes[i] = FALSE;
+				}
+			}
+			if (!callConsistentFn(&so->ginstate, key))
+			{
+				/* Shift bucket of entries with equal item pointers. */
+				for (; k < so->totalentries; k++)
+					entryShift(k, so, false);
+				continue;
+			}
+		}
+
+		/* Calculate recheck from each key */
+		*recheck = false;
+		for (i = 0; i < so->nkeys; i++)
+		{
+			GinScanKey	key = so->keys + i;
+
+			if (key->recheckCurItem)
+			{
+				*recheck = true;
+				break;
+			}
+		}
+
+		*item = so->sortedEntries[so->totalentries - 1]->curItem;
+		/* Shift bucket of entries with equal item pointers. */
+		for (; k < so->totalentries; k++)
+			entryShift(k, so, false);
+
+		return true;
+	}
+
+	return false;
+}
+
+/*
+ * Get next item whether using regular or fast scan.
+ */
+static bool
+scanGetItem(IndexScanDesc scan, ItemPointer advancePast,
+			ItemPointerData *item, bool *recheck)
+{
+	GinScanOpaque so = (GinScanOpaque) scan->opaque;
+
+	if (so->useFastScan)
+		return scanGetItemFast(scan, advancePast, item, recheck);
+	else
+		return scanGetItemRegular(scan, advancePast, item, recheck);
 }
 
 
@@ -1584,6 +2042,15 @@ scanPendingInsert(IndexScanDesc scan, TIDBitmap *tbm, int64 *ntids)
 
 #define GinIsNewKey(s)		( ((GinScanOpaque) scan->opaque)->keys == NULL )
 #define GinIsVoidRes(s)		( ((GinScanOpaque) scan->opaque)->isVoidRes )
+
+static int
+scan_entry_cmp(const void *p1, const void *p2)
+{
+	GinScanEntry e1 = *((GinScanEntry *)p1);
+	GinScanEntry e2 = *((GinScanEntry *)p2);
+
+	return -cmpEntries(e1, e2);
+}
 
 Datum
 gingetbitmap(PG_FUNCTION_ARGS)

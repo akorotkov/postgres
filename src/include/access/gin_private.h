@@ -624,6 +624,7 @@ extern void freeGinBtreeStack(GinBtreeStack *stack);
 extern void ginInsertValue(GinBtree btree, GinBtreeStack *stack,
 			   GinStatsData *buildStats);
 extern void ginFindParents(GinBtree btree, GinBtreeStack *stack, BlockNumber rootBlkno);
+extern GinBtreeStack *ginReFindLeafPage(GinBtree btree, GinBtreeStack *stack);
 
 /* ginentrypage.c */
 extern void ginPrepareEntryScan(GinBtree btree, OffsetNumber attnum,
@@ -747,6 +748,8 @@ typedef struct GinScanEntryData
 	bool		isFinished;
 	bool		reduceResult;
 	uint32		predictNumberResult;
+	GinPostingTreeScan *gdi;
+	bool		preValue;
 }	GinScanEntryData;
 
 typedef struct GinScanOpaqueData
@@ -758,10 +761,12 @@ typedef struct GinScanOpaqueData
 	uint32		nkeys;
 
 	GinScanEntry *entries;		/* one per index search condition */
+	GinScanEntry *sortedEntries;		/* one per index search condition */
 	uint32		totalentries;
 	uint32		allocentries;	/* allocated length of entries[] */
 
 	bool		isVoidRes;		/* true if query is unsatisfiable */
+	bool		useFastScan;
 } GinScanOpaqueData;
 
 typedef GinScanOpaqueData *GinScanOpaque;
