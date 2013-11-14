@@ -189,7 +189,13 @@ ginRedoInsert(XLogRecPtr lsn, XLogRecord *record)
 
 				if (!GinPageIsCompressed(page))
 				{
-					Assert(dataCompressLeafPage(page));
+					/*
+					 * Page compression must succeed since we have an xlog
+					 * record.
+					 */
+					bool result;
+					result = dataCompressLeafPage(page);
+					Assert(result);
 				}
 
 				beginPtr = GinDataLeafPageGetPostingList(page) + data->beginOffset;
@@ -437,10 +443,15 @@ ginRedoVacuumPage(XLogRecPtr lsn, XLogRecord *record)
 
 				ptr = XLogRecGetData(record) + sizeof(ginxlogVacuumPage);
 
+				/* There should be enough of space since we have a xlog record */
 				Assert(data->nitem <= GinDataLeafMaxPostingListSize);
 
 				if (!GinPageIsCompressed(page))
 				{
+					/*
+					 * Set page format is compressed and reserve space for
+					 * item indexes
+					 */
 					GinPageSetCompressed(page);
 					((PageHeader) page)->pd_upper -=
 						sizeof(GinDataLeafItemIndex) * GinDataLeafIndexCount;

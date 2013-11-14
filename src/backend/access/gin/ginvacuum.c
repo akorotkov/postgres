@@ -116,13 +116,13 @@ ginVacuumPostingListCompressed(GinVacuumState *gvs,
 }
 
 /*
- * Vacuums a list of item pointers. The original size of the list is 'nitem',
- * returns the number of items remaining afterwards.
+ * Vacuums a compressed posting list. The size of the must can be specified
+ * in number of items (nitems).
  *
- * If *cleaned == NULL on entry, the original array is left unmodified; if
- * any items are removed, a palloc'd copy of the result is stored in *cleaned.
- * Otherwise *cleaned should point to the original array, in which case it's
- * modified directly.
+ * Results are always stored in *cleaned, which will be allocated
+ * if it's needed. Results are compressed.
+ *
+ * Returns the number of items remaining.
  */
 static int
 ginVacuumPostingListUncompressed(GinVacuumState *gvs, ItemPointerData *items,
@@ -137,7 +137,7 @@ ginVacuumPostingListUncompressed(GinVacuumState *gvs, ItemPointerData *items,
 	Assert(*cleaned == NULL);
 
 	/*
-	 * just scan over ItemPointer array
+	 * Iterate over TIDs array
 	 */
 	for (i = 0; i < nitem; i++)
 	{
@@ -146,6 +146,11 @@ ginVacuumPostingListUncompressed(GinVacuumState *gvs, ItemPointerData *items,
 			gvs->result->tuples_removed += 1;
 			if (!dst)
 			{
+				/*
+				 * Fist TID to be deleted: allocate memory for compressed
+				 * results and put there compressed representation of previous
+				 * TIDs.
+				 */
 				dst = palloc(MAX_COMPRESSED_ITEM_POINTER_SIZE * nitem);
 				ptr = dst;
 				if (i != 0)
@@ -414,6 +419,11 @@ ginVacuumPostingTreeLeaves(GinVacuumState *gvs, BlockNumber blkno, bool isRoot, 
 		Pointer beginPtr;
 
 		beginPtr = GinDataLeafPageGetPostingList(page);
+
+		/*
+		 * Vacuum posting list with proper function for compressed and
+		 * uncompressed format.
+		 */
 		if (GinPageIsCompressed(page))
 		{
 			Size oldSize;
@@ -432,6 +442,12 @@ ginVacuumPostingTreeLeaves(GinVacuumState *gvs, BlockNumber blkno, bool isRoot, 
 		/* saves changes about deleted tuple ... */
 		if (cleaned)
 		{
+			/*
+			 * We should have enough of space to place vacuumed posting list.
+			 * Could fail in some very rare cases because of compressed
+			 * representation of TID could be larger in worst case and because
+			 * we have to place item indexes at the end of page.
+			 */
 			if (newSize > GinDataLeafMaxPostingListSize)
 			{
 				ereport(ERROR,
@@ -444,6 +460,10 @@ ginVacuumPostingTreeLeaves(GinVacuumState *gvs, BlockNumber blkno, bool isRoot, 
 
 			if (!GinPageIsCompressed(page))
 			{
+				/*
+				 * Set page format is compressed and reserve space for
+				 * item indexes
+				 */
 				GinPageSetCompressed(page);
 				((PageHeader) page)->pd_upper -=
 						sizeof(GinDataLeafItemIndex) * GinDataLeafIndexCount;
@@ -786,6 +806,10 @@ ginVacuumEntryPage(GinVacuumState *gvs, Buffer buffer, BlockNumber *roots, uint3
 			Pointer cleaned = NULL;
 			int		newN;
 
+			/*
+			 * Vacuum posting list with proper function for compressed and
+			 * uncompressed format.
+			 */
 			if (GinItupIsCompressed(itup))
 				newN = ginVacuumPostingListCompressed(gvs,
 											GinGetPosting(itup),
