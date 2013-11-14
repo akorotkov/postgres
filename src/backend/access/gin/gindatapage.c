@@ -18,6 +18,10 @@
 #include "miscadmin.h"
 #include "utils/rel.h"
 
+/*
+ * Initialize leaf page of posting tree. Reverse space for item indexes in
+ * the end of page.
+ */
 static void
 GinInitDataLeafPage(Page page)
 {
@@ -503,6 +507,13 @@ incrUpdateItemIndexes(Page page, int off, int len)
 	}
 }
 
+/*
+ * Convert uncompressed leaf posting tree page into compressed format. In some
+ * rare cases compress could fail because varbyte encoded of large 32-bit
+ * integer could be 5 bytes and we additionally reserve space for item indexes.
+ * If conversion succeed function returns true. If conversion failed function
+ * returns false and leave page untouched.
+ */
 bool
 dataCompressLeafPage(Page page)
 {
@@ -513,28 +524,36 @@ dataCompressLeafPage(Page page)
 	Pointer		ptr, cur;
 	Size		size;
 
-	memcpy(pageCopy, page, BLCKSZ);
-	maxoff = GinPageGetOpaque(pageCopy)->maxoff;
-
 	/* Check if we've enough of space to store compressed representation */
+	maxoff = GinPageGetOpaque(page)->maxoff;
 	MemSet(&prev_iptr, 0, sizeof(ItemPointerData));
 	for (i = FirstOffsetNumber; i <= maxoff; i++)
 	{
-		iptr = GinDataPageGetItemPointer(pageCopy, i);
+		iptr = GinDataPageGetItemPointer(page, i);
 		size += ginDataPageLeafGetItemPointerSize(&iptr, &prev_iptr);
 		prev_iptr = *iptr;
 	}
 
-	if (size > GinDataLeafMaxPostingListSize)
+	/*
+	 * We should be able to hold at least one more TID for page compression be
+	 * properly xlogged.
+	 */
+	if (size > GinDataLeafMaxPostingListSize - MAX_COMPRESSED_ITEM_POINTER_SIZE)
 		return false;
 
-	ptr = GinDataLeafPageGetPostingList(page);
-	cur = ptr;
-	MemSet(&prev_iptr, 0, sizeof(ItemPointerData));
+	/* Make copy of page */
+	memcpy(pageCopy, page, BLCKSZ);
+
+	/* Reinitialize page as compressed */
 	GinInitDataLeafPage(page);
 	GinPageGetOpaque(page)->rightlink = GinPageGetOpaque(pageCopy)->rightlink;
 	*GinDataPageGetRightBound(page) = *GinDataPageGetRightBound(pageCopy);
 	PageSetLSN(page, PageGetLSN(pageCopy));
+
+	/* Compress TIDs of pageCopy into page */
+	ptr = GinDataLeafPageGetPostingList(page);
+	cur = ptr;
+	MemSet(&prev_iptr, 0, sizeof(ItemPointerData));
 	for (i = FirstOffsetNumber; i <= maxoff; i++)
 	{
 		iptr = GinDataPageGetItemPointer(pageCopy, i);
@@ -545,11 +564,12 @@ dataCompressLeafPage(Page page)
 	GinDataLeafPageSetPostingListSize(page, cur - ptr);
 	Assert(GinDataPageFreeSpacePre(page, cur) >= 0);
 	updateItemIndexes(page);
+
 	return true;
 }
 
 /*
- * Places keys to page and fills WAL record.
+ * Places keys to leaf data page and fills WAL record.
  */
 static bool
 dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack, XLogRecData **prdata)
@@ -577,6 +597,7 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack, XLogRecDat
 
 	Assert(GinPageIsData(page));
 
+	/* Try to compress page if it's uncompressed */
 	if (!GinPageIsCompressed(page))
 	{
 		if (!dataCompressLeafPage(page))
@@ -675,14 +696,11 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack, XLogRecDat
 	maxitems = i;
 	if (maxitems == 0)
 	{
-		if (compress)
-		{
-			ereport(ERROR,
-					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-			errmsg("can't place new TIDs to compressed block %u of gin index \"%s\", consider REINDEX",
-					BufferGetBlockNumber(buf),
-				   RelationGetRelationName(btree->ginstate->index))));
-		}
+		/*
+		 * Page compression reserves space for at least one more TID. So it
+		 * must be inserted.
+		 */
+		Assert(!compress);
 
 		return false; /* no entries fit on this page */
 	}
@@ -785,6 +803,9 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack, XLogRecDat
 	return true;
 }
 
+/*
+ * Places keys to internal data page and fills WAL record.
+ */
 static bool
 dataPlaceToPageInternal(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 						XLogRecData **prdata)
