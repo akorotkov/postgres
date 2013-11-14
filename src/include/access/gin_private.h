@@ -632,7 +632,7 @@ extern ItemPointerData updateItemIndexes(Page page);
 extern void incrUpdateItemIndexes(Page page, int oldOffset, int newOffset);
 
 /* gindatapage.c */
-extern void dataCompressLeafPage(Page page);
+extern bool dataCompressLeafPage(Page page);
 extern BlockNumber createPostingTree(Relation index,
 				  ItemPointerData *items, uint32 nitems,
 				  GinStatsData *buildStats);

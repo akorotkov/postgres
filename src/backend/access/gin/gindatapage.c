@@ -522,7 +522,7 @@ dataCompressLeafPage(Page page)
 	ItemPointerData prev_iptr;
 	ItemPointer iptr;
 	Pointer		ptr, cur;
-	Size		size;
+	Size		size = 0;
 
 	/* Check if we've enough of space to store compressed representation */
 	maxoff = GinPageGetOpaque(page)->maxoff;
@@ -530,7 +530,7 @@ dataCompressLeafPage(Page page)
 	for (i = FirstOffsetNumber; i <= maxoff; i++)
 	{
 		iptr = GinDataPageGetItemPointer(page, i);
-		size += ginDataPageLeafGetItemPointerSize(&iptr, &prev_iptr);
+		size += ginDataPageLeafGetItemPointerSize(iptr, &prev_iptr);
 		prev_iptr = *iptr;
 	}
 

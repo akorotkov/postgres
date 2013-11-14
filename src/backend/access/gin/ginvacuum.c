@@ -453,7 +453,7 @@ ginVacuumPostingTreeLeaves(GinVacuumState *gvs, BlockNumber blkno, bool isRoot, 
 				ereport(ERROR,
 						(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				errmsg("can't compress block %u of gin index \"%s\", consider REINDEX",
-						blkno, RelationGetRelationName(gvs->ginstate->index))));
+						blkno, RelationGetRelationName(gvs->ginstate.index))));
 			}
 
 			START_CRIT_SECTION();
