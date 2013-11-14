@@ -139,7 +139,7 @@ there is an array of zero or more ItemPointers, which store the heap tuple
 TIDs for which the indexable items contain this key.  This is called the
 "posting list".
 
-  The TIDs in a posting list must appear in sorted order.
+* The TIDs in a posting list must appear in sorted order.
 Since TIDs are ascending sorted, block numbers are also ascending. At second
 and further ItemPointers increment to block number is stored instead of
 block number itself. Block and offset numbers are varbyte encoded. Since
@@ -217,6 +217,24 @@ fit on one pending-list page must have those pages to itself, even if this
 results in wasting much of the space on the preceding page and the last
 page for the tuple.)
 
+Varbyte encoding
+----------------
+
+Varbyte encoding is a method to encode integers allowing lower numbers to
+take less space. Each integer is represented by variable number of bytes.
+High bit of each byte in varbyte encoding determines whether next byte is
+used to encode this number. Therefore, to read single varbyte encoded
+number we have to read bytes while their high bit is set.
+
+There are some examples of how varbyte encoded numbers could be decoded into
+32-bits little-endian integers:
+0XXXXXXX                   -> 0XXXXXXX 00000000 00000000 00000000
+1XXXXXXX 0YYYYYYY          -> YXXXXXXX 00YYYYYY 00000000 00000000
+1XXXXXXX 1YYYYYYY 0ZZZZZZZ -> YXXXXXXX ZZYYYYYY 000ZZZZZ 00000000
+
+In worst case varbyte encoded 32-bits integer takes 5 bytes in varbyte
+encoding. However, these will pretty rare happens to BlockNumber increments.
+
 Posting tree
 ------------
 
@@ -283,6 +301,38 @@ concurrently with vacuum. In the entry tree, we never delete pages.
 page-deletions safe; it stamps the deleted pages with an XID and keeps the
 deleted pages around with the right-link intact until all concurrent scans
 have finished.)
+
+Compatibility
+-------------
+
+Compression of TIDs was introduced in 9.4. Some GIN indexes could be remain in
+uncompressed format because of pg_upgrade from 9.3 or earlier versions.
+For compatibility, old uncompressed format is also supported. Following
+rules is used to handle it:
+
+* GIN_ITUP_COMPRESSED flag is introduces for index tuples with posting lists.
+It determines whether index tuple contains compressed posting list. This
+flag is stored in high bit of ItemPointerGetBlockNumber(&itup->t_tid). Macro
+GinItupIsCompressed(itup) is used to check if index tuple contains compressed
+posting list.
+
+* GIN_COMPRESSED flag is introduced for leaf posting tree pages. It determines
+whether page is in new compressed format. Macros GinPageIsCompressed(page) and
+GinPageIsCompressed(page) are used to check and set this flag.
+
+* All scan operations check format of posting list add use corresponding code
+to read its content.
+
+* When updating index tuple containing uncompressed posting list it will be
+replaced with new index tuple containing compressed posting list.
+
+* When updating uncompressed posting tree leaf page, it's previously compressed.
+To success we need that compressed page can additionally hold item indexes and
+at least one newly inserted TID. Theoretically in some rare cases it could be
+not so. In this case error is triggered.
+
+* If vacuum finds some dead TIDs in uncompressed posting lists, they are
+converted into compressed posting lists.
 
 Limitations
 -----------

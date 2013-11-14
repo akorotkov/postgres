@@ -437,7 +437,15 @@ ginRedoVacuumPage(XLogRecPtr lsn, XLogRecord *record)
 
 				ptr = XLogRecGetData(record) + sizeof(ginxlogVacuumPage);
 
-				GinPageSetCompressed(page);
+				Assert(data->nitem <= GinDataLeafMaxPostingListSize);
+
+				if (!GinPageIsCompressed(page))
+				{
+					GinPageSetCompressed(page);
+					((PageHeader) page)->pd_upper -=
+						sizeof(GinDataLeafItemIndex) * GinDataLeafIndexCount;
+				}
+
 				memcpy(GinDataLeafPageGetPostingList(page), ptr, data->nitem);
 
 				GinDataLeafPageSetPostingListSize(page, data->nitem);

@@ -432,12 +432,21 @@ ginVacuumPostingTreeLeaves(GinVacuumState *gvs, BlockNumber blkno, bool isRoot, 
 		/* saves changes about deleted tuple ... */
 		if (cleaned)
 		{
+			if (newSize > GinDataLeafMaxPostingListSize)
+			{
+				ereport(ERROR,
+						(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+				errmsg("can't compress block %u of gin index \"%s\", consider REINDEX",
+						blkno, RelationGetRelationName(gvs->ginstate->index))));
+			}
+
 			START_CRIT_SECTION();
 
 			if (!GinPageIsCompressed(page))
 			{
 				GinPageSetCompressed(page);
-				((PageHeader) page)->pd_upper -= sizeof(GinDataLeafItemIndex) * GinDataLeafIndexCount;
+				((PageHeader) page)->pd_upper -=
+						sizeof(GinDataLeafItemIndex) * GinDataLeafIndexCount;
 			}
 
 			if (newSize > 0)

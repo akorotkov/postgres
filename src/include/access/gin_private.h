@@ -837,14 +837,14 @@ typedef char *CompressedPostingList;
 
 /*
  * Function for reading packed ItemPointers. Used in various .c files and
- * have to be inline for being fast.
+ * have to be inline for being fast. When PG_USE_INLINE is not define
+ * we have only declaration in header, but function inself in ginpostinglist.c.
  *
  * Read next item pointer from leaf data page. Replaces current item pointer
  * with the next one. Zero item pointer should be passed in order to read the
  * first item pointer.
- *
- * XXX: this needs a non-inlined version for the !PG_USE_INLINE case.
  */
+#ifdef PG_USE_INLINE
 static inline CompressedPostingList
 ginDataPageLeafReadItemPointer(CompressedPostingList ptr, ItemPointer iptr)
 {
@@ -894,6 +894,10 @@ ginDataPageLeafReadItemPointer(CompressedPostingList ptr, ItemPointer iptr)
 
 	return ptr;
 }
+#else
+CompressedPostingList ginDataPageLeafReadItemPointer(CompressedPostingList ptr,
+															ItemPointer iptr);
+#endif   /* PG_USE_INLINE */
 
 /*
  * Merging the results of several gin scans compares item pointers a lot,

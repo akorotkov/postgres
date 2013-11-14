@@ -145,3 +145,63 @@ ginMergeItemPointers(ItemPointerData *dst,
 
 	return dptr - dst;
 }
+
+/*
+ * Non-inlined version of ginDataPageLeafReadItemPointer.
+ *
+ * Read next item pointer from leaf data page. Replaces current item pointer
+ * with the next one. Zero item pointer should be passed in order to read the
+ * first item pointer.
+ */
+#ifndef PG_USE_INLINE
+static inline CompressedPostingList
+ginDataPageLeafReadItemPointer(CompressedPostingList ptr, ItemPointer iptr)
+{
+	uint32		blockNumberIncr;
+	uint16		offset;
+	int			i;
+	uint8		v;
+	ItemPointerData prev = *iptr;
+
+	i = 0;
+	blockNumberIncr = 0;
+	do
+	{
+		v = *ptr;
+		ptr++;
+		blockNumberIncr |= (uint32) (v & (~HIGHBIT)) << i;
+		Assert(i < 28 || ((i == 28) && ((v & (~HIGHBIT)) < (1 << 4))));
+		i += 7;
+	}
+	while (IS_HIGHBIT_SET(v));
+
+	Assert((uint64)iptr->ip_blkid.bi_lo + ((uint64)iptr->ip_blkid.bi_hi << 16) +
+			(uint64)blockNumberIncr < ((uint64)1 << 32));
+
+	blockNumberIncr += iptr->ip_blkid.bi_lo + (iptr->ip_blkid.bi_hi << 16);
+
+	iptr->ip_blkid.bi_lo = blockNumberIncr & 0xFFFF;
+	iptr->ip_blkid.bi_hi = (blockNumberIncr >> 16) & 0xFFFF;
+
+	i = 0;
+	offset = 0;
+	do
+	{
+		v = *ptr;
+		ptr++;
+		offset |= (uint16) (v & (~HIGHBIT)) << i;
+		Assert(i < 14 || ((i == 14) && ((v & (~HIGHBIT)) < (1 << 2))));
+		i += 7;
+	} while(IS_HIGHBIT_SET(v));
+
+	Assert(OffsetNumberIsValid(offset));
+
+	iptr->ip_posid = offset;
+
+	Assert(blockNumberIncr > BlockIdGetBlockNumber(&prev.ip_blkid) ||
+		   offset > prev.ip_posid);
+
+	return ptr;
+}
+#endif   /* PG_USE_INLINE */
+
