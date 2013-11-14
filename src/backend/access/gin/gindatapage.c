@@ -1320,6 +1320,7 @@ createPostingTree(Relation index, ItemPointerData *items, uint32 nitems,
 		rdata[1].buffer = InvalidBuffer;
 		rdata[1].data = buf;
 		rdata[1].len = GinDataLeafPageGetPostingListSize(page);
+		rdata[1].next = NULL;
 
 		recptr = XLogInsert(RM_GIN_ID, XLOG_GIN_CREATE_PTREE, rdata);
 		PageSetLSN(page, recptr);
