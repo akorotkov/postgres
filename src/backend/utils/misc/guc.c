@@ -762,6 +762,15 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"gin_enable_fastscan", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enables the gin to use fastscan."),
+			NULL
+		},
+		&GinEnableFastScan,
+		true,
+		NULL, NULL, NULL
+	},
+	{
 		{"geqo", PGC_USERSET, QUERY_TUNING_GEQO,
 			gettext_noop("Enables genetic query optimization."),
 			gettext_noop("This algorithm attempts to do planning without "

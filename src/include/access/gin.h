@@ -52,6 +52,7 @@ typedef struct GinStatsData
 
 /* GUC parameter */
 extern PGDLLIMPORT int GinFuzzySearchLimit;
+extern PGDLLIMPORT bool GinEnableFastScan;
 
 /* ginutil.c */
 extern void ginGetStats(Relation index, GinStatsData *stats);

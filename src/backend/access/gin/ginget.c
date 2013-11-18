@@ -621,6 +621,9 @@ startScan(IndexScanDesc scan)
 		}
 	}
 
+	if (!GinEnableFastScan)
+		useFastScan = false;
+
 	if (useFastScan)
 	{
 		for (i = 0; i < so->totalentries; i++)
