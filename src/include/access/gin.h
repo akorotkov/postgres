@@ -34,6 +34,9 @@
 #define GIN_SEARCH_MODE_ALL				2
 #define GIN_SEARCH_MODE_EVERYTHING		3		/* for internal use only */
 
+/* Additional value to implement tri-state logic with TRUE and FALSE */
+#define UNKNOWN 2
+
 /*
  * GinStatsData represents stats data for planner use
  */

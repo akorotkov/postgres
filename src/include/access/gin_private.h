@@ -345,9 +345,6 @@ typedef struct GinOptions
 #define GIN_SHARE	BUFFER_LOCK_SHARE
 #define GIN_EXCLUSIVE  BUFFER_LOCK_EXCLUSIVE
 
-/* Additional value to implement tri-state logic with TRUE and FALSE */
-#define UNKNOWN 2
-
 /*
  * GinState: working data structure describing the index being worked on
  */

@@ -1201,7 +1201,7 @@ scanPage(GinState *ginstate, GinScanEntry entry, ItemPointer item, Page page,
 	}
 
 	/* Locate range in page using index */
-	ptr = GinDataPageGetData(page);
+	ptr = GinDataLeafPageGetPostingList(page);
 	endPtr = GinDataLeafPageGetPostingListEnd(page);
 	for (i = 0; i < GinDataLeafIndexCount; i++)
 	{
@@ -1212,12 +1212,12 @@ scanPage(GinState *ginstate, GinScanEntry entry, ItemPointer item, Page page,
 		cmp = ginCompareItemPointers(&index->iptr, item);
 		if (cmp < 0 || (cmp <= 0 && !equalOk))
 		{
-			ptr = GinDataPageGetData(page) + index->pageOffset;
+			ptr = GinDataLeafPageGetPostingList(page) + index->pageOffset;
 			iptr = index->iptr;
 		}
 		else
 		{
-			endPtr = GinDataPageGetData(page) + index->pageOffset;
+			endPtr = GinDataLeafPageGetPostingList(page) + index->pageOffset;
 			break;
 		}
 	}

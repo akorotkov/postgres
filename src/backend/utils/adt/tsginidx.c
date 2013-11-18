@@ -15,6 +15,7 @@
 
 #include "access/gin.h"
 #include "access/skey.h"
+#include "miscadmin.h"
 #include "tsearch/ts_type.h"
 #include "tsearch/ts_utils.h"
 #include "utils/builtins.h"
@@ -194,6 +195,56 @@ checkcondition_gin(void *checkval, QueryOperand *val)
 	return gcv->check[j];
 }
 
+/*
+ * Evaluate tsquery boolean expression.
+ *
+ * chkcond is a callback function used to evaluate each VAL node in the query.
+ * checkval can be used to pass information to the callback. TS_execute doesn't
+ * do anything with it.
+ * if calcnot is false, NOT expressions are always evaluated to be true. This
+ * is used in ranking.
+ */
+static bool
+TS_execute_tri_state(QueryItem *curitem, void *checkval, bool calcnot,
+				   bool (*chkcond) (void *checkval, QueryOperand *val))
+{
+	bool result;
+	/* since this function recurses, it could be driven to stack overflow */
+	check_stack_depth();
+
+	if (curitem->type == QI_VAL)
+		return chkcond(checkval, (QueryOperand *) curitem);
+
+	switch (curitem->qoperator.oper)
+	{
+		case OP_NOT:
+			result = TS_execute(curitem + 1, checkval, calcnot, chkcond);
+			if (result == UNKNOWN)
+				return result;
+			return !result;
+
+		case OP_AND:
+			result = TS_execute(curitem + curitem->qoperator.left, checkval, calcnot, chkcond);
+			if (result == TRUE)
+				return TS_execute(curitem + 1, checkval, calcnot, chkcond);
+			else
+				return result;
+
+		case OP_OR:
+			result = TS_execute(curitem + curitem->qoperator.left, checkval, calcnot, chkcond);
+			if (result == FALSE)
+				return TS_execute(curitem + 1, checkval, calcnot, chkcond);
+			else
+				return result;
+
+		default:
+			elog(ERROR, "unrecognized operator: %d", curitem->qoperator.oper);
+	}
+
+	/* not reachable, but keep compiler quiet */
+	return false;
+}
+
 Datum
 gin_tsquery_consistent(PG_FUNCTION_ARGS)
 {
@@ -224,49 +275,14 @@ gin_tsquery_consistent(PG_FUNCTION_ARGS)
 		gcv.map_item_operand = (int *) (extra_data[0]);
 		gcv.need_recheck = recheck;
 
-		res = TS_execute(GETQUERY(query),
-						 &gcv,
-						 true,
-						 checkcondition_gin);
+		res = TS_execute_tri_state(GETQUERY(query),
+								   &gcv,
+								   true,
+								   checkcondition_gin);
 	}
 
 	PG_RETURN_BOOL(res);
 }
-
-Datum
-gin_tsquery_pre_consistent(PG_FUNCTION_ARGS)
-{
-	bool	   *check = (bool *) PG_GETARG_POINTER(0);
-
-	/* StrategyNumber strategy = PG_GETARG_UINT16(1); */
-	TSQuery		query = PG_GETARG_TSQUERY(2);
-
-	Pointer    *extra_data = (Pointer *) PG_GETARG_POINTER(4);
-	bool	    recheck;
-	bool		res = FALSE;
-
-	if (query->size > 0)
-	{
-		QueryItem  *item;
-		GinChkVal	gcv;
-
-		/*
-		 * check-parameter array has one entry for each value (operand) in the
-		 * query.
-		 */
-		gcv.first_item = item = GETQUERY(query);
-		gcv.check = check;
-		gcv.map_item_operand = (int *) (extra_data[0]);
-		gcv.need_recheck = &recheck;
-
-		res = TS_execute(GETQUERY(query),
-						 &gcv,
-						 false,
-						 checkcondition_gin);
-	}
-	PG_RETURN_BOOL(res);
-}
-
 
 /*
  * Formerly, gin_extract_tsvector had only two arguments.  Now it has three,
