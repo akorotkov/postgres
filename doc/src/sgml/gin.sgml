@@ -216,6 +216,15 @@
        arrays previously returned by <function>extractQuery</>.
        <literal>extra_data</> is the extra-data array returned by
        <function>extractQuery</>, or <symbol>NULL</symbol> if none.
+       <function>consistent</> can be declared as either 1st or 6th support
+       function of opclass. If it's declared as 6th then it must support
+       tri-state logic can be used for fast scan technique which accelerating
+       gin index scan by skipping parts of large posting-trees. Tri-state
+       version of <function>consistent</> accepts <literal>UNKNOWN</> values
+       in <literal>check</> array. These values means that indexed item can
+       either contain or not contain corresponding query key. Consistent
+       might return <literal>UNKNOWN</> values as well when given information
+       is lacking for exact answer.
       </para>
 
       <para>
