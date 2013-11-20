@@ -571,6 +571,40 @@ startScanKey(GinState *ginstate, GinScanKey key)
 	key->isFinished = false;
 }
 
+static bool
+checkKeyIsUsefulForFastScan(GinState *ginstate, GinScanKey key)
+{
+	int i;
+
+	if (!ginstate->consistentSupportUnknown[key->attnum - 1] ||
+		key->nuserentries <= 1)
+		return false;
+
+	memset(key->entryRes, 0, sizeof(bool) * key->nentries);
+
+	for (i = 0; i < key->nuserentries; i++)
+	{
+		bool check;
+
+		key->entryRes[i] = UNKNOWN;
+		check = DatumGetBool(FunctionCall8Coll(&ginstate->consistentFn[key->attnum - 1],
+									 ginstate->supportCollation[key->attnum - 1],
+											 PointerGetDatum(key->entryRes),
+											  UInt16GetDatum(key->strategy),
+											  key->query,
+											  UInt32GetDatum(key->nuserentries),
+											  PointerGetDatum(key->extra_data),
+										   PointerGetDatum(&key->recheckCurItem),
+											  PointerGetDatum(key->queryValues),
+										 PointerGetDatum(key->queryCategories)));
+		key->entryRes[i] = FALSE;
+		if (check == FALSE)
+			return true;
+	}
+	return false;
+}
+
+
 static void
 startScan(IndexScanDesc scan)
 {
@@ -582,27 +616,6 @@ startScan(IndexScanDesc scan)
 	for (i = 0; i < so->totalentries; i++)
 		startScanEntry(ginstate, so->entries[i]);
 
-	if (GinFuzzySearchLimit > 0)
-	{
-		/*
-		 * If all of keys more than threshold we will try to reduce result, we
-		 * hope (and only hope, for intersection operation of array our
-		 * supposition isn't true), that total result will not more than
-		 * minimal predictNumberResult.
-		 */
-
-		for (i = 0; i < so->totalentries; i++)
-			if (so->entries[i]->predictNumberResult <= so->totalentries * GinFuzzySearchLimit)
-				return;
-
-		for (i = 0; i < so->totalentries; i++)
-			if (so->entries[i]->predictNumberResult > so->totalentries * GinFuzzySearchLimit)
-			{
-				so->entries[i]->predictNumberResult /= so->totalentries;
-				so->entries[i]->reduceResult = TRUE;
-			}
-	}
-
 	for (i = 0; i < so->nkeys; i++)
 		startScanKey(ginstate, so->keys + i);
 
@@ -610,19 +623,18 @@ startScan(IndexScanDesc scan)
 	 * Check if we can use a fast scan: no partial matches and at least one
 	 * preConsistent method.
 	 */
-	for (i = 0; i < so->nkeys; i++)
+	if (GinEnableFastScan)
 	{
-		GinScanKey key = &so->keys[i];
-
-		if (so->ginstate.consistentSupportUnknown[key->attnum - 1])
+		for (i = 0; i < so->nkeys; i++)
 		{
-			useFastScan = true;
-			break;
+			GinScanKey key = &so->keys[i];
+
+			if (checkKeyIsUsefulForFastScan(&so->ginstate, key))
+			{
+				useFastScan = true;
+			}
 		}
 	}
-
-	if (!GinEnableFastScan)
-		useFastScan = false;
 
 	if (useFastScan)
 	{
@@ -657,6 +669,28 @@ startScan(IndexScanDesc scan)
 	}
 
 	so->useFastScan = useFastScan;
+
+	if (GinFuzzySearchLimit > 0)
+	{
+		/*
+		 * If all of keys more than threshold we will try to reduce result, we
+		 * hope (and only hope, for intersection operation of array our
+		 * supposition isn't true), that total result will not more than
+		 * minimal predictNumberResult.
+		 */
+
+		for (i = 0; i < so->totalentries; i++)
+			if (so->entries[i]->predictNumberResult <= so->totalentries * GinFuzzySearchLimit)
+				return;
+
+		for (i = 0; i < so->totalentries; i++)
+			if (so->entries[i]->predictNumberResult > so->totalentries * GinFuzzySearchLimit)
+			{
+				so->entries[i]->predictNumberResult /= so->totalentries;
+				so->entries[i]->reduceResult = TRUE;
+			}
+	}
+
 }
 
 /*
@@ -706,6 +740,7 @@ entryGetNextItem(GinState *ginstate, GinScanEntry entry)
 			entry->buffer = ginStepRight(entry->buffer,
 										 ginstate->index,
 										 GIN_SHARE);
+			entry->gdi->stack->buffer = entry->buffer;
 			page = BufferGetPage(entry->buffer);
 
 			entry->offset = InvalidOffsetNumber;
@@ -1429,7 +1464,7 @@ entryShift(int i, GinScanOpaque so, bool find)
 
 	/*
 	 * It's more efficient to move entry with smallest posting list/tree. So
-	 * fint one.
+	 * find one.
 	 */
 	for (j = i; j < so->totalentries; j++)
 	{
@@ -1443,8 +1478,14 @@ entryShift(int i, GinScanOpaque so, bool find)
 
 	/* Do shift of required type */
 	if (find)
+	{
 		entryFindItem(ginstate, so->sortedEntries[minIndex],
 											&so->sortedEntries[i - 1]->curItem);
+		if (so->sortedEntries[minIndex]->isFinished == FALSE &&
+				so->sortedEntries[minIndex]->reduceResult == TRUE &&
+				dropItem(so->sortedEntries[minIndex]))
+			entryGetItem(ginstate, so->sortedEntries[minIndex]);
+	}
 	else
 		entryGetItem(ginstate, so->sortedEntries[minIndex]);
 
