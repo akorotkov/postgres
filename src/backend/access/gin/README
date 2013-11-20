@@ -302,6 +302,12 @@ page-deletions safe; it stamps the deleted pages with an XID and keeps the
 deleted pages around with the right-link intact until all concurrent scans
 have finished.)
 
+Fast scan
+---------
+
+Fast scan is technique which allows to skip parts of large posting-trees during
+gin index scan. 
+
 Compatibility
 -------------
 
@@ -333,6 +339,30 @@ not so. In this case error is triggered.
 
 * If vacuum finds some dead TIDs in uncompressed posting lists, they are
 converted into compressed posting lists.
+
+Fast scan
+---------
+
+Fast scan is technique allowing to skip parts of large posting trees during
+gin index scans. Fast scan is based on tri-state consistent function. Tri-state
+consistent function must support following values:
+1) TRUE
+2) FALSE
+3) UNKNOWN
+GIN passes UNKNOWN into check array for those keys which parts of posting trees
+it tries to skip. If consistent function returns false then it can actually
+skip part of posting tree.
+
+In more details fast scans works following:
+1) Keep entries sorted by their current TIDs descending.
+2) Tries to skip some of entries at the end of sorted order. It passes
+   TRUE for the first part of entries and UNKNOWN for others. It moves the
+   border splitting TRUE and UNKNOWN until finds where consistent begins to
+   return FALSE.
+3) If tri-state consistent returns FALSE, it skips part of shortest entry which
+   was UNKNOWN (other entries could be skipped later for greater value). 
+4) If tri-state consistent doesn't return FALSE then it calls exact consistent
+   and moves entries TIDs like regular gin index scan.
 
 Limitations
 -----------

@@ -571,6 +571,14 @@ startScanKey(GinState *ginstate, GinScanKey key)
 	key->isFinished = false;
 }
 
+/*-----------------------------------------------------------------------------
+ * Check if fast scan can be useful for given scan key. Actually checks
+ * following:
+ *
+ * 1) Consistent function supports tri-state logic.
+ * 2) Scan key contains 2 or more entries.
+ * 3) Consistent function can return false with at least one UNKNOWN argument.
+ */
 static bool
 checkKeyIsUsefulForFastScan(GinState *ginstate, GinScanKey key)
 {
