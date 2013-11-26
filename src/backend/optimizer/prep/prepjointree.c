@@ -580,10 +580,7 @@ inline_set_returning_functions(PlannerInfo *root)
 				/* Successful expansion, replace the rtable entry */
 				rte->rtekind = RTE_SUBQUERY;
 				rte->subquery = funcquery;
-				rte->funcexpr = NULL;
-				rte->funccoltypes = NIL;
-				rte->funccoltypmods = NIL;
-				rte->funccolcollations = NIL;
+				rte->functions = NIL;
 			}
 		}
 	}
@@ -868,6 +865,18 @@ pull_up_simple_subquery(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte,
 		 */
 		return jtnode;
 	}
+
+	/*
+	 * We must flatten any join alias Vars in the subquery's targetlist,
+	 * because pulling up the subquery's subqueries might have changed their
+	 * expansions into arbitrary expressions, which could affect
+	 * pullup_replace_vars' decisions about whether PlaceHolderVar wrappers
+	 * are needed for tlist entries.  (Likely it'd be better to do
+	 * flatten_join_alias_vars on the whole query tree at some earlier stage,
+	 * maybe even in the rewriter; but for now let's just fix this case here.)
+	 */
+	subquery->targetList = (List *)
+		flatten_join_alias_vars(subroot, (Node *) subquery->targetList);
 
 	/*
 	 * Adjust level-0 varnos in subquery so that we can append its rangetable
@@ -1623,8 +1632,8 @@ replace_vars_in_jointree(Node *jtnode,
 														 context);
 						break;
 					case RTE_FUNCTION:
-						rte->funcexpr =
-							pullup_replace_vars(rte->funcexpr,
+						rte->functions = (List *)
+							pullup_replace_vars((Node *) rte->functions,
 												context);
 						break;
 					case RTE_VALUES:

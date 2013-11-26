@@ -153,18 +153,16 @@ static void
 scanPostingTree(Relation index, GinScanEntry scanEntry,
 				BlockNumber rootPostingTree)
 {
-	GinPostingTreeScan *gdi;
+	GinBtreeStack *stack;
 	Buffer		buffer;
 	Page		page;
 
 	/* Descend to the leftmost leaf page */
-	gdi = ginPrepareScanPostingTree(index, rootPostingTree, TRUE);
-
-	buffer = ginScanBeginPostingTree(gdi);
+	stack = ginScanBeginPostingTree(index, rootPostingTree);
+	buffer = stack->buffer;
 	IncrBufferRefCount(buffer); /* prevent unpin in freeGinBtreeStack */
 
-	freeGinBtreeStack(gdi->stack);
-	pfree(gdi);
+	freeGinBtreeStack(stack);
 
 	/*
 	 * Loop iterates through all leaf pages of posting tree
@@ -431,8 +429,7 @@ restartScanEntry:
 	ginPrepareEntryScan(&btreeEntry, entry->attnum,
 						entry->queryKey, entry->queryCategory,
 						ginstate);
-	btreeEntry.searchMode = TRUE;
-	stackEntry = ginFindLeafPage(&btreeEntry, NULL);
+	stackEntry = ginFindLeafPage(&btreeEntry, GIN_ROOT_BLKNO, true);
 	page = BufferGetPage(stackEntry->buffer);
 	needUnlock = TRUE;
 
@@ -482,7 +479,7 @@ restartScanEntry:
 		if (GinIsPostingTree(itup))
 		{
 			BlockNumber rootPostingTree = GinGetPostingTree(itup);
-			GinPostingTreeScan *gdi;
+			GinBtreeStack *stack;
 			Page		page;
 			Pointer		ptr;
 			Pointer		endPtr;
@@ -497,9 +494,9 @@ restartScanEntry:
 			 */
 			LockBuffer(stackEntry->buffer, GIN_UNLOCK);
 			needUnlock = FALSE;
-			gdi = ginPrepareScanPostingTree(ginstate->index, rootPostingTree, TRUE);
 
-			entry->buffer = ginScanBeginPostingTree(gdi);
+			stack = ginScanBeginPostingTree(ginstate->index, rootPostingTree);
+			entry->buffer = stack->buffer;
 
 			/*
 			 * We keep buffer pinned because we need to prevent deletion of
@@ -534,11 +531,10 @@ restartScanEntry:
 					   GinPageGetOpaque(page)->maxoff * sizeof(ItemPointerData));
 			}
 
-			entry->predictNumberResult = gdi->stack->predictNumber * entry->nlist;
+			entry->predictNumberResult = stack->predictNumber * entry->nlist;
 
 			LockBuffer(entry->buffer, GIN_UNLOCK);
-			freeGinBtreeStack(gdi->stack);
-			pfree(gdi);
+			freeGinBtreeStack(stack);
 			entry->isFinished = FALSE;
 		}
 		else if (GinGetNPosting(itup) > 0)

@@ -138,7 +138,7 @@ entryLocateEntry(GinBtree btree, GinBtreeStack *stack)
 	{
 		stack->off = FirstOffsetNumber;
 		stack->predictNumber *= PageGetMaxOffsetNumber(page);
-		return btree->getLeftMostPage(btree, page);
+		return btree->getLeftMostChild(btree, page);
 	}
 
 	low = FirstOffsetNumber;
@@ -370,11 +370,11 @@ entryPreparePage(GinBtree btree, Page page, OffsetNumber off)
  * If the tuple doesn't fit, returns false without modifying the page.
  */
 static bool
-entryPlaceToPage(GinBtree btree, Buffer buf, GinBtreeStack *stack,
+entryPlaceToPage(GinBtree btree, Buffer buf, OffsetNumber off,
 				 XLogRecData **prdata)
 {
 	Page		page = BufferGetPage(buf);
-	OffsetNumber placed, off = stack->off;
+	OffsetNumber placed;
 	int			cnt = 0;
 
 	/* these must be static so they can be returned to caller */
@@ -382,7 +382,7 @@ entryPlaceToPage(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 	static ginxlogInsertEntry data;
 
 	/* quick exit if it doesn't fit */
-	if (!entryIsEnoughSpace(btree, buf, stack->off))
+	if (!entryIsEnoughSpace(btree, buf, off))
 		return false;
 
 	/* quick exit if it doesn't fit */
@@ -453,8 +453,7 @@ entrySplitPage(GinBtree btree, Buffer lbuf, Buffer rbuf, OffsetNumber off, XLogR
 	Size		lsize = 0,
 				size;
 	char	   *ptr;
-	IndexTuple	itup,
-				leftrightmost = NULL;
+	IndexTuple	itup;
 	Page		page;
 	Page		lpage = PageGetTempPageCopy(BufferGetPage(lbuf));
 	Page		rpage = BufferGetPage(rbuf);
@@ -518,7 +517,6 @@ entrySplitPage(GinBtree btree, Buffer lbuf, Buffer rbuf, OffsetNumber off, XLogR
 		}
 		else
 		{
-			leftrightmost = itup;
 			lsize += MAXALIGN(IndexTupleSize(itup)) + sizeof(ItemIdData);
 		}
 
@@ -527,11 +525,6 @@ entrySplitPage(GinBtree btree, Buffer lbuf, Buffer rbuf, OffsetNumber off, XLogR
 				 RelationGetRelationName(btree->index));
 		ptr += MAXALIGN(IndexTupleSize(itup));
 	}
-
-	btree->entry = GinFormInteriorTuple(leftrightmost, lpage,
-										BufferGetBlockNumber(lbuf));
-
-	btree->rightblkno = BufferGetBlockNumber(rbuf);
 
 	data.node = btree->index->rd_node;
 	data.rootBlkno = InvalidBlockNumber;
@@ -557,19 +550,20 @@ entrySplitPage(GinBtree btree, Buffer lbuf, Buffer rbuf, OffsetNumber off, XLogR
 }
 
 /*
- * return newly allocated rightmost tuple
+ * Prepare the state in 'btree' for inserting a downlink for given buffer.
  */
-IndexTuple
-ginPageGetLinkItup(Buffer buf)
+static void
+entryPrepareDownlink(GinBtree btree, Buffer lbuf)
 {
-	IndexTuple	itup,
-				nitup;
-	Page		page = BufferGetPage(buf);
+	Page		lpage = BufferGetPage(lbuf);
+	IndexTuple	itup;
 
-	itup = getRightMostTuple(page);
-	nitup = GinFormInteriorTuple(itup, page, BufferGetBlockNumber(buf));
+	itup = getRightMostTuple(lpage);
 
-	return nitup;
+	btree->entry = GinFormInteriorTuple(itup,
+										lpage,
+										BufferGetBlockNumber(lbuf));
+	btree->rightblkno = GinPageGetOpaque(lpage)->rightlink;
 }
 
 /*
@@ -579,17 +573,21 @@ ginPageGetLinkItup(Buffer buf)
 void
 ginEntryFillRoot(GinBtree btree, Buffer root, Buffer lbuf, Buffer rbuf)
 {
-	Page		page;
+	Page		page = BufferGetPage(root);
+	Page		lpage = BufferGetPage(lbuf);
+	Page		rpage = BufferGetPage(rbuf);
 	IndexTuple	itup;
 
-	page = BufferGetPage(root);
-
-	itup = ginPageGetLinkItup(lbuf);
+	itup = GinFormInteriorTuple(getRightMostTuple(lpage),
+								lpage,
+								BufferGetBlockNumber(lbuf));
 	if (PageAddItem(page, (Item) itup, IndexTupleSize(itup), InvalidOffsetNumber, false, false) == InvalidOffsetNumber)
 		elog(ERROR, "failed to add item to index root page");
 	pfree(itup);
 
-	itup = ginPageGetLinkItup(rbuf);
+	itup = GinFormInteriorTuple(getRightMostTuple(rpage),
+								rpage,
+								BufferGetBlockNumber(rbuf));
 	if (PageAddItem(page, (Item) itup, IndexTupleSize(itup), InvalidOffsetNumber, false, false) == InvalidOffsetNumber)
 		elog(ERROR, "failed to add item to index root page");
 	pfree(itup);
@@ -612,16 +610,16 @@ ginPrepareEntryScan(GinBtree btree, OffsetNumber attnum,
 	btree->ginstate = ginstate;
 
 	btree->findChildPage = entryLocateEntry;
+	btree->getLeftMostChild = entryGetLeftMostPage;
 	btree->isMoveRight = entryIsMoveRight;
 	btree->findItem = entryLocateLeafEntry;
 	btree->findChildPtr = entryFindChildPtr;
-	btree->getLeftMostPage = entryGetLeftMostPage;
 	btree->placeToPage = entryPlaceToPage;
 	btree->splitPage = entrySplitPage;
 	btree->fillRoot = ginEntryFillRoot;
+	btree->prepareDownlink = entryPrepareDownlink;
 
 	btree->isData = FALSE;
-	btree->searchMode = FALSE;
 	btree->fullScan = FALSE;
 	btree->isBuild = FALSE;
 

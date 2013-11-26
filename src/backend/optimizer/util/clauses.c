@@ -461,6 +461,7 @@ count_agg_clauses_walker(Node *node, count_agg_clauses_context *context)
 		Oid			aggtransfn;
 		Oid			aggfinalfn;
 		Oid			aggtranstype;
+		int32		aggtransspace;
 		QualCost	argcosts;
 		Oid		   *inputTypes;
 		int			numArguments;
@@ -478,6 +479,7 @@ count_agg_clauses_walker(Node *node, count_agg_clauses_context *context)
 		aggtransfn = aggform->aggtransfn;
 		aggfinalfn = aggform->aggfinalfn;
 		aggtranstype = aggform->aggtranstype;
+		aggtransspace = aggform->aggtransspace;
 		ReleaseSysCache(aggTuple);
 
 		/* count it */
@@ -541,22 +543,30 @@ count_agg_clauses_walker(Node *node, count_agg_clauses_context *context)
 		 */
 		if (!get_typbyval(aggtranstype))
 		{
-			int32		aggtranstypmod;
 			int32		avgwidth;
 
-			/*
-			 * If transition state is of same type as first input, assume it's
-			 * the same typmod (same width) as well.  This works for cases
-			 * like MAX/MIN and is probably somewhat reasonable otherwise.
-			 */
-			if (numArguments > 0 && aggtranstype == inputTypes[0])
-				aggtranstypmod = exprTypmod((Node *) linitial(aggref->args));
+			/* Use average width if aggregate definition gave one */
+			if (aggtransspace > 0)
+				avgwidth = aggtransspace;
 			else
-				aggtranstypmod = -1;
+			{
+				/*
+				 * If transition state is of same type as first input, assume
+				 * it's the same typmod (same width) as well.  This works for
+				 * cases like MAX/MIN and is probably somewhat reasonable
+				 * otherwise.
+				 */
+				int32		aggtranstypmod;
 
-			avgwidth = get_typavgwidth(aggtranstype, aggtranstypmod);
+				if (numArguments > 0 && aggtranstype == inputTypes[0])
+					aggtranstypmod = exprTypmod((Node *) linitial(aggref->args));
+				else
+					aggtranstypmod = -1;
+
+				avgwidth = get_typavgwidth(aggtranstype, aggtranstypmod);
+			}
+
 			avgwidth = MAXALIGN(avgwidth);
-
 			costs->transitionSpace += avgwidth + 2 * sizeof(void *);
 		}
 		else if (aggtranstype == INTERNALOID)
@@ -564,12 +574,16 @@ count_agg_clauses_walker(Node *node, count_agg_clauses_context *context)
 			/*
 			 * INTERNAL transition type is a special case: although INTERNAL
 			 * is pass-by-value, it's almost certainly being used as a pointer
-			 * to some large data structure.  We assume usage of
+			 * to some large data structure.  The aggregate definition can
+			 * provide an estimate of the size.  If it doesn't, then we assume
 			 * ALLOCSET_DEFAULT_INITSIZE, which is a good guess if the data is
 			 * being kept in a private memory context, as is done by
 			 * array_agg() for instance.
 			 */
-			costs->transitionSpace += ALLOCSET_DEFAULT_INITSIZE;
+			if (aggtransspace > 0)
+				costs->transitionSpace += aggtransspace;
+			else
+				costs->transitionSpace += ALLOCSET_DEFAULT_INITSIZE;
 		}
 
 		/*
@@ -4495,6 +4509,7 @@ evaluate_expr(Expr *expr, Oid result_type, int32 result_typmod,
 Query *
 inline_set_returning_function(PlannerInfo *root, RangeTblEntry *rte)
 {
+	RangeTblFunction *rtfunc;
 	FuncExpr   *fexpr;
 	Oid			func_oid;
 	HeapTuple	func_tuple;
@@ -4523,14 +4538,18 @@ inline_set_returning_function(PlannerInfo *root, RangeTblEntry *rte)
 	 */
 	check_stack_depth();
 
-	/* Fail if the caller wanted ORDINALITY - we don't implement that here. */
+	/* Fail if the RTE has ORDINALITY - we don't implement that here. */
 	if (rte->funcordinality)
 		return NULL;
 
-	/* Fail if FROM item isn't a simple FuncExpr */
-	fexpr = (FuncExpr *) rte->funcexpr;
-	if (fexpr == NULL || !IsA(fexpr, FuncExpr))
+	/* Fail if RTE isn't a single, simple FuncExpr */
+	if (list_length(rte->functions) != 1)
 		return NULL;
+	rtfunc = (RangeTblFunction *) linitial(rte->functions);
+
+	if (!IsA(rtfunc->funcexpr, FuncExpr))
+		return NULL;
+	fexpr = (FuncExpr *) rtfunc->funcexpr;
 
 	func_oid = fexpr->funcid;
 
@@ -4720,7 +4739,8 @@ inline_set_returning_function(PlannerInfo *root, RangeTblEntry *rte)
 	 */
 	if (fexpr->funcresulttype == RECORDOID &&
 		get_func_result_type(func_oid, NULL, NULL) == TYPEFUNC_RECORD &&
-		!tlist_matches_coltypelist(querytree->targetList, rte->funccoltypes))
+		!tlist_matches_coltypelist(querytree->targetList,
+								   rtfunc->funccoltypes))
 		goto fail;
 
 	/*

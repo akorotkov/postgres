@@ -516,11 +516,7 @@ _outFunctionScan(StringInfo str, const FunctionScan *node)
 
 	_outScanInfo(str, (const Scan *) node);
 
-	WRITE_NODE_FIELD(funcexpr);
-	WRITE_NODE_FIELD(funccolnames);
-	WRITE_NODE_FIELD(funccoltypes);
-	WRITE_NODE_FIELD(funccoltypmods);
-	WRITE_NODE_FIELD(funccolcollations);
+	WRITE_NODE_FIELD(functions);
 	WRITE_BOOL_FIELD(funcordinality);
 }
 
@@ -1698,6 +1694,7 @@ _outPlannerInfo(StringInfo str, const PlannerInfo *node)
 	WRITE_UINT_FIELD(query_level);
 	WRITE_NODE_FIELD(plan_params);
 	WRITE_BITMAPSET_FIELD(all_baserels);
+	WRITE_BITMAPSET_FIELD(nullable_baserels);
 	WRITE_NODE_FIELD(join_rel_list);
 	WRITE_INT_FIELD(join_cur_level);
 	WRITE_NODE_FIELD(init_plans);
@@ -2153,6 +2150,7 @@ _outColumnDef(StringInfo str, const ColumnDef *node)
 	WRITE_OID_FIELD(collOid);
 	WRITE_NODE_FIELD(constraints);
 	WRITE_NODE_FIELD(fdwoptions);
+	WRITE_LOCATION_FIELD(location);
 }
 
 static void
@@ -2381,10 +2379,7 @@ _outRangeTblEntry(StringInfo str, const RangeTblEntry *node)
 			WRITE_NODE_FIELD(joinaliasvars);
 			break;
 		case RTE_FUNCTION:
-			WRITE_NODE_FIELD(funcexpr);
-			WRITE_NODE_FIELD(funccoltypes);
-			WRITE_NODE_FIELD(funccoltypmods);
-			WRITE_NODE_FIELD(funccolcollations);
+			WRITE_NODE_FIELD(functions);
 			WRITE_BOOL_FIELD(funcordinality);
 			break;
 		case RTE_VALUES:
@@ -2411,6 +2406,20 @@ _outRangeTblEntry(StringInfo str, const RangeTblEntry *node)
 	WRITE_OID_FIELD(checkAsUser);
 	WRITE_BITMAPSET_FIELD(selectedCols);
 	WRITE_BITMAPSET_FIELD(modifiedCols);
+}
+
+static void
+_outRangeTblFunction(StringInfo str, const RangeTblFunction *node)
+{
+	WRITE_NODE_TYPE("RANGETBLFUNCTION");
+
+	WRITE_NODE_FIELD(funcexpr);
+	WRITE_INT_FIELD(funccolcount);
+	WRITE_NODE_FIELD(funccolnames);
+	WRITE_NODE_FIELD(funccoltypes);
+	WRITE_NODE_FIELD(funccoltypmods);
+	WRITE_NODE_FIELD(funccolcollations);
+	WRITE_BITMAPSET_FIELD(funcparams);
 }
 
 static void
@@ -2618,9 +2627,10 @@ _outRangeFunction(StringInfo str, const RangeFunction *node)
 {
 	WRITE_NODE_TYPE("RANGEFUNCTION");
 
-	WRITE_BOOL_FIELD(ordinality);
 	WRITE_BOOL_FIELD(lateral);
-	WRITE_NODE_FIELD(funccallnode);
+	WRITE_BOOL_FIELD(ordinality);
+	WRITE_BOOL_FIELD(is_table);
+	WRITE_NODE_FIELD(functions);
 	WRITE_NODE_FIELD(alias);
 	WRITE_NODE_FIELD(coldeflist);
 }
@@ -3154,6 +3164,9 @@ _outNode(StringInfo str, const void *obj)
 				break;
 			case T_RangeTblEntry:
 				_outRangeTblEntry(str, obj);
+				break;
+			case T_RangeTblFunction:
+				_outRangeTblFunction(str, obj);
 				break;
 			case T_A_Expr:
 				_outAExpr(str, obj);

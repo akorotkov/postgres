@@ -3335,9 +3335,10 @@ psql_completion(char *text, int start, int end)
 	else if (strcmp(prev_wd, "\\pset") == 0)
 	{
 		static const char *const my_list[] =
-		{"format", "border", "expanded",
-			"null", "fieldsep", "tuples_only", "title", "tableattr",
-		"linestyle", "pager", "recordsep", NULL};
+		{"border", "columns", "expanded", "fieldsep", "fieldsep_zero",
+		 "footer", "format", "linestyle", "null", "numericlocale",
+		 "pager", "recordsep", "recordsep_zero", "tableattr", "title",
+		 "tuples_only", NULL};
 
 		COMPLETE_WITH_LIST_CS(my_list);
 	}
@@ -3613,8 +3614,8 @@ _complete_from_query(int is_schema_query, const char *text, int state)
 					   "pg_catalog.pg_class c") == 0 &&
 				strncmp(text, "pg_", 3) !=0)
 			{
-				appendPQExpBuffer(&query_buffer,
-								  " AND c.relnamespace <> (SELECT oid FROM"
+				appendPQExpBufferStr(&query_buffer,
+									 " AND c.relnamespace <> (SELECT oid FROM"
 				   " pg_catalog.pg_namespace WHERE nspname = 'pg_catalog')");
 			}
 
