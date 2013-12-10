@@ -1,7 +1,7 @@
 /*-------------------------------------------------------------------------
  *
  * ginentrypage.c
- *	  page utilities routines for the postgres inverted index access method.
+ *	  routines for handling GIN entry tree pages.
  *
  *
  * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
@@ -15,7 +15,9 @@
 #include "postgres.h"
 
 #include "access/gin_private.h"
+#include "miscadmin.h"
 #include "utils/rel.h"
+
 
 /*
  * Form a tuple for entry tree.
@@ -27,15 +29,15 @@
  * format that is being built here.  We build on the assumption that we
  * are making a leaf-level key entry containing a posting list of nipd items.
  * If the caller is actually trying to make a posting-tree entry, non-leaf
- * entry, or pending-list entry, it should pass nipd = 0 and then overwrite
- * the t_tid fields as necessary.  In any case, ipd can be NULL to skip
- * copying any itempointers into the posting list; the caller is responsible
- * for filling the posting list afterwards, if ipd = NULL and nipd > 0.
+ * entry, or pending-list entry, it should pass dataSize = 0 and then overwrite
+ * the t_tid fields as necessary.  In any case, 'data' can be NULL to skip
+ * filling in the posting list; the caller is responsible for filling it
+ * afterwards if data = NULL and nipd > 0.
  */
 IndexTuple
 GinFormTuple(GinState *ginstate,
 			 OffsetNumber attnum, Datum key, GinNullCategory category,
-			 ItemPointerData *ipd, uint32 nipd,
+			 Pointer data, Size dataSize, int nipd,
 			 bool errorTooBig)
 {
 	Datum		datums[2];
@@ -80,27 +82,25 @@ GinFormTuple(GinState *ginstate,
 		newsize = Max(newsize, minsize);
 	}
 
-	newsize = SHORTALIGN(newsize);
-
 	GinSetPostingOffset(itup, newsize);
-
 	GinSetNPosting(itup, nipd);
 
 	/*
 	 * Add space needed for posting list, if any.  Then check that the tuple
 	 * won't be too big to store.
 	 */
-	newsize += sizeof(ItemPointerData) * nipd;
+	newsize += dataSize;
+
 	newsize = MAXALIGN(newsize);
-	if (newsize > Min(INDEX_SIZE_MASK, GinMaxItemSize))
+
+	if (newsize > GinMaxItemSize)
 	{
 		if (errorTooBig)
 			ereport(ERROR,
 					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 			errmsg("index row size %lu exceeds maximum %lu for index \"%s\"",
 				   (unsigned long) newsize,
-				   (unsigned long) Min(INDEX_SIZE_MASK,
-									   GinMaxItemSize),
+				   (unsigned long) GinMaxItemSize,
 				   RelationGetRelationName(ginstate->index))));
 		pfree(itup);
 		return NULL;
@@ -119,10 +119,18 @@ GinFormTuple(GinState *ginstate,
 		 */
 		memset((char *) itup + IndexTupleSize(itup),
 			   0, newsize - IndexTupleSize(itup));
-
 		/* set new size in tuple header */
 		itup->t_info &= ~INDEX_SIZE_MASK;
 		itup->t_info |= newsize;
+	}
+
+	/*
+	 * Copy in the posting list, if provided
+	 */
+	if (data)
+	{
+		char *ptr = GinGetPosting(itup);
+		memcpy(ptr, data, dataSize);
 	}
 
 	/*
@@ -133,37 +141,32 @@ GinFormTuple(GinState *ginstate,
 		Assert(IndexTupleHasNulls(itup));
 		GinSetNullCategory(itup, ginstate, category);
 	}
-
-	/*
-	 * Copy in the posting list, if provided
-	 */
-	if (ipd)
-		memcpy(GinGetPosting(itup), ipd, sizeof(ItemPointerData) * nipd);
-
 	return itup;
 }
 
 /*
- * Sometimes we reduce the number of posting list items in a tuple after
- * having built it with GinFormTuple.  This function adjusts the size
- * fields to match.
+ * Read item pointers from leaf entry tuple. Information is stored in the
+ * same manner as in leaf data pages.
  */
 void
-GinShortenTuple(IndexTuple itup, uint32 nipd)
+ginReadTuple(GinState *ginstate, OffsetNumber attnum,
+			 IndexTuple itup, ItemPointerData *ipd)
 {
-	uint32		newsize;
+	Pointer		ptr = GinGetPosting(itup);
+	int			nipd = GinGetNPosting(itup);
 
-	Assert(nipd <= GinGetNPosting(itup));
+	if (GinItupIsCompressed(itup))
+	{
+		uint64		state = 0;
+		int			i;
 
-	newsize = GinGetPostingOffset(itup) + sizeof(ItemPointerData) * nipd;
-	newsize = MAXALIGN(newsize);
-
-	Assert(newsize <= (itup->t_info & INDEX_SIZE_MASK));
-
-	itup->t_info &= ~INDEX_SIZE_MASK;
-	itup->t_info |= newsize;
-
-	GinSetNPosting(itup, nipd);
+		for (i = 0; i < nipd; i++)
+			ptr = ginPostingListDecode(ptr, &ipd[i], &state);
+	}
+	else
+	{
+		memcpy(ipd, ptr, sizeof(ItemPointerData) * nipd);
+	}
 }
 
 /*
@@ -493,13 +496,13 @@ entryPreparePage(GinBtree btree, Page page, OffsetNumber off,
  * 'updateblkno'.
  */
 static bool
-entryPlaceToPage(GinBtree btree, Buffer buf, OffsetNumber off,
+entryPlaceToPage(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 				 void *insertPayload, BlockNumber updateblkno,
 				 XLogRecData **prdata)
 {
 	GinBtreeEntryInsertData *insertData = insertPayload;
 	Page		page = BufferGetPage(buf);
-	OffsetNumber placed;
+	OffsetNumber placed, off = stack->off;
 	int			cnt = 0;
 
 	/* these must be static so they can be returned to caller */
@@ -509,6 +512,8 @@ entryPlaceToPage(GinBtree btree, Buffer buf, OffsetNumber off,
 	/* quick exit if it doesn't fit */
 	if (!entryIsEnoughSpace(btree, buf, off, insertData))
 		return false;
+
+	START_CRIT_SECTION();
 
 	*prdata = rdata;
 	entryPreparePage(btree, page, off, insertData, updateblkno);
@@ -522,6 +527,7 @@ entryPlaceToPage(GinBtree btree, Buffer buf, OffsetNumber off,
 			 RelationGetRelationName(btree->index));
 
 	data.isDelete = insertData->isDelete;
+	data.offset = off;
 
 	rdata[cnt].buffer = buf;
 	rdata[cnt].buffer_std = false;
@@ -546,11 +552,13 @@ entryPlaceToPage(GinBtree btree, Buffer buf, OffsetNumber off,
  * an equal number!
  */
 static Page
-entrySplitPage(GinBtree btree, Buffer lbuf, Buffer rbuf, OffsetNumber off,
+entrySplitPage(GinBtree btree, Buffer lbuf, Buffer rbuf,
+			   GinBtreeStack *stack,
 			   void *insertPayload,
 			   BlockNumber updateblkno, XLogRecData **prdata)
 {
 	GinBtreeEntryInsertData *insertData = insertPayload;
+	OffsetNumber off = stack->off;
 	OffsetNumber i,
 				maxoff,
 				separator = InvalidOffsetNumber;

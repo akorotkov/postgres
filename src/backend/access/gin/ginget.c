@@ -71,22 +71,52 @@ callConsistentFn(GinState *ginstate, GinScanKey key)
 static bool
 findItemInPostingPage(Page page, ItemPointer item, OffsetNumber *off)
 {
-	OffsetNumber maxoff = GinPageGetOpaque(page)->maxoff;
 	int			res;
+	OffsetNumber	i;
 
 	if (GinPageGetOpaque(page)->flags & GIN_DELETED)
 		/* page was deleted by concurrent vacuum */
 		return false;
 
-	/*
-	 * scan page to find equal or first greater value
-	 */
-	for (*off = FirstOffsetNumber; *off <= maxoff; (*off)++)
+	if (GinPageIsCompressed(page))
 	{
-		res = ginCompareItemPointers(item, GinDataPageGetItemPointer(page, *off));
+		Pointer		ptr;
+		Pointer		endPtr;
+		ItemPointerData iptr;
+		uint64		readstate = 0;
 
-		if (res <= 0)
-			return true;
+		i = FirstOffsetNumber;
+		ptr = GinDataLeafPageGetPostingList(page);
+		endPtr = GinDataLeafPageGetPostingListEnd(page);
+		/*
+		 * scan page to find equal or first greater value
+		 */
+		while (ptr < endPtr)
+		{
+			ptr = ginPostingListDecode(ptr, &iptr, &readstate);
+
+			res = ginCompareItemPointers(item, &iptr);
+			if (res <= 0)
+			{
+				*off = i;
+				return true;
+			}
+			i++;
+		}
+	}
+	else
+	{
+		OffsetNumber maxoff = GinPageGetOpaque(page)->maxoff;
+		/*
+		 * scan page to find equal or first greater value
+		 */
+		for (*off = FirstOffsetNumber; *off <= maxoff; (*off)++)
+		{
+			res = ginCompareItemPointers(item, GinDataPageGetItemPointer(page, *off));
+
+			if (res <= 0)
+				return true;
+		}
 	}
 
 	return false;
@@ -140,15 +170,37 @@ scanPostingTree(Relation index, GinScanEntry scanEntry,
 	 */
 	for (;;)
 	{
-		page = BufferGetPage(buffer);
+		Pointer ptr;
+		Pointer endPtr;
 
+		page = BufferGetPage(buffer);
+		ptr = GinDataLeafPageGetPostingList(page);
+		endPtr = GinDataLeafPageGetPostingListEnd(page);
 		if ((GinPageGetOpaque(page)->flags & GIN_DELETED) == 0 &&
-			GinPageGetOpaque(page)->maxoff >= FirstOffsetNumber)
+			ptr < endPtr)
 		{
-			tbm_add_tuples(scanEntry->matchBitmap,
-						   GinDataPageGetItemPointer(page, FirstOffsetNumber),
-						   GinPageGetOpaque(page)->maxoff, false);
-			scanEntry->predictNumberResult += GinPageGetOpaque(page)->maxoff;
+			if (GinPageIsCompressed(page))
+			{
+				ItemPointerData iptr;
+				uint64		readstate = 0;
+				int			i = 0;
+
+				while (ptr < endPtr)
+				{
+					ptr = ginPostingListDecode(ptr, &iptr, &readstate);
+					tbm_add_tuples(scanEntry->matchBitmap, &iptr, 1, false);
+					i++;
+				}
+
+				scanEntry->predictNumberResult += i;
+			}
+			else
+			{
+				tbm_add_tuples(scanEntry->matchBitmap,
+							GinDataPageGetItemPointer(page, FirstOffsetNumber),
+							   GinPageGetOpaque(page)->maxoff, false);
+				scanEntry->predictNumberResult += GinPageGetOpaque(page)->maxoff;
+			}
 		}
 
 		if (GinPageRightMost(page))
@@ -333,8 +385,12 @@ collectMatchBitmap(GinBtreeData *btree, GinBtreeStack *stack,
 		}
 		else
 		{
+			ItemPointerData *ipd = (ItemPointerData *)palloc(
+								sizeof(ItemPointerData) * GinGetNPosting(itup));
+			ginReadTuple(btree->ginstate, scanEntry->attnum, itup, ipd);
+
 			tbm_add_tuples(scanEntry->matchBitmap,
-						   GinGetPosting(itup), GinGetNPosting(itup), false);
+						   ipd, GinGetNPosting(itup), false);
 			scanEntry->predictNumberResult += GinGetNPosting(itup);
 		}
 
@@ -426,6 +482,10 @@ restartScanEntry:
 			BlockNumber rootPostingTree = GinGetPostingTree(itup);
 			GinBtreeStack *stack;
 			Page		page;
+			Pointer		ptr;
+			Pointer		endPtr;
+			ItemPointerData iptr;
+			int			nlist;
 
 			/*
 			 * We should unlock entry page before touching posting tree to
@@ -448,16 +508,42 @@ restartScanEntry:
 			IncrBufferRefCount(entry->buffer);
 
 			page = BufferGetPage(entry->buffer);
-			entry->predictNumberResult = stack->predictNumber * GinPageGetOpaque(page)->maxoff;
 
 			/*
-			 * Keep page content in memory to prevent durable page locking
+			 * Copy page content to memory to avoid keeping it locked for
+			 * a long time.
+			 *
+			 * Allocate a large enough buffer to hold the items to hold
+			 * a full compressed page full of items compressed as tightly
+			 * as possible. The best compression is that each item pointer is
+			 * be stored in one byte. (XXX: is this really possible?).
+			 * Note that the buffer is reused on subsequent pages, so we better
+			 * make it large enough for future pages too.
 			 */
-			entry->list = (ItemPointerData *) palloc(BLCKSZ);
-			entry->nlist = GinPageGetOpaque(page)->maxoff;
-			memcpy(entry->list,
-				   GinDataPageGetItemPointer(page, FirstOffsetNumber),
-				   GinPageGetOpaque(page)->maxoff * sizeof(ItemPointerData));
+			entry->list = (ItemPointerData *) palloc(BLCKSZ * sizeof(ItemPointerData));
+			if (GinPageIsCompressed(page))
+			{
+				uint64 readstate = 0;
+
+				ptr = GinDataLeafPageGetPostingList(page);
+				endPtr = GinDataLeafPageGetPostingListEnd(page);
+				nlist = 0;
+				while (ptr < endPtr)
+				{
+					ptr = ginPostingListDecode(ptr, &iptr, &readstate);
+					entry->list[nlist++] = iptr;
+				}
+			}
+			else
+			{
+				nlist = GinPageGetOpaque(page)->maxoff;
+				memcpy(entry->list,
+					   GinDataPageGetItemPointer(page, FirstOffsetNumber),
+					   nlist * sizeof(ItemPointerData));
+			}
+			entry->nlist = nlist;
+
+			entry->predictNumberResult = stack->predictNumber * entry->nlist;
 
 			LockBuffer(entry->buffer, GIN_UNLOCK);
 			freeGinBtreeStack(stack);
@@ -466,8 +552,11 @@ restartScanEntry:
 		else if (GinGetNPosting(itup) > 0)
 		{
 			entry->nlist = GinGetNPosting(itup);
+			entry->predictNumberResult = entry->nlist;
 			entry->list = (ItemPointerData *) palloc(sizeof(ItemPointerData) * entry->nlist);
-			memcpy(entry->list, GinGetPosting(itup), sizeof(ItemPointerData) * entry->nlist);
+
+			ginReadTuple(ginstate, entry->attnum, itup, entry->list);
+
 			entry->isFinished = FALSE;
 		}
 	}
@@ -565,13 +654,32 @@ entryGetNextItem(GinState *ginstate, GinScanEntry entry)
 			if (!ItemPointerIsValid(&entry->curItem) ||
 				findItemInPostingPage(page, &entry->curItem, &entry->offset))
 			{
-				/*
-				 * Found position equal to or greater than stored
-				 */
-				entry->nlist = GinPageGetOpaque(page)->maxoff;
-				memcpy(entry->list,
-					   GinDataPageGetItemPointer(page, FirstOffsetNumber),
+				if (GinPageIsCompressed(page))
+				{
+					/*
+					 * Found position equal to or greater than stored
+					 */
+					Pointer ptr = GinDataLeafPageGetPostingList(page);
+					Pointer endPtr = GinDataLeafPageGetPostingListEnd(page);
+					uint64 readstate = 0;
+					ItemPointerData iptr;
+
+					entry->nlist = 0;
+					while (ptr < endPtr)
+					{
+						ptr = ginPostingListDecode(ptr, &iptr, &readstate);
+						entry->list[entry->nlist++] = iptr;
+					}
+				}
+				else
+				{
+					/*
+					 * Found position equal to or greater than stored
+					 */
+					entry->nlist = GinPageGetOpaque(page)->maxoff;
+					memcpy(entry->list, GinDataPageGetItemPointer(page, FirstOffsetNumber),
 					   GinPageGetOpaque(page)->maxoff * sizeof(ItemPointerData));
+				}
 
 				LockBuffer(entry->buffer, GIN_UNLOCK);
 

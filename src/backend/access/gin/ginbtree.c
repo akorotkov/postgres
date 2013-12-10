@@ -349,12 +349,12 @@ ginPlaceToPage(GinBtree btree, GinBtreeStack *stack,
 	 * placeToPage method will return false and leave the page unmodified, and
 	 * we'll have to split the page.
 	 */
-	START_CRIT_SECTION();
-	fit = btree->placeToPage(btree, stack->buffer, stack->off,
+	fit = btree->placeToPage(btree, stack->buffer, stack,
 							 insertdata, updateblkno,
 							 &payloadrdata);
 	if (fit)
 	{
+		/* placeToPage did START_CRIT_SECTION() */
 		MarkBufferDirty(stack->buffer);
 
 		/* An insert to an internal page finishes the split of the child. */
@@ -373,7 +373,6 @@ ginPlaceToPage(GinBtree btree, GinBtreeStack *stack,
 
 			xlrec.node = btree->index->rd_node;
 			xlrec.blkno = BufferGetBlockNumber(stack->buffer);
-			xlrec.offset = stack->off;
 			xlrec.flags = xlflags;
 
 			rdata[0].buffer = InvalidBuffer;
@@ -427,8 +426,6 @@ ginPlaceToPage(GinBtree btree, GinBtreeStack *stack,
 		Buffer		lbuffer = InvalidBuffer;
 		Page		newrootpg = NULL;
 
-		END_CRIT_SECTION();
-
 		rbuffer = GinNewBuffer(btree->index);
 
 		/* During index build, count the new page */
@@ -446,7 +443,7 @@ ginPlaceToPage(GinBtree btree, GinBtreeStack *stack,
 		 * newlpage is a pointer to memory page, it is not associated with a
 		 * buffer. stack->buffer is not touched yet.
 		 */
-		newlpage = btree->splitPage(btree, stack->buffer, rbuffer, stack->off,
+		newlpage = btree->splitPage(btree, stack->buffer, rbuffer, stack,
 									insertdata, updateblkno,
 									&payloadrdata);
 
@@ -550,16 +547,20 @@ ginPlaceToPage(GinBtree btree, GinBtreeStack *stack,
 		START_CRIT_SECTION();
 
 		MarkBufferDirty(rbuffer);
+		MarkBufferDirty(stack->buffer);
 
+		/*
+		 * Restore the temporary copies over the real buffers. But don't free
+		 * the temporary copies yet, WAL record data points to them.
+		 */
 		if (stack->parent == NULL)
 		{
-			PageRestoreTempPage(newlpage, BufferGetPage(lbuffer));
 			MarkBufferDirty(lbuffer);
-			newlpage = newrootpg;
+			memcpy(BufferGetPage(lbuffer), newlpage, BLCKSZ);
+			memcpy(BufferGetPage(stack->buffer), newrootpg, BLCKSZ);
 		}
-
-		PageRestoreTempPage(newlpage, BufferGetPage(stack->buffer));
-		MarkBufferDirty(stack->buffer);
+		else
+			memcpy(BufferGetPage(stack->buffer), newlpage, BLCKSZ);
 
 		/* write WAL record */
 		if (RelationNeedsWAL(btree->index))
@@ -581,6 +582,10 @@ ginPlaceToPage(GinBtree btree, GinBtreeStack *stack,
 		UnlockReleaseBuffer(rbuffer);
 		if (stack->parent == NULL)
 			UnlockReleaseBuffer(lbuffer);
+
+		pfree(newlpage);
+		if (newrootpg)
+			pfree(newrootpg);
 
 		/*
 		 * If we split the root, we're done. Otherwise the split is not

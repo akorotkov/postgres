@@ -23,6 +23,7 @@
 #include "miscadmin.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
+#include "access/htup_details.h"
 
 
 #define GIN_PAGE_FREESIZE \
@@ -487,7 +488,7 @@ ginHeapTupleFastCollect(GinState *ginstate,
 		IndexTuple	itup;
 
 		itup = GinFormTuple(ginstate, attnum, entries[i], categories[i],
-							NULL, 0, true);
+							NULL, 0, 0, true);
 		itup->t_tid = *ht_ctid;
 		collector->tuples[collector->ntuples++] = itup;
 		collector->sumsize += IndexTupleSize(itup);
