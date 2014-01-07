@@ -47,8 +47,7 @@ gin_desc(StringInfo buf, uint8 xl_info, char *rec)
 
 				appendStringInfoString(buf, "Insert item, ");
 				desc_node(buf, xlrec->node, xlrec->blkno);
-				appendStringInfo(buf, " offset: %u isdata: %c isleaf: %c",
-								 xlrec->offset,
+				appendStringInfo(buf, " isdata: %c isleaf: %c",
 								 (xlrec->flags & GIN_INSERT_ISDATA) ? 'T' : 'F',
 								 (xlrec->flags & GIN_INSERT_ISLEAF) ? 'T' : 'F');
 				if (!(xlrec->flags & GIN_INSERT_ISLEAF))
@@ -67,13 +66,23 @@ gin_desc(StringInfo buf, uint8 xl_info, char *rec)
 					appendStringInfo(buf, " isdelete: %c",
 									 (((ginxlogInsertEntry *) payload)->isDelete) ? 'T' : 'F');
 				else if (xlrec->flags & GIN_INSERT_ISLEAF)
-					appendStringInfo(buf, " nitem: %u",
-									 (((ginxlogInsertDataLeaf *) payload)->nitem));
+				{
+#ifdef BROKEN
+					ginxlogInsertDataLeaf *data = (ginxlogInsertDataLeaf *) rec;
+					appendStringInfo(buf, " begin %u, len %u, restOffset %u",
+									 data->beginOffset,
+									 data->newlen,
+									 data->restOffset);
+#endif
+				}
 				else
+				{
+					ginxlogInsertDataInternal *insertData = (ginxlogInsertDataInternal *) payload;
 					appendStringInfo(buf, " pitem: %u-%u/%u",
-									 PostingItemGetBlockNumber((PostingItem *) payload),
-									 ItemPointerGetBlockNumber(&((PostingItem *) payload)->key),
-									 ItemPointerGetOffsetNumber(&((PostingItem *) payload)->key));
+									 PostingItemGetBlockNumber(&insertData->newitem),
+									 ItemPointerGetBlockNumber(&insertData->newitem.key),
+									 ItemPointerGetOffsetNumber(&insertData->newitem.key));
+				}
 			}
 			break;
 		case XLOG_GIN_SPLIT:

@@ -33,48 +33,97 @@ typedef struct
 
 
 /*
- * Vacuums a list of item pointers. The original size of the list is 'nitem',
- * returns the number of items remaining afterwards.
+ * Vacuums a compressed posting list. The size of the list can be specified
+ * in either number of bytes (nbytes) or number of items (nitems). Leave the
+ * other one of those 0.
  *
- * If *cleaned == NULL on entry, the original array is left unmodified; if
- * any items are removed, a palloc'd copy of the result is stored in *cleaned.
- * Otherwise *cleaned should point to the original array, in which case it's
- * modified directly.
+ * Results are always stored in *cleaned, which will be allocated
+ * if it's needed.
+ *
+ * Returns the number of items remaining.
  */
-static int
-ginVacuumPostingList(GinVacuumState *gvs, ItemPointerData *items, int nitem,
-					 ItemPointerData **cleaned)
+static PostingListSegment *
+ginVacuumPostingListCompressed(GinVacuumState *gvs, PostingListSegment *orig, int *nremaining)
 {
-	int			i,
-				j = 0;
+	int			remaining = 0;
+	int			i;
+	ItemPointer	items;
+	int			ndecoded;
 
-	Assert(*cleaned == NULL || *cleaned == items);
+	items = ginPostingListDecodeSegment(orig, &ndecoded);
 
 	/*
-	 * just scan over ItemPointer array
+	 * iterate through the decoded posting list.
+	 */
+	for (i = 0; i < ndecoded; i++)
+	{
+		if (gvs->callback(&items[i], gvs->callback_state))
+		{
+			gvs->result->tuples_removed += 1;
+		}
+		else
+		{
+			items[remaining] = items[i];
+			remaining++;
+			gvs->result->num_index_tuples += 1;
+		}
+	}
+
+	if (nremaining)
+		*nremaining = remaining;
+
+	if (remaining != ndecoded)
+		return ginCompressPostingList(items, remaining, 0, NULL);
+
+	return NULL;
+}
+
+/*
+ * Vacuums an uncompressed posting list. The size of the must can be specified
+ * in number of items (nitems).
+ *
+ * Results are always stored in *cleaned, which will be allocated
+ * if it's needed. Result is always compressed.
+ *
+ * Returns the number of items remaining.
+ */
+static ItemPointer
+ginVacuumPostingListUncompressed(GinVacuumState *gvs, ItemPointerData *items,
+		int nitem, int *nafter)
+{
+	int			i,
+				remaining = 0;
+	ItemPointer	tmpitems = NULL;
+
+	/*
+	 * Iterate over TIDs array
 	 */
 	for (i = 0; i < nitem; i++)
 	{
 		if (gvs->callback(items + i, gvs->callback_state))
 		{
 			gvs->result->tuples_removed += 1;
-			if (!*cleaned)
+			if (!tmpitems)
 			{
-				*cleaned = (ItemPointerData *) palloc(sizeof(ItemPointerData) * nitem);
-				if (i != 0)
-					memcpy(*cleaned, items, sizeof(ItemPointerData) * i);
+				/*
+				 * First TID to be deleted: allocate memory to hold the
+				 * remaining items.
+				 */
+				tmpitems = palloc(sizeof(ItemPointerData) * nitem);
+				memcpy(tmpitems, items, sizeof(ItemPointerData) * i);
 			}
 		}
 		else
 		{
 			gvs->result->num_index_tuples += 1;
-			if (i != j)
-				(*cleaned)[j] = items[i];
-			j++;
+			if (tmpitems)
+				tmpitems[remaining] = items[i];
+			remaining++;
 		}
 	}
 
-	return j;
+	*nafter = remaining;
+	return tmpitems;
 }
 
 /*
@@ -98,13 +147,20 @@ xlogVacuumPage(Relation index, Buffer buffer)
 
 	data.node = index->rd_node;
 	data.blkno = BufferGetBlockNumber(buffer);
-
 	if (GinPageIsData(page))
 	{
-		backup = GinDataPageGetData(page);
-		data.nitem = GinPageGetOpaque(page)->maxoff;
-		if (data.nitem)
-			len = MAXALIGN(sizeof(ItemPointerData) * data.nitem);
+		if (GinPageIsLeaf(page))
+		{
+			backup = (char *) GinDataLeafPageGetPostingList(page);
+			len = GinDataLeafPageGetPostingListSize(page);
+			data.nitem = len;
+		}
+		else
+		{
+			backup = (char *) GinDataPageGetPostingItem(page, 1);
+			data.nitem = GinPageGetOpaque(page)->maxoff;
+			len = sizeof(PostingItem) * data.nitem;
+		}
 	}
 	else
 	{
@@ -169,7 +225,6 @@ ginVacuumPostingTreeLeaves(GinVacuumState *gvs, BlockNumber blkno, bool isRoot, 
 	 * again). New scan can't start but previously started ones work
 	 * concurrently.
 	 */
-
 	if (isRoot)
 		LockBufferForCleanup(buffer);
 	else
@@ -179,32 +234,106 @@ ginVacuumPostingTreeLeaves(GinVacuumState *gvs, BlockNumber blkno, bool isRoot, 
 
 	if (GinPageIsLeaf(page))
 	{
-		OffsetNumber newMaxOff,
-					oldMaxOff = GinPageGetOpaque(page)->maxoff;
-		ItemPointerData *cleaned = NULL;
+		bool		removedsomething;
+		ItemPointer uncompressed;
+		ItemPointer cleaned;
+		int			nuncompressed;
+		int			uncompressedSize;
+		PostingListSegment *segment;
+		List	   *compressedSegs = NIL;
+		char	   *endptr;
+		int			totalsize = 0;
 
-		newMaxOff = ginVacuumPostingList(gvs,
-				(ItemPointer) GinDataPageGetData(page), oldMaxOff, &cleaned);
-
-		/* saves changes about deleted tuple ... */
-		if (oldMaxOff != newMaxOff)
+		/* Vacuum the uncompressed items */
+		uncompressed = GinDataLeafPageGetUncompressed(page, &nuncompressed);
+		cleaned = ginVacuumPostingListUncompressed(gvs,
+												   uncompressed,
+												   nuncompressed,
+												   &nuncompressed);
+		if (cleaned)
 		{
+			removedsomething = true;
+			uncompressed = cleaned;
+		}
+
+		uncompressedSize = nuncompressed * sizeof(ItemPointerData);
+		totalsize += uncompressedSize;
+
+		/* Vacuum the compressed segments */
+		if (GinPageIsCompressed(page))
+		{
+			segment = GinDataLeafPageGetPostingList(page);
+			endptr = ((char *) segment) + GinDataLeafPageGetPostingListSize(page);
+			while ((char *) segment < endptr)
+			{
+				PostingListSegment *vacuumed;
+
+				vacuumed = ginVacuumPostingListCompressed(gvs, segment, NULL);
+				if (vacuumed)
+					removedsomething = true;
+				else
+					vacuumed = segment;
+				totalsize += SizeOfPostingListSegment(segment);
+				compressedSegs = lappend(compressedSegs, vacuumed);
+
+				segment = NextPostingListSegment(segment);
+			}
+		}
+
+		/* XXX: now would be a good time to pack the uncompressed items */
+
+		/* If we removed any items, reconstruct the page from the pieces */
+		if (removedsomething)
+		{
+			PageHeader	phdr = (PageHeader) page;
+			char	   *target;
+			int			compressedsize = 0;
+			ListCell   *lc;
+
+			/*
+			 * Worst case scenario: the segments don't fit on the page anymore.
+			 * It's possible if the segments take up more space when packed into
+			 * words after removing an item.
+			 *
+			 * FIXME: what we ought to do is re-encode, and split the page in
+			 * the worst case.
+			 */
+			if (totalsize > GinDataLeafMaxPostingListSize)
+				elog(ERROR, "could not fit all items on GIN posting tree page after vacuum");
+
 			START_CRIT_SECTION();
 
-			if (newMaxOff > 0)
-				memcpy(GinDataPageGetData(page), cleaned, sizeof(ItemPointerData) * newMaxOff);
-			pfree(cleaned);
-			GinPageGetOpaque(page)->maxoff = newMaxOff;
+			/*
+			 * We always write in the compressed format, even if the page was
+			 * previously not compressed.
+			 */
+			GinPageSetCompressed(page);
+
+			target = (char *) GinDataLeafPageGetPostingList(page);
+			foreach(lc, compressedSegs)
+			{
+				PostingListSegment *compressed = lfirst(lc);
+				int			len = SizeOfPostingListSegment(compressed);
+				memcpy(target, compressed, len);
+				target += len;
+				compressedsize += len;
+			}
+			GinDataLeafPageSetPostingListSize(page, compressedsize);
+
+			/* Write the uncompressed items */
+			phdr->pd_upper = phdr->pd_special - uncompressedSize;
+			memcpy(page + phdr->pd_upper, uncompressed, uncompressedSize);
+
+			Assert(phdr->pd_upper >= phdr->pd_lower);
 
 			MarkBufferDirty(buffer);
 			xlogVacuumPage(gvs->index, buffer);
 
 			END_CRIT_SECTION();
-
-			/* if root is a leaf page, we don't desire further processing */
-			if (!isRoot && GinPageGetOpaque(page)->maxoff < FirstOffsetNumber)
-				hasVoidPage = TRUE;
 		}
+		/* if root is a leaf page, we don't desire further processing */
+		if (!isRoot && totalsize == 0)
+			hasVoidPage = TRUE;
 	}
 	else
 	{
@@ -224,7 +353,7 @@ ginVacuumPostingTreeLeaves(GinVacuumState *gvs, BlockNumber blkno, bool isRoot, 
 	}
 
 	/*
-	 * if we have root and theres void pages in tree, then we don't release
+	 * if we have root and there are empty pages in tree, then we don't release
 	 * lock to go further processing and guarantee that tree is unused
 	 */
 	if (!(isRoot && hasVoidPage))
@@ -391,6 +520,7 @@ ginScanToDelete(GinVacuumState *gvs, BlockNumber blkno, bool isRoot,
 	Buffer		buffer;
 	Page		page;
 	bool		meDelete = FALSE;
+	bool		isempty;
 
 	if (isRoot)
 	{
@@ -429,7 +559,12 @@ ginScanToDelete(GinVacuumState *gvs, BlockNumber blkno, bool isRoot,
 		}
 	}
 
-	if (GinPageGetOpaque(page)->maxoff < FirstOffsetNumber)
+	if (GinPageIsLeaf(page))
+		isempty = (GinDataLeafPageGetPostingListSize(page) == 0);
+	else
+		isempty = GinPageGetOpaque(page)->maxoff < FirstOffsetNumber;
+
+	if (isempty)
 	{
 		/* we never delete the left- or rightmost branch */
 		if (me->leftBlkno != InvalidBlockNumber && !GinPageRightMost(page))
@@ -516,12 +651,32 @@ ginVacuumEntryPage(GinVacuumState *gvs, Buffer buffer, BlockNumber *roots, uint3
 			/*
 			 * if we already created a temporary page, make changes in place
 			 */
-			ItemPointerData *cleaned = (tmppage == origpage) ? NULL : GinGetPosting(itup);
-			int			newN;
+			PostingListSegment *cleaned;
+			int			nitems;
 
-			newN = ginVacuumPostingList(gvs, GinGetPosting(itup), GinGetNPosting(itup), &cleaned);
+			/*
+			 * Vacuum posting list with proper function for compressed and
+			 * uncompressed format.
+			 */
+			if (GinItupIsCompressed(itup))
+				cleaned = ginVacuumPostingListCompressed(gvs,
+														 (PostingListSegment *) GinGetPosting(itup),
+					&nitems);
+			else
+			{
+				ItemPointer uncompressed;
 
-			if (GinGetNPosting(itup) != newN)
+				uncompressed = ginVacuumPostingListUncompressed(gvs,
+											(ItemPointer)GinGetPosting(itup),
+											GinGetNPosting(itup),
+											&nitems);
+				if (uncompressed)
+					cleaned = ginCompressPostingList(uncompressed, nitems, 0, NULL);
+				else
+					cleaned = NULL;
+			}
+
+			if (cleaned)
 			{
 				OffsetNumber attnum;
 				Datum		key;
@@ -538,23 +693,18 @@ ginVacuumEntryPage(GinVacuumState *gvs, Buffer buffer, BlockNumber *roots, uint3
 					 */
 					tmppage = PageGetTempPageCopy(origpage);
 
-					if (newN > 0)
-					{
-						Size		pos = ((char *) GinGetPosting(itup)) - ((char *) origpage);
-
-						memcpy(tmppage + pos, cleaned, sizeof(ItemPointerData) * newN);
-					}
-
-					pfree(cleaned);
-
 					/* set itup pointer to new page */
 					itup = (IndexTuple) PageGetItem(tmppage, PageGetItemId(tmppage, i));
 				}
 
 				attnum = gintuple_get_attrnum(&gvs->ginstate, itup);
 				key = gintuple_get_key(&gvs->ginstate, itup, &category);
+				/* FIXME */
 				itup = GinFormTuple(&gvs->ginstate, attnum, key, category,
-									GinGetPosting(itup), newN, true);
+									(char *) cleaned,
+									SizeOfPostingListSegment(cleaned),
+									nitems, true);
+				pfree(cleaned);
 				PageIndexTupleDelete(tmppage, i);
 
 				if (PageAddItem(tmppage, (Item) itup, IndexTupleSize(itup), i, false, false) != i)

@@ -53,31 +53,40 @@ addItemPointersToLeafTuple(GinState *ginstate,
 	Datum		key;
 	GinNullCategory category;
 	IndexTuple	res;
+	ItemPointerData *newItems, *oldItems;
+	int			oldNPosting, newNPosting;
+	PostingListSegment *compressedList;
 
 	Assert(!GinIsPostingTree(old));
 
 	attnum = gintuple_get_attrnum(ginstate, old);
 	key = gintuple_get_key(ginstate, old, &category);
 
+	/* merge the old and new posting lists */
+	oldNPosting = GinGetNPosting(old);
+	oldItems = ginReadTuple(ginstate, attnum, old);
+
+	newNPosting = oldNPosting + nitem;
+	newItems = (ItemPointerData *) palloc(sizeof(ItemPointerData) * newNPosting);
+
+	newNPosting = ginMergeItemPointers(newItems,
+									   items, nitem,
+									   oldItems, oldNPosting);
+
 	/* try to build tuple with room for all the items */
-	res = GinFormTuple(ginstate, attnum, key, category,
-					   NULL, nitem + GinGetNPosting(old),
-					   false);
-
-	if (res)
+	res = NULL;
+	compressedList = ginCompressPostingList(newItems, newNPosting, GinMaxItemSize,
+											NULL);
+	if (compressedList)
 	{
-		/* good, small enough */
-		uint32		newnitem;
-
-		/* fill in the posting list with union of old and new TIDs */
-		newnitem = ginMergeItemPointers(GinGetPosting(res),
-										GinGetPosting(old),
-										GinGetNPosting(old),
-										items, nitem);
-		/* merge might have eliminated some duplicate items */
-		GinShortenTuple(res, newnitem);
+		res = GinFormTuple(ginstate, attnum, key, category,
+						   (char *) compressedList,
+						   SizeOfPostingListSegment(compressedList),
+						   newNPosting,
+						   false);
+		pfree(compressedList);
 	}
-	else
+	if (!res)
 	{
 		/* posting list would be too big, convert to posting tree */
 		BlockNumber postingRoot;
@@ -88,8 +97,8 @@ addItemPointersToLeafTuple(GinState *ginstate,
 		 * already be in order with no duplicates.
 		 */
 		postingRoot = createPostingTree(ginstate->index,
-										GinGetPosting(old),
-										GinGetNPosting(old),
+										oldItems,
+										oldNPosting,
 										buildStats);
 
 		/* Now insert the TIDs-to-be-added into the posting tree */
@@ -98,7 +107,7 @@ addItemPointersToLeafTuple(GinState *ginstate,
 							  buildStats);
 
 		/* And build a new posting-tree-only result tuple */
-		res = GinFormTuple(ginstate, attnum, key, category, NULL, 0, true);
+		res = GinFormTuple(ginstate, attnum, key, category, NULL, 0, 0, true);
 		GinSetPostingTree(res, postingRoot);
 	}
 
@@ -119,12 +128,18 @@ buildFreshLeafTuple(GinState *ginstate,
 					ItemPointerData *items, uint32 nitem,
 					GinStatsData *buildStats)
 {
-	IndexTuple	res;
+	IndexTuple	res = NULL;
+	PostingListSegment *compressedList;
 
 	/* try to build a posting list tuple with all the items */
-	res = GinFormTuple(ginstate, attnum, key, category,
-					   items, nitem, false);
-
+	compressedList = ginCompressPostingList(items, nitem, GinMaxItemSize, NULL);
+	if (compressedList)
+	{
+		res = GinFormTuple(ginstate, attnum, key, category,
+						   (char *) compressedList,
+						   SizeOfPostingListSegment(compressedList),
+						   nitem, false);
+	}
 	if (!res)
 	{
 		/* posting list would be too big, build posting tree */
@@ -134,7 +149,7 @@ buildFreshLeafTuple(GinState *ginstate,
 		 * Build posting-tree-only result tuple.  We do this first so as to
 		 * fail quickly if the key is too big.
 		 */
-		res = GinFormTuple(ginstate, attnum, key, category, NULL, 0, true);
+		res = GinFormTuple(ginstate, attnum, key, category, NULL, 0, 0, true);
 
 		/*
 		 * Initialize a new posting tree with the TIDs.
