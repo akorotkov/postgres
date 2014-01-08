@@ -77,7 +77,8 @@ needToStepRight(Page page, ItemPointer item)
 		/* page was deleted by concurrent vacuum */
 		return true;
 
-	if (ginCompareItemPointers(GinDataPageGetRightBound(page), item) > 0)
+	if (ginCompareItemPointers(item, GinDataPageGetRightBound(page)) > 0
+			&& !GinPageRightMost(page))
 	{
 		/*
 		 * the item we're looking is > the right bound of the page, so it
@@ -586,23 +587,28 @@ entryGetNextItem(GinState *ginstate, GinScanEntry entry)
 
 			entry->list = GinDataLeafPageGetItems(page, &entry->nlist);
 
-			LockBuffer(entry->buffer, GIN_UNLOCK);
-
 			/* re-find the item we were stopped on. */
 			if (ItemPointerIsValid(&entry->curItem))
 			{
 				for (i = 0; i < entry->nlist; i++)
 				{
 					if (ginCompareItemPointers(&entry->curItem, 
-											   &entry->list[i]) == 0)
+											   &entry->list[i]) < 0)
 					{
-						break;
+						LockBuffer(entry->buffer, GIN_UNLOCK);
+						entry->offset = i + 1;
+						entry->curItem = entry->list[entry->offset - 1];
+						return;
 					}
 				}
-				entry->offset = i;
 			}
 			else
-				entry->offset = 0; /* scan all items on the page. */
+			{
+				LockBuffer(entry->buffer, GIN_UNLOCK);
+				entry->offset = 1; /* scan all items on the page. */
+				entry->curItem = entry->list[entry->offset - 1];
+				return;
+			}
 		}
 	}
 }
