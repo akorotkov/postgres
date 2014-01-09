@@ -505,7 +505,7 @@ typedef struct ginxlogVacuumPage
 {
 	RelFileNode node;
 	BlockNumber blkno;
-	OffsetNumber nitem;
+	OffsetNumber nitem, upperLength;
 	/* follows content of page */
 } ginxlogVacuumPage;
 

@@ -462,11 +462,13 @@ ginRedoVacuumPage(XLogRecPtr lsn, XLogRecord *record)
 			if (GinPageIsLeaf(page))
 			{
 				Pointer ptr;
+				PageHeader	phdr = (PageHeader) page;
+				int len = record->xl_len;
 
 				ptr = XLogRecGetData(record) + sizeof(ginxlogVacuumPage);
 
 				/* There should be enough of space since we have a xlog record */
-				Assert(data->nitem <= GinDataLeafMaxPostingListSize);
+				Assert(data->nitem + data->upperLength <= GinDataLeafMaxPostingListSize);
 
 				if (!GinPageIsCompressed(page))
 				{
@@ -478,8 +480,10 @@ ginRedoVacuumPage(XLogRecPtr lsn, XLogRecord *record)
 				}
 
 				memcpy(GinDataLeafPageGetPostingList(page), ptr, data->nitem);
-
 				GinDataLeafPageSetPostingListSize(page, data->nitem);
+
+				phdr->pd_upper = phdr->pd_special - data->upperLength;
+				memcpy(page + phdr->pd_upper, ptr + data->nitem, data->upperLength);
 			}
 			else
 			{

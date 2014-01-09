@@ -561,6 +561,7 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 			Assert(false);
 		}
 		phdr->pd_upper = upper;
+		Assert(phdr->pd_upper >= phdr->pd_lower);
 
 		/* Put WAL data */
 		insert_xlog.length = sizeof(ItemPointerData) * maxitems;

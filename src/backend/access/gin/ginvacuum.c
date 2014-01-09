@@ -152,9 +152,17 @@ xlogVacuumPage(Relation index, Buffer buffer)
 	{
 		if (GinPageIsLeaf(page))
 		{
-			backup = (char *) GinDataLeafPageGetPostingList(page);
+			PageHeader	phdr = (PageHeader) page;
+
 			len = GinDataLeafPageGetPostingListSize(page);
 			data.nitem = len;
+			data.upperLength = phdr->pd_special - phdr->pd_upper;
+
+			memcpy(itups, GinDataLeafPageGetPostingList(page), len);
+			memcpy(itups + len, page + phdr->pd_upper, data.upperLength);
+
+			len += data.upperLength;
+			backup = itups;
 		}
 		else
 		{
