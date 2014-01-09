@@ -272,7 +272,10 @@ typedef signed char GinNullCategory;
 #define GinDataLeafPageGetPostingListSize(page) \
 	(((PageHeader) page)->pd_lower - MAXALIGN(SizeOfPageHeaderData) - sizeof(ItemPointerData))
 #define GinDataLeafPageSetPostingListSize(page, size) \
-	(((PageHeader) page)->pd_lower = (size) + MAXALIGN(SizeOfPageHeaderData) + sizeof(ItemPointerData))
+	{ \
+		Assert(size <= GinDataLeafMaxPostingListSize); \
+		((PageHeader) page)->pd_lower = (size) + MAXALIGN(SizeOfPageHeaderData) + sizeof(ItemPointerData); \
+	}
 
 #define GinDataLeafPageGetFreeSpace(page) PageGetExactFreeSpace(page)
 

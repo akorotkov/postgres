@@ -73,7 +73,8 @@ ginVacuumPostingListCompressed(GinVacuumState *gvs, PostingListSegment *orig, in
 		*nremaining = remaining;
 
 	if (remaining != ndecoded)
-		return ginCompressPostingList(items, remaining, 0, NULL);
+		return ginCompressPostingList(items, remaining,
+				SizeOfPostingListSegment(orig), NULL);
 
 	return NULL;
 }
@@ -270,14 +271,21 @@ ginVacuumPostingTreeLeaves(GinVacuumState *gvs, BlockNumber blkno, bool isRoot, 
 
 				vacuumed = ginVacuumPostingListCompressed(gvs, segment, NULL);
 				if (vacuumed)
+				{
 					removedsomething = true;
+				}
 				else
-					vacuumed = segment;
+				{
+					vacuumed = (PostingListSegment *)palloc(SizeOfPostingListSegment(segment));
+					memcpy(vacuumed, segment, SizeOfPostingListSegment(segment));
+				}
+				Assert(SizeOfPostingListSegment(vacuumed) <= SizeOfPostingListSegment(segment));
 				totalsize += SizeOfPostingListSegment(segment);
 				compressedSegs = lappend(compressedSegs, vacuumed);
 
 				segment = NextPostingListSegment(segment);
 			}
+			Assert(segment == endptr);
 		}
 
 		/* XXX: now would be a good time to pack the uncompressed items */
@@ -298,8 +306,10 @@ ginVacuumPostingTreeLeaves(GinVacuumState *gvs, BlockNumber blkno, bool isRoot, 
 			 * FIXME: what we ought to do is re-encode, and split the page in
 			 * the worst case.
 			 */
-			if (totalsize > GinDataLeafMaxPostingListSize)
+			if (totalsize - uncompressedSize > GinDataLeafPageGetPostingListSize(page))
+			{
 				elog(ERROR, "could not fit all items on GIN posting tree page after vacuum");
+			}
 
 			START_CRIT_SECTION();
 

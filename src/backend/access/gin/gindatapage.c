@@ -508,7 +508,7 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 
 		for (i = 0; i < maxitems; i++)
 		{
-			if (ginCompareItemPointers(&newItems[i], &rbound) >= 0)
+			if (ginCompareItemPointers(&newItems[i], &rbound) > 0)
 			{
 				/*
 				 * This needs to go to some other location in the tree. (The
@@ -556,7 +556,7 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 			int			nduplicates = nolduncompressed + maxitems - totalitems;
 			memmove(page + upper + sizeof(ItemPointerData) * nduplicates,
 					page + upper,
-					sizeof(ItemPointerData) * nduplicates);
+					sizeof(ItemPointerData) * totalitems);
 			upper += sizeof(ItemPointerData) * nduplicates;
 			Assert(false);
 		}
@@ -595,7 +595,6 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 	olditems = ginPostingListDecodeAllSegments(GinDataLeafPageGetPostingList(page),
 									   GinDataLeafPageGetPostingListSize(page),
 											   &nolditems);
-
 	if (nolduncompressed > 0)
 	{
 		/*
@@ -706,8 +705,6 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 
 		*prdata = rdata;
 
-		items->curitem += maxitems;
-
 		wassplit = false;
 
 		elog(DEBUG2, "inserted %d items to block %u; re-encoded %d/%d to %d bytes",
@@ -757,6 +754,8 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 			totalpacked += npacked;
 		}
 		totalsize = lsize + rsize;
+		Assert(lsize <= GinDataLeafMaxPostingListSize);
+		Assert(rsize <= GinDataLeafMaxPostingListSize);
 
 		/*
 		 * Ok, we've now packed into segments all the items we will insert,
@@ -774,7 +773,7 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 			{
 				segment = llast(lsegments);
 				segsize = SizeOfPostingListSegment(segment);
-				if (lsize + segsize < rsize - segsize)
+				if (lsize - segsize < rsize + segsize)
 					break;
 
 				lsegments = list_delete_ptr(lsegments, segment);
@@ -783,6 +782,9 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 				rsize += segsize;
 			}
 		}
+
+		Assert(lsize <= GinDataLeafMaxPostingListSize);
+		Assert(rsize <= GinDataLeafMaxPostingListSize);
 
 		/* Ok, copy the segments to the pages */
 		ptr = (char *) GinDataLeafPageGetPostingList(lpage);
