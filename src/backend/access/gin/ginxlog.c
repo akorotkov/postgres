@@ -320,6 +320,7 @@ ginRedoSplitData(Page lpage, Page rpage, void *rdata)
 		GinDataLeafPageSetPostingListSize(lpage, lsize);
 		GinDataLeafPageSetPostingListSize(rpage, rsize);
 		*GinDataPageGetRightBound(lpage) = data->lrightbound;
+		*GinDataPageGetRightBound(rpage) = data->rrightbound;
 	}
 	else
 	{
@@ -336,6 +337,7 @@ ginRedoSplitData(Page lpage, Page rpage, void *rdata)
 		/* set up right key */
 		maxoff = GinPageGetOpaque(lpage)->maxoff;
 		*GinDataPageGetRightBound(lpage) = GinDataPageGetPostingItem(lpage, maxoff)->key;
+		*GinDataPageGetRightBound(rpage) = data->rightbound;
 	}
 }
 
@@ -463,7 +465,6 @@ ginRedoVacuumPage(XLogRecPtr lsn, XLogRecord *record)
 			{
 				Pointer ptr;
 				PageHeader	phdr = (PageHeader) page;
-				int len = record->xl_len;
 
 				ptr = XLogRecGetData(record) + sizeof(ginxlogVacuumPage);
 

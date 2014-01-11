@@ -485,6 +485,7 @@ typedef struct
 	uint16		separator;
 	uint16		nbytes;
 	ItemPointerData lrightbound;	/* new right bound of left page */
+	ItemPointerData rrightbound;	/* new right bound of right page */
 
 	/* FOLLOWS: new compressed posting lists of left and right page */
 	char		newdata[1];

@@ -819,6 +819,7 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 		split_xlog.separator = lsize;
 		split_xlog.nbytes = totalsize;
 		split_xlog.lrightbound = *GinDataPageGetRightBound(lpage);
+		split_xlog.rrightbound = *GinDataPageGetRightBound(rpage);
 
 		rdata[0].buffer = InvalidBuffer;
 		rdata[0].data = (char *) &split_xlog;
@@ -999,6 +1000,7 @@ dataSplitPageInternal(GinBtree btree, Buffer origbuf,
 
 	data.separator = separator;
 	data.nitem = nitems;
+	data.rightbound = oldbound;
 
 	rdata[0].buffer = InvalidBuffer;
 	rdata[0].data = (char *) &data;
