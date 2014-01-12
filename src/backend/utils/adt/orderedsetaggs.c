@@ -3,7 +3,7 @@
  * orderedsetaggs.c
  *		Ordered-set aggregate functions.
  *
- * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -122,8 +122,8 @@ ordered_set_startup(FunctionCallInfo fcinfo, bool use_tuples)
 		int			numSortCols;
 
 		/*
-		 * Check we're called as aggregate, and get the Agg node's
-		 * group-lifespan context
+		 * Check we're called as aggregate (and not a window function), and
+		 * get the Agg node's group-lifespan context
 		 */
 		if (AggCheckCallContext(fcinfo, &gcontext) != AGG_CONTEXT_AGGREGATE)
 			elog(ERROR, "ordered-set aggregate called in non-aggregate context");
@@ -159,27 +159,17 @@ ordered_set_startup(FunctionCallInfo fcinfo, bool use_tuples)
 		if (use_tuples)
 		{
 			bool		ishypothetical = (aggref->aggkind == AGGKIND_HYPOTHETICAL);
-			AttrNumber *sortColIdx;
-			Oid		   *sortOperators;
-			Oid		   *eqOperators;
-			Oid		   *sortCollations;
-			bool	   *sortNullsFirsts;
 			ListCell   *lc;
 			int			i;
 
 			if (ishypothetical)
 				numSortCols++;	/* make space for flag column */
 			qstate->numSortCols = numSortCols;
-			qstate->sortColIdx = sortColIdx =
-				(AttrNumber *) palloc(numSortCols * sizeof(AttrNumber));
-			qstate->sortOperators = sortOperators =
-				(Oid *) palloc(numSortCols * sizeof(Oid));
-			qstate->eqOperators = eqOperators =
-				(Oid *) palloc(numSortCols * sizeof(Oid));
-			qstate->sortCollations = sortCollations =
-				(Oid *) palloc(numSortCols * sizeof(Oid));
-			qstate->sortNullsFirsts = sortNullsFirsts =
-				(bool *) palloc(numSortCols * sizeof(bool));
+			qstate->sortColIdx = (AttrNumber *) palloc(numSortCols * sizeof(AttrNumber));
+			qstate->sortOperators = (Oid *) palloc(numSortCols * sizeof(Oid));
+			qstate->eqOperators = (Oid *) palloc(numSortCols * sizeof(Oid));
+			qstate->sortCollations = (Oid *) palloc(numSortCols * sizeof(Oid));
+			qstate->sortNullsFirsts = (bool *) palloc(numSortCols * sizeof(bool));
 
 			i = 0;
 			foreach(lc, sortlist)
@@ -191,22 +181,22 @@ ordered_set_startup(FunctionCallInfo fcinfo, bool use_tuples)
 				/* the parser should have made sure of this */
 				Assert(OidIsValid(sortcl->sortop));
 
-				sortColIdx[i] = tle->resno;
-				sortOperators[i] = sortcl->sortop;
-				eqOperators[i] = sortcl->eqop;
-				sortCollations[i] = exprCollation((Node *) tle->expr);
-				sortNullsFirsts[i] = sortcl->nulls_first;
+				qstate->sortColIdx[i] = tle->resno;
+				qstate->sortOperators[i] = sortcl->sortop;
+				qstate->eqOperators[i] = sortcl->eqop;
+				qstate->sortCollations[i] = exprCollation((Node *) tle->expr);
+				qstate->sortNullsFirsts[i] = sortcl->nulls_first;
 				i++;
 			}
 
 			if (ishypothetical)
 			{
 				/* Add an integer flag column as the last sort column */
-				sortColIdx[i] = list_length(aggref->args) + 1;
-				sortOperators[i] = Int4LessOperator;
-				eqOperators[i] = Int4EqualOperator;
-				sortCollations[i] = InvalidOid;
-				sortNullsFirsts[i] = false;
+				qstate->sortColIdx[i] = list_length(aggref->args) + 1;
+				qstate->sortOperators[i] = Int4LessOperator;
+				qstate->eqOperators[i] = Int4EqualOperator;
+				qstate->sortCollations[i] = InvalidOid;
+				qstate->sortNullsFirsts[i] = false;
 				i++;
 			}
 
@@ -356,12 +346,7 @@ ordered_set_transition(PG_FUNCTION_ARGS)
 	if (PG_ARGISNULL(0))
 		osastate = ordered_set_startup(fcinfo, false);
 	else
-	{
-		/* safety check */
-		if (AggCheckCallContext(fcinfo, NULL) != AGG_CONTEXT_AGGREGATE)
-			elog(ERROR, "ordered-set aggregate called in non-aggregate context");
 		osastate = (OSAPerGroupState *) PG_GETARG_POINTER(0);
-	}
 
 	/* Load the datum into the tuplesort object, but only if it's not null */
 	if (!PG_ARGISNULL(1))
@@ -389,12 +374,7 @@ ordered_set_transition_multi(PG_FUNCTION_ARGS)
 	if (PG_ARGISNULL(0))
 		osastate = ordered_set_startup(fcinfo, true);
 	else
-	{
-		/* safety check */
-		if (AggCheckCallContext(fcinfo, NULL) != AGG_CONTEXT_AGGREGATE)
-			elog(ERROR, "ordered-set aggregate called in non-aggregate context");
 		osastate = (OSAPerGroupState *) PG_GETARG_POINTER(0);
-	}
 
 	/* Form a tuple from all the other inputs besides the transition value */
 	slot = osastate->qstate->tupslot;
@@ -435,9 +415,7 @@ percentile_disc_final(PG_FUNCTION_ARGS)
 	bool		isnull;
 	int64		rownum;
 
-	/* safety check */
-	if (AggCheckCallContext(fcinfo, NULL) != AGG_CONTEXT_AGGREGATE)
-		elog(ERROR, "ordered-set aggregate called in non-aggregate context");
+	Assert(AggCheckCallContext(fcinfo, NULL) == AGG_CONTEXT_AGGREGATE);
 
 	/* Get and check the percentile argument */
 	if (PG_ARGISNULL(1))
@@ -542,9 +520,7 @@ percentile_cont_final_common(FunctionCallInfo fcinfo,
 	double		proportion;
 	bool		isnull;
 
-	/* safety check */
-	if (AggCheckCallContext(fcinfo, NULL) != AGG_CONTEXT_AGGREGATE)
-		elog(ERROR, "ordered-set aggregate called in non-aggregate context");
+	Assert(AggCheckCallContext(fcinfo, NULL) == AGG_CONTEXT_AGGREGATE);
 
 	/* Get and check the percentile argument */
 	if (PG_ARGISNULL(1))
@@ -752,9 +728,7 @@ percentile_disc_multi_final(PG_FUNCTION_ARGS)
 	bool		isnull = true;
 	int			i;
 
-	/* safety check */
-	if (AggCheckCallContext(fcinfo, NULL) != AGG_CONTEXT_AGGREGATE)
-		elog(ERROR, "ordered-set aggregate called in non-aggregate context");
+	Assert(AggCheckCallContext(fcinfo, NULL) == AGG_CONTEXT_AGGREGATE);
 
 	/* If there were no regular rows, the result is NULL */
 	if (PG_ARGISNULL(0))
@@ -875,9 +849,7 @@ percentile_cont_multi_final_common(FunctionCallInfo fcinfo,
 	bool		isnull;
 	int			i;
 
-	/* safety check */
-	if (AggCheckCallContext(fcinfo, NULL) != AGG_CONTEXT_AGGREGATE)
-		elog(ERROR, "ordered-set aggregate called in non-aggregate context");
+	Assert(AggCheckCallContext(fcinfo, NULL) == AGG_CONTEXT_AGGREGATE);
 
 	/* If there were no regular rows, the result is NULL */
 	if (PG_ARGISNULL(0))
@@ -1045,9 +1017,7 @@ mode_final(PG_FUNCTION_ARGS)
 	FmgrInfo   *equalfn;
 	bool		shouldfree;
 
-	/* safety check */
-	if (AggCheckCallContext(fcinfo, NULL) != AGG_CONTEXT_AGGREGATE)
-		elog(ERROR, "ordered-set aggregate called in non-aggregate context");
+	Assert(AggCheckCallContext(fcinfo, NULL) == AGG_CONTEXT_AGGREGATE);
 
 	/* If there were no regular rows, the result is NULL */
 	if (PG_ARGISNULL(0))
@@ -1173,9 +1143,7 @@ hypothetical_rank_common(FunctionCallInfo fcinfo, int flag,
 	TupleTableSlot *slot;
 	int			i;
 
-	/* safety check */
-	if (AggCheckCallContext(fcinfo, NULL) != AGG_CONTEXT_AGGREGATE)
-		elog(ERROR, "ordered-set aggregate called in non-aggregate context");
+	Assert(AggCheckCallContext(fcinfo, NULL) == AGG_CONTEXT_AGGREGATE);
 
 	/* If there were no regular rows, the rank is always 1 */
 	if (PG_ARGISNULL(0))
@@ -1305,9 +1273,7 @@ hypothetical_dense_rank_final(PG_FUNCTION_ARGS)
 	MemoryContext tmpcontext;
 	int			i;
 
-	/* safety check */
-	if (AggCheckCallContext(fcinfo, NULL) != AGG_CONTEXT_AGGREGATE)
-		elog(ERROR, "ordered-set aggregate called in non-aggregate context");
+	Assert(AggCheckCallContext(fcinfo, NULL) == AGG_CONTEXT_AGGREGATE);
 
 	/* If there were no regular rows, the rank is always 1 */
 	if (PG_ARGISNULL(0))

@@ -9,7 +9,7 @@
  * proper FooMain() routine for the incarnation.
  *
  *
- * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -35,9 +35,11 @@
 #endif
 
 #include "bootstrap/bootstrap.h"
+#include "common/username.h"
 #include "postmaster/postmaster.h"
 #include "tcop/tcopprot.h"
 #include "utils/help_config.h"
+#include "utils/memutils.h"
 #include "utils/pg_locale.h"
 #include "utils/ps_status.h"
 
@@ -83,6 +85,15 @@ main(int argc, char *argv[])
 #if defined(WIN32) && defined(HAVE_MINIDUMP_TYPE)
 	pgwin32_install_crashdump_handler();
 #endif
+
+	/*
+	 * Fire up essential subsystems: error and memory management
+	 *
+	 * Code after this point is allowed to use elog/ereport, though
+	 * localization of messages may not work right away, and messages won't go
+	 * anywhere but stderr until GUC settings get loaded.
+	 */
+	MemoryContextInit();
 
 	/*
 	 * Set up locale information from environment.	Note that LC_CTYPE and

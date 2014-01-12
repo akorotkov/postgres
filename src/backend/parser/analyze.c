@@ -14,7 +14,7 @@
  * contain optimizable statements, which we should transform.
  *
  *
- * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *	src/backend/parser/analyze.c
@@ -342,6 +342,7 @@ static Query *
 transformDeleteStmt(ParseState *pstate, DeleteStmt *stmt)
 {
 	Query	   *qry = makeNode(Query);
+	ParseNamespaceItem *nsitem;
 	Node	   *qual;
 
 	qry->commandType = CMD_DELETE;
@@ -360,7 +361,15 @@ transformDeleteStmt(ParseState *pstate, DeleteStmt *stmt)
 										 true,
 										 ACL_DELETE);
 
+	/* grab the namespace item made by setTargetTable */
+	nsitem = (ParseNamespaceItem *) llast(pstate->p_namespace);
+
+	/* there's no DISTINCT in DELETE */
 	qry->distinctClause = NIL;
+
+	/* subqueries in USING cannot access the result relation */
+	nsitem->p_lateral_only = true;
+	nsitem->p_lateral_ok = false;
 
 	/*
 	 * The USING clause is non-standard SQL syntax, and is equivalent in
@@ -369,6 +378,10 @@ transformDeleteStmt(ParseState *pstate, DeleteStmt *stmt)
 	 * keyword in the DELETE syntax.
 	 */
 	transformFromClause(pstate, stmt->usingClause);
+
+	/* remaining clauses can reference the result relation normally */
+	nsitem->p_lateral_only = false;
+	nsitem->p_lateral_ok = true;
 
 	qual = transformWhereClause(pstate, stmt->whereClause,
 								EXPR_KIND_WHERE, "WHERE");
@@ -1889,6 +1902,7 @@ static Query *
 transformUpdateStmt(ParseState *pstate, UpdateStmt *stmt)
 {
 	Query	   *qry = makeNode(Query);
+	ParseNamespaceItem *nsitem;
 	RangeTblEntry *target_rte;
 	Node	   *qual;
 	ListCell   *origTargetList;
@@ -1910,11 +1924,22 @@ transformUpdateStmt(ParseState *pstate, UpdateStmt *stmt)
 										 true,
 										 ACL_UPDATE);
 
+	/* grab the namespace item made by setTargetTable */
+	nsitem = (ParseNamespaceItem *) llast(pstate->p_namespace);
+
+	/* subqueries in FROM cannot access the result relation */
+	nsitem->p_lateral_only = true;
+	nsitem->p_lateral_ok = false;
+
 	/*
 	 * the FROM clause is non-standard SQL syntax. We used to be able to do
 	 * this with REPLACE in POSTQUEL so we keep the feature.
 	 */
 	transformFromClause(pstate, stmt->fromClause);
+
+	/* remaining clauses can reference the result relation normally */
+	nsitem->p_lateral_only = false;
+	nsitem->p_lateral_ok = true;
 
 	qry->targetList = transformTargetList(pstate, stmt->targetList,
 										  EXPR_KIND_UPDATE_SOURCE);

@@ -32,7 +32,7 @@
  *	  clients.
  *
  *
- * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -471,6 +471,9 @@ typedef struct
 	slock_t    *ShmemLock;
 	VariableCache ShmemVariableCache;
 	Backend    *ShmemBackendArray;
+#ifndef HAVE_SPINLOCKS
+	PGSemaphore	SpinlockSemaArray;
+#endif
 	LWLock	   *LWLockArray;
 	slock_t    *ProcStructLock;
 	PROC_HDR   *ProcGlobal;
@@ -556,11 +559,6 @@ PostmasterMain(int argc, char *argv[])
 	 * for security, no dir or file created can be group or other accessible
 	 */
 	umask(S_IRWXG | S_IRWXO);
-
-	/*
-	 * Fire up essential subsystems: memory management
-	 */
-	MemoryContextInit();
 
 	/*
 	 * By default, palloc() requests in the postmaster will be allocated in
@@ -4465,7 +4463,6 @@ SubPostmasterMain(int argc, char *argv[])
 	whereToSendOutput = DestNone;
 
 	/* Setup essential subsystems (to ensure elog() behaves sanely) */
-	MemoryContextInit();
 	InitializeGUCOptions();
 
 	/* Read in the variables file */
@@ -5626,6 +5623,9 @@ save_backend_variables(BackendParameters *param, Port *port,
 	param->ShmemVariableCache = ShmemVariableCache;
 	param->ShmemBackendArray = ShmemBackendArray;
 
+#ifndef HAVE_SPINLOCKS
+	param->SpinlockSemaArray = SpinlockSemaArray;
+#endif
 	param->LWLockArray = LWLockArray;
 	param->ProcStructLock = ProcStructLock;
 	param->ProcGlobal = ProcGlobal;
@@ -5854,6 +5854,9 @@ restore_backend_variables(BackendParameters *param, Port *port)
 	ShmemVariableCache = param->ShmemVariableCache;
 	ShmemBackendArray = param->ShmemBackendArray;
 
+#ifndef HAVE_SPINLOCKS
+	SpinlockSemaArray = param->SpinlockSemaArray;
+#endif
 	LWLockArray = param->LWLockArray;
 	ProcStructLock = param->ProcStructLock;
 	ProcGlobal = param->ProcGlobal;

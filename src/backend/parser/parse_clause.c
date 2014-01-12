@@ -3,7 +3,7 @@
  * parse_clause.c
  *	  handle clauses in parser
  *
- * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -204,6 +204,10 @@ setTargetTable(ParseState *pstate, RangeVar *relation,
 
 	/*
 	 * If UPDATE/DELETE, add table to joinlist and namespace.
+	 *
+	 * Note: some callers know that they can find the new ParseNamespaceItem
+	 * at the end of the pstate->p_namespace list.  This is a bit ugly but not
+	 * worth complicating this function's signature for.
 	 */
 	if (alsoSource)
 		addRTEtoQuery(pstate, rte, true, true, true);

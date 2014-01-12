@@ -6,7 +6,7 @@
  * for developers.	If you edit any of these, be sure to do a *full*
  * rebuild (and an initdb if noted).
  *
- * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/pg_config_manual.h
@@ -55,6 +55,14 @@
  * Number of spare LWLocks to allocate for user-defined add-on code.
  */
 #define NUM_USER_DEFINED_LWLOCKS	4
+
+/*
+ * When we don't have native spinlocks, we use semaphores to simulate them.
+ * Decreasing this value reduces consumption of OS resources; increasing it
+ * may improve performance, but supplying a real spinlock implementation is
+ * probably far better.
+ */
+#define	NUM_SPINLOCK_SEMAPHORES		1024
 
 /*
  * Define this if you want to allow the lo_import and lo_export SQL

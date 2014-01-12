@@ -84,7 +84,7 @@
  *	when using the SysV semaphore code.
  *
  *
- * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *	  src/include/storage/s_lock.h
@@ -94,10 +94,7 @@
 #ifndef S_LOCK_H
 #define S_LOCK_H
 
-#include "storage/pg_sema.h"
-
 #ifdef HAVE_SPINLOCKS	/* skip spinlocks if requested */
-
 
 #if defined(__GNUC__) || defined(__INTEL_COMPILER)
 /*************************************************************************
@@ -915,7 +912,7 @@ spin_delay(void)
  * to fall foul of kernel limits on number of semaphores, so don't use this
  * unless you must!  The subroutines appear in spin.c.
  */
-typedef PGSemaphoreData slock_t;
+typedef int slock_t;
 
 extern bool s_lock_free_sema(volatile slock_t *lock);
 extern void s_unlock_sema(volatile slock_t *lock);

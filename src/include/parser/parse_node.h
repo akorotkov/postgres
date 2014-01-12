@@ -4,7 +4,7 @@
  *		Internal definitions for parser
  *
  *
- * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/parser/parse_node.h
@@ -186,7 +186,8 @@ struct ParseState
  * inside such a subexpression at the moment.)	If p_lateral_ok is not set,
  * it's an error to actually use such a namespace item.  One might think it
  * would be better to just exclude such items from visibility, but the wording
- * of SQL:2008 requires us to do it this way.
+ * of SQL:2008 requires us to do it this way.  We also use p_lateral_ok to
+ * forbid LATERAL references to an UPDATE/DELETE target table.
  *
  * At no time should a namespace list contain two entries that conflict
  * according to the rules in checkNameSpaceConflicts; but note that those

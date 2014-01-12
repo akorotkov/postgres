@@ -2,13 +2,14 @@
  *	common.h
  *		Common support routines for bin/scripts/
  *
- *	Copyright (c) 2003-2013, PostgreSQL Global Development Group
+ *	Copyright (c) 2003-2014, PostgreSQL Global Development Group
  *
  *	src/bin/scripts/common.h
  */
 #ifndef COMMON_H
 #define COMMON_H
 
+#include "common/username.h"
 #include "libpq-fe.h"
 #include "getopt_long.h"		/* pgrminclude ignore */
 #include "pqexpbuffer.h"		/* pgrminclude ignore */

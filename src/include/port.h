@@ -3,7 +3,7 @@
  * port.h
  *	  Header for src/port/ compatibility functions.
  *
- * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/port.h
@@ -472,10 +472,6 @@ extern pqsigfunc pqsignal(int signo, pqsigfunc func);
 
 /* port/quotes.c */
 extern char *escape_single_quotes_ascii(const char *src);
-
-/* port/username.c */
-extern const char *get_user_name(char **errstr);
-extern const char *get_user_name_or_exit(const char *progname);
 
 /* port/wait_error.c */
 extern char *wait_result_to_str(int exit_status);

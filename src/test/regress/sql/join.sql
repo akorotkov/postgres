@@ -1147,3 +1147,20 @@ select * from
   int8_tbl x cross join (int4_tbl x cross join lateral (select x.f1) ss);
 -- LATERAL can be used to put an aggregate into the FROM clause of its query
 select 1 from tenk1 a, lateral (select max(a.unique1) from int4_tbl b) ss;
+
+-- check behavior of LATERAL in UPDATE/DELETE
+
+create temp table xx1 as select f1 as x1, -f1 as x2 from int4_tbl;
+
+-- error, can't do this:
+update xx1 set x2 = f1 from (select * from int4_tbl where f1 = x1) ss;
+update xx1 set x2 = f1 from (select * from int4_tbl where f1 = xx1.x1) ss;
+-- can't do it even with LATERAL:
+update xx1 set x2 = f1 from lateral (select * from int4_tbl where f1 = x1) ss;
+-- we might in future allow something like this, but for now it's an error:
+update xx1 set x2 = f1 from xx1, lateral (select * from int4_tbl where f1 = x1) ss;
+
+-- also errors:
+delete from xx1 using (select * from int4_tbl where f1 = x1) ss;
+delete from xx1 using (select * from int4_tbl where f1 = xx1.x1) ss;
+delete from xx1 using lateral (select * from int4_tbl where f1 = x1) ss;
