@@ -31,7 +31,7 @@
  * These 43-bit integers are encoded using varbyte encoding. 43 bits fit
  * conveniently in exactly 6 bytes when varbyte encoded:
  *
- * 0XXXXXXX											         0  7
+ * 0XXXXXXX											         7  0
  * 1XXXXXXX 0XXXXYYY										11  3
  * 1XXXXXXX 1XXXXYYY 0YYYYYYY								11 10
  * 1XXXXXXX 1XXXXYYY 1YYYYYYY 0YYYYYYY						11 17
@@ -276,7 +276,7 @@ ginPostingListDecodeAllSegments(PostingListSegment *segment, int len,
 		/* copy the first item */
 		result[ndecoded] = segment->first;
 		ndecoded++;
-		Assert(ItemPointerGetOffsetNumber(&segment->first) < 1000);
+		Assert(OffsetNumberIsValid(ItemPointerGetOffsetNumber(&segment->first)));
 
 		val = itemptr_to_uint64(&segment->first);
 		ptr = segment->bytes;

@@ -312,7 +312,7 @@ typedef struct
 #define GinDataLeafMaxPostingListSize	\
 	(BLCKSZ - MAXALIGN(SizeOfPageHeaderData) \
 	 - sizeof(ItemPointerData) \
-	 - MAXALIGN(sizeof(GinPageOpaqueData)))					\
+	 - MAXALIGN(sizeof(GinPageOpaqueData)))
 
 #define GinDataPageFreeSpacePre(page, ptr) \
 	(((PageHeader) page)->pd_upper - ((ptr) - (page)))

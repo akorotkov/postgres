@@ -154,13 +154,28 @@ ginRedoInsertData(Buffer buffer, BlockNumber rightblkno, void *rdata)
 
 		if ((data->length & INSERT_REENCODE_FLAG) != 0)
 		{
-			Assert(len <= GinDataLeafMaxPostingListSize);
+			PostingListSegment *segment, *newsegment;
+			Pointer		segmentend;
+			int			untouchedsize;
 
-			memcpy(GinDataLeafPageGetPostingList(page), data->newdata, len);
+			segment = GinDataLeafPageGetPostingList(page);
+			segmentend = ((Pointer)segment) + GinDataLeafPageGetPostingListSize(page);
+			newsegment = (PostingListSegment *)data->newdata;
+			while ((Pointer)segment < segmentend)
+			{
+				if (ginCompareItemPointers(&segment->first, &newsegment->first) >= 0)
+					break;
+				segment = NextPostingListSegment(segment);
+			}
+
+			untouchedsize = (Pointer)segment - (Pointer)GinDataLeafPageGetPostingList(page);
+			Assert(untouchedsize + len <= GinDataLeafMaxPostingListSize);
+
+			memcpy(segment, newsegment, len);
 
 			/* reset the uncompressed area */
 			((PageHeader) page)->pd_upper = ((PageHeader) page)->pd_special;
-			GinDataLeafPageSetPostingListSize(page, len);
+			GinDataLeafPageSetPostingListSize(page, untouchedsize + len);
 		}
 		else
 		{

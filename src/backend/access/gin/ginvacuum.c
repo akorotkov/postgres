@@ -293,7 +293,7 @@ ginVacuumPostingTreeLeaves(GinVacuumState *gvs, BlockNumber blkno, bool isRoot, 
 
 				segment = NextPostingListSegment(segment);
 			}
-			Assert(segment == endptr);
+			Assert((Pointer)segment == endptr);
 		}
 
 		/* XXX: now would be a good time to pack the uncompressed items */
