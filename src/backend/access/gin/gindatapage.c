@@ -20,6 +20,7 @@
 #include "utils/rel.h"
 
 #define GinPostingListSegmentMaxSize (GinDataLeafMaxPostingListSize/32)
+#define GinPostingListSegmentsMaxCount (64)
 #define GinPostingListUnpackedMaxSize (GinDataLeafMaxPostingListSize/32)
 #define GinPostingListMaxAppendItems (100)
 
@@ -488,7 +489,7 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 	Page		rpage;
 	ListCell   *lc;
 	bool		wassplit;
-	ItemPointerData	maxiptrs[33];
+	ItemPointerData	maxiptrs[GinPostingListSegmentsMaxCount];
 	char	   *ptr;
 	bool		append;
 	int			totalpacked;
@@ -601,12 +602,18 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 		return true;
 	}
 
-
-	/* Check if we can re-encode only last segment */
+	/*
+	 * Didn't fit uncompressed. We'll have to encode them. Check if both
+	 * new items and uncompressed items can be placed starting from last
+	 * segment of page. Then re-encode only last segment of page.
+	 */
 	segment = GinDataLeafPageGetPostingList(page);
 	segmentend = ((Pointer)segment) + GinDataLeafPageGetPostingListSize(page);
-	while ((Pointer)NextPostingListSegment(segment) < segmentend)
-		segment = NextPostingListSegment(segment);
+	if ((Pointer)segment < segmentend)
+	{
+		while ((Pointer)NextPostingListSegment(segment) < segmentend)
+			segment = NextPostingListSegment(segment);
+	}
 
 	if ((Pointer)segment < segmentend &&
 		(ginCompareItemPointers(&newItems[0], &segment->first) >= 0) &&
@@ -623,12 +630,6 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 		untouchedsize = 0;
 	}
 
-	/*
-	 * Didn't fit uncompressed. We'll have to encode them.
-	 *
-	 * TODO: if we're appending, it's a waste of time to re-encode the existing
-	 * segments (except for the last one).
-	 */
 	if (nolduncompressed > 0)
 	{
 		/*
@@ -658,8 +659,8 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 	{
 		append = false;
 		/*
-		 * It seems safe to assume that we can fit 100 new items after
-		 * splitting.
+		 * It seems safe to assume that we can fit GinPostingListMaxAppendItems
+		 * new items after splitting.
 		 */
 		maxitems = Min(maxitems, GinPostingListMaxAppendItems);
 	}
@@ -1118,10 +1119,8 @@ createPostingTree(Relation index, ItemPointerData *items, uint32 nitems,
 	GinPageGetOpaque(page)->rightlink = InvalidBlockNumber;
 
 	/*
-	 * Write as many of the items to the root page as fit.
-	 *
-	 * FIXME: this creates a single large segment, should create multiple
-	 * small ones like a split does.
+	 * Write as many of the items to the root page as fit. Root page is divided
+	 * in segments of GinPostingListSegmentMaxSize maximum size.
 	 */
 	elog(DEBUG2, "creating new GIN posting tree");
 

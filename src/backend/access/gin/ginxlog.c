@@ -158,6 +158,10 @@ ginRedoInsertData(Buffer buffer, BlockNumber rightblkno, void *rdata)
 			Pointer		segmentend;
 			int			untouchedsize;
 
+			/*
+			 * Whole page could be re-encoded as well as part of page starting
+			 * from last segment. Find appropriate place for new data.
+			 */
 			segment = GinDataLeafPageGetPostingList(page);
 			segmentend = ((Pointer)segment) + GinDataLeafPageGetPostingListSize(page);
 			newsegment = (PostingListSegment *)data->newdata;
