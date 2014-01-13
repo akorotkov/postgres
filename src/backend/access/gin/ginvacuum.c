@@ -43,7 +43,8 @@ typedef struct
  * Returns the number of items remaining.
  */
 static PostingListSegment *
-ginVacuumPostingListCompressed(GinVacuumState *gvs, PostingListSegment *orig, int *nremaining)
+ginVacuumPostingListCompressed(GinVacuumState *gvs, PostingListSegment *orig,
+		int *nremaining)
 {
 	int			remaining = 0;
 	int			i;
@@ -152,6 +153,7 @@ xlogVacuumPage(Relation index, Buffer buffer)
 	{
 		if (GinPageIsLeaf(page))
 		{
+			/* Put both compressed and uncompressed TIDs into WAL record */
 			PageHeader	phdr = (PageHeader) page;
 
 			len = GinDataLeafPageGetPostingListSize(page);
@@ -284,10 +286,14 @@ ginVacuumPostingTreeLeaves(GinVacuumState *gvs, BlockNumber blkno, bool isRoot, 
 				}
 				else
 				{
-					vacuumed = (PostingListSegment *)palloc(SizeOfPostingListSegment(segment));
-					memcpy(vacuumed, segment, SizeOfPostingListSegment(segment));
+					vacuumed = (PostingListSegment *)palloc(
+											SizeOfPostingListSegment(segment));
+					memcpy(vacuumed, segment,
+											SizeOfPostingListSegment(segment));
 				}
-				Assert(SizeOfPostingListSegment(vacuumed) <= SizeOfPostingListSegment(segment));
+				/* Vacuum shouldn't increase size of segment */
+				Assert(SizeOfPostingListSegment(vacuumed) <=
+											SizeOfPostingListSegment(segment));
 				totalsize += SizeOfPostingListSegment(segment);
 				compressedSegs = lappend(compressedSegs, vacuumed);
 
@@ -488,7 +494,9 @@ ginDeletePage(GinVacuumState *gvs, BlockNumber deleteBlkno, BlockNumber leftBlkn
 			n = 3;
 		}
 		else
+		{
 			n = 2;
+		}
 
 		rdata[n].buffer = InvalidBuffer;
 		rdata[n].buffer_std = FALSE;

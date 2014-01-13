@@ -230,19 +230,19 @@ child page, as an ItemPointer. The right bound of the page is stored before
 the PostingItem array.
 
 Posting tree leaf pages also use the standard PageHeader and opaque
-struct, but the page content is a compressed list of item pointers. Near the
-end of the page, before the special area, a small fixed-sized lookup table
-is stored. This lookup table is used to speed up random access into the
-compressed list. Each entry in the look up table contains a byte offset into
-the compressed list, and the item pointer at that location. When searching for
-the location of a particular item pointer, you can begin the search from one
-of the locations in the lookup table instead of the beginning of the list.
+struct, but the page content is a compressed list of item pointers. Compressed
+item pointers are grouped into small chunks called segments. Segment consists
+of starting item pointer, it's length, and varbyte encoded deltas itself.
+Thus, on page update can be re-encoded only involved segments. Moreover, it
+order to avoid frequent segments re-encoding small number of uncompressed
+item pointers are stored. Each new item pointer initially placed to that area.
+Segments are re-encoded only when this area overflows.
 
-The end of the compressed posting list is stored in pd_lower, and the beginning
-of the lookup table in pd_upper, and the space between them is unused. This
-allows full-page images of posting tree leaf pages to skip the unused space
-in middle (buffer_std = true in XLogRecData). For historical reasons, this
-does not apply to internal pages, or uncompressed leaf pages.
+The end of the compressed segments is stored in pd_lower, and the beginning
+of the uncompressed item pointers in pd_upper, and the space between them is
+unused. This allows full-page images of posting tree leaf pages to skip the
+unused space in middle (buffer_std = true in XLogRecData). For historical
+reasons, this does not apply to internal pages, or uncompressed leaf pages.
 
 Posting List Compression
 ------------------------
