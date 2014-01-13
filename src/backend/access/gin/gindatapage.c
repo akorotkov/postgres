@@ -539,12 +539,8 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 	olduncompressed = GinDataLeafPageGetUncompressed(page, &nolduncompressed);
 
 	/*
-	 * First, check if all the new items fit on the page uncompressed.
-	 *
-	 * TODO: if all the new items go to the end of the page, we probably
-	 * should compress them here straight away, even if they fit uncompressed.
-	 *
-	 * Always re-encode the page if it was in the pre-9.4 old format.
+	 * First, check if all the new items fit on the page uncompressed. Always
+	 * re-encode the page if it was in the pre-9.4 old format.
 	 */
 	if (GinPageIsCompressed(page))
 		freespace = GinDataLeafPageGetFreeSpace(page);
