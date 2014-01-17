@@ -77,6 +77,7 @@ addItemPointersToLeafTuple(GinState *ginstate,
 	res = NULL;
 	compressedList = ginCompressPostingList(newItems, newNPosting, GinMaxItemSize,
 											NULL);
+	pfree(newItems);
 	if (compressedList)
 	{
 		res = GinFormTuple(ginstate, attnum, key, category,
@@ -110,6 +111,7 @@ addItemPointersToLeafTuple(GinState *ginstate,
 		res = GinFormTuple(ginstate, attnum, key, category, NULL, 0, 0, true);
 		GinSetPostingTree(res, postingRoot);
 	}
+	pfree(oldItems);
 
 	return res;
 }
@@ -139,6 +141,7 @@ buildFreshLeafTuple(GinState *ginstate,
 						   (char *) compressedList,
 						   SizeOfPostingListSegment(compressedList),
 						   nitem, false);
+		pfree(compressedList);
 	}
 	if (!res)
 	{

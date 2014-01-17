@@ -137,14 +137,12 @@ with ordinary key entries.
 * In a key entry at the btree leaf level, at the next SHORTALIGN boundary,
 there is a list of item pointers, in compressed format (see Compressed
 Posting Lists section), pointing to the heap tuples for which the indexable
-items contain this key. This is called the "posting list".
-
-If the list would be too big for the index tuple to fit on an index page, the
-ItemPointers are pushed out to a separate posting page or pages, and none
-appear in the key entry itself.  The separate pages are called a "posting
-tree" (see below); Note that in either case, the ItemPointers associated with
-a key can easily be read out in sorted order; this is relied on by the scan
-algorithms.
+items contain this key. This is called the "posting list". If the list would
+be too big for the index tuple to fit on an index page, the ItemPointers are
+pushed out to a separate posting page or pages, and none appear in the key
+entry itself.  The separate pages are called a "posting tree" (see below);
+Note that in either case, the ItemPointers associated with a key can easily
+be read out in sorted order; this is relied on by the scan algorithms.
 
 * The index tuple header fields of a leaf key entry are abused as follows:
 

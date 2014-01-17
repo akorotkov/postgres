@@ -287,6 +287,7 @@ findInLeafPageCompressed(GinBtree btree, Page page)
 	/* Scan the segment */
 	items = ginPostingListDecodeSegment(segment, &nitems);
 	(void) bsearch_itemptr(items, nitems, &btree->itemptr, &result);
+	pfree(items);
 
 	return result;
 }
@@ -494,7 +495,7 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 	bool		append;
 	int			totalpacked;
 	Size		lsize;
-	PostingListSegment *segment, *prevsegment;
+	PostingListSegment *seg, *prevseg, *selseg, *prevselseg;
 	List	   *lsegments = NIL;
 	int			npacked;
 	int			segsize;
@@ -502,7 +503,8 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 	int			nolduncompressed;
 	int			untouchedsize;
 	Size		freespace;
-	Pointer		segmentend;
+	Pointer		segend;
+	ItemPointerData minNewItem;
 
 	/* these must be static so they can be returned to caller */
 	static XLogRecData rdata[3];
@@ -603,32 +605,31 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 	 * new items and uncompressed items can be placed starting from last
 	 * segment of page. Then re-encode only last segment of page.
 	 */
-	segment = GinDataLeafPageGetPostingList(page);
-	segmentend = ((Pointer)segment) + GinDataLeafPageGetPostingListSize(page);
-	prevsegment = NULL;
-	if ((Pointer)segment < segmentend)
+	minNewItem = newItems[0];
+	if (nolduncompressed == 0 &&
+			ginCompareItemPointers(&olduncompressed[0], &minNewItem) < 0)
+		minNewItem = olduncompressed[0];
+
+	seg = GinDataLeafPageGetPostingList(page);
+	segend = ((Pointer)seg) + GinDataLeafPageGetPostingListSize(page);
+	prevseg = NULL;
+
+	selseg = seg;
+	prevselseg = prevseg;
+	while ((Pointer)seg < segend)
 	{
-		while ((Pointer)NextPostingListSegment(segment) < segmentend)
+		if (ginCompareItemPointers(&minNewItem, &seg->first))
 		{
-			prevsegment = segment;
-			segment = NextPostingListSegment(segment);
+			selseg = seg;
+			prevselseg = prevseg;
 		}
+		prevseg = seg;
+		seg = NextPostingListSegment(seg);
 	}
 
-	if ((Pointer)segment < segmentend &&
-		(ginCompareItemPointers(&newItems[0], &segment->first) >= 0) &&
-		(nolduncompressed == 0 || ginCompareItemPointers(&olduncompressed[0], &segment->first) >= 0))
-	{
-		olditems = ginPostingListDecodeSegment(segment, &nolditems);
-		untouchedsize = (Pointer)segment - (Pointer)GinDataLeafPageGetPostingList(page);
-	}
-	else
-	{
-		olditems = ginPostingListDecodeAllSegments(GinDataLeafPageGetPostingList(page),
-										   GinDataLeafPageGetPostingListSize(page),
-												   &nolditems);
-		untouchedsize = 0;
-	}
+	olditems = ginPostingListDecodeAllSegments(selseg,
+			segend - (Pointer)selseg, &nolditems);
+	untouchedsize = (Pointer)selseg - (Pointer)GinDataLeafPageGetPostingList(page);
 
 	if (nolduncompressed > 0)
 	{
@@ -671,6 +672,7 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 		nallitems = ginMergeItemPointers(allitems,
 										 olditems, nolditems,
 										 newItems, maxitems);
+		pfree(olditems);
 	}
 	else
 	{
@@ -685,15 +687,15 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 	lsize = untouchedsize;
 	while (totalpacked < nallitems)
 	{
-		segment = ginCompressPostingList(&allitems[totalpacked],
+		seg = ginCompressPostingList(&allitems[totalpacked],
 										 nallitems - totalpacked,
 										 GinPostingListSegmentMaxSize,
 										 &npacked);
-		segsize = SizeOfPostingListSegment(segment);
+		segsize = SizeOfPostingListSegment(seg);
 		if (lsize + segsize > GinDataLeafMaxPostingListSize)
 			break;
 
-		lsegments = lappend(lsegments, segment);
+		lsegments = lappend(lsegments, seg);
 		lsize += segsize;
 		totalpacked += npacked;
 		maxiptrs[list_length(lsegments) - 1] = allitems[totalpacked - 1];
@@ -701,6 +703,7 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 
 	if (totalpacked == nallitems)
 	{
+		pfree(allitems);
 		/* Great, all the items fit on a single page */
 
 		/*
@@ -714,10 +717,11 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 		ptr += untouchedsize;
 		foreach(lc, lsegments)
 		{
-			segment = lfirst(lc);
-			segsize = SizeOfPostingListSegment(segment);
-			memcpy(ptr, segment, segsize);
+			seg = lfirst(lc);
+			segsize = SizeOfPostingListSegment(seg);
+			memcpy(ptr, seg, segsize);
 			ptr += segsize;
+			pfree(seg);
 		}
 		GinDataLeafPageSetPostingListSize(page, lsize);
 
@@ -765,11 +769,11 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 		rsize = 0;
 		while (totalpacked < nallitems)
 		{
-			segment = ginCompressPostingList(&allitems[totalpacked],
+			seg = ginCompressPostingList(&allitems[totalpacked],
 											 nallitems - totalpacked,
 											 GinPostingListSegmentMaxSize,
 											 &npacked);
-			segsize = SizeOfPostingListSegment(segment);
+			segsize = SizeOfPostingListSegment(seg);
 
 			if (rsize + segsize > GinDataLeafMaxPostingListSize)
 			{
@@ -784,10 +788,11 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 				break;
 			}
 
-			rsegments = lappend(rsegments, segment);
+			rsegments = lappend(rsegments, seg);
 			rsize += segsize;
 			totalpacked += npacked;
 		}
+		pfree(allitems);
 		totalsize = lsize + rsize;
 		Assert(lsize <= GinDataLeafMaxPostingListSize);
 		Assert(rsize <= GinDataLeafMaxPostingListSize);
@@ -806,14 +811,14 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 		{
 			while (lsegments)
 			{
-				segment = llast(lsegments);
-				segsize = SizeOfPostingListSegment(segment);
+				seg = llast(lsegments);
+				segsize = SizeOfPostingListSegment(seg);
 				if (lsize - segsize < rsize + segsize)
 					break;
 
-				lsegments = list_delete_ptr(lsegments, segment);
+				lsegments = list_delete_ptr(lsegments, seg);
 				lsize -= segsize;
-				rsegments = lcons(segment, rsegments);
+				rsegments = lcons(seg, rsegments);
 				rsize += segsize;
 			}
 		}
@@ -827,11 +832,12 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 		ptr += untouchedsize;
 		foreach(lc, lsegments)
 		{
-			segment = lfirst(lc);
-			segsize = SizeOfPostingListSegment(segment);
+			seg = lfirst(lc);
+			segsize = SizeOfPostingListSegment(seg);
 
-			memcpy(ptr, segment, segsize);
+			memcpy(ptr, seg, segsize);
 			ptr += segsize;
+			pfree(seg);
 		}
 		GinDataLeafPageSetPostingListSize(lpage, lsize);
 
@@ -840,9 +846,10 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 			ItemPointer	tmpitems;
 			int			tmpcount;
 
-			Assert(prevsegment);
-			tmpitems = ginPostingListDecodeSegment(prevsegment, &tmpcount);
+			Assert(prevselseg);
+			tmpitems = ginPostingListDecodeSegment(prevselseg, &tmpcount);
 			*GinDataPageGetRightBound(lpage) = tmpitems[tmpcount - 1];
+			pfree(tmpitems);
 		}
 		else
 		{
@@ -852,11 +859,12 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 		ptr = (char *) GinDataLeafPageGetPostingList(rpage);
 		foreach(lc, rsegments)
 		{
-			segment = lfirst(lc);
-			segsize = SizeOfPostingListSegment(segment);
+			seg = lfirst(lc);
+			segsize = SizeOfPostingListSegment(seg);
 
-			memcpy(ptr, segment, segsize);
+			memcpy(ptr, seg, segsize);
 			ptr += segsize;
+			pfree(seg);
 		}
 		GinDataLeafPageSetPostingListSize(rpage, rsize);
 		*GinDataPageGetRightBound(rpage) = *GinDataPageGetRightBound(oldPage);

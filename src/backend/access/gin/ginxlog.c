@@ -212,6 +212,7 @@ ginRedoInsertData(Buffer buffer, BlockNumber rightblkno, void *rdata)
 			memcpy(page + phdr->pd_upper,
 				   allitems,
 				   nallitems * sizeof(ItemPointerData));
+			pfree(allitems);
 		}
 	}
 	else

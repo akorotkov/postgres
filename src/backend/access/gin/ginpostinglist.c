@@ -222,6 +222,7 @@ ginCompressPostingList(const ItemPointer ipd, int nipd, int maxsize,
 		Assert(ndecoded == totalpacked);
 		for (i = 0; i < ndecoded; i++)
 			Assert(memcmp(&tmp[i], &ipd[i], sizeof(ItemPointerData)) == 0);
+		pfree(tmp);
 	}
 #endif
 

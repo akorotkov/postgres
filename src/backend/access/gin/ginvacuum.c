@@ -50,6 +50,7 @@ ginVacuumPostingListCompressed(GinVacuumState *gvs, PostingListSegment *orig,
 	int			i;
 	ItemPointer	items;
 	int			ndecoded;
+	PostingListSegment *result = NULL;
 
 	items = ginPostingListDecodeSegment(orig, &ndecoded);
 
@@ -74,10 +75,11 @@ ginVacuumPostingListCompressed(GinVacuumState *gvs, PostingListSegment *orig,
 		*nremaining = remaining;
 
 	if (remaining != ndecoded)
-		return ginCompressPostingList(items, remaining,
+		result = ginCompressPostingList(items, remaining,
 				SizeOfPostingListSegment(orig), NULL);
+	pfree(items);
 
-	return NULL;
+	return result;
 }
 
 /*

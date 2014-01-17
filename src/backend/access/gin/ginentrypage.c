@@ -158,7 +158,7 @@ ginReadTuple(GinState *ginstate, OffsetNumber attnum,
 			 IndexTuple itup)
 {
 	Pointer		ptr = GinGetPosting(itup);
-	ItemPointerData *ipd;
+	ItemPointer	ipd;
 	int			ndecoded;
 
 	if (GinItupIsCompressed(itup))
@@ -168,7 +168,7 @@ ginReadTuple(GinState *ginstate, OffsetNumber attnum,
 	else
 	{
 		int			nipd = GinGetNPosting(itup);
-		ipd = palloc(sizeof(ItemPointerData) * nipd);
+		ipd = (ItemPointer)palloc(sizeof(ItemPointerData) * nipd);
 		memcpy(ipd, ptr, sizeof(ItemPointerData) * nipd);
 	}
 	return ipd;
