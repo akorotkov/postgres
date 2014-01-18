@@ -606,7 +606,7 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 	 * segment of page. Then re-encode only last segment of page.
 	 */
 	minNewItem = newItems[0];
-	if (nolduncompressed == 0 &&
+	if (nolduncompressed > 0 &&
 			ginCompareItemPointers(&olduncompressed[0], &minNewItem) < 0)
 		minNewItem = olduncompressed[0];
 
@@ -729,7 +729,7 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 		((PageHeader) page)->pd_upper = ((PageHeader) page)->pd_special;
 
 		/* Put WAL data */
-		insert_xlog.length = INSERT_REENCODE_FLAG | (uint16) lsize;
+		insert_xlog.length = INSERT_REENCODE_FLAG | (uint16) (lsize - untouchedsize);
 
 		rdata[0].buffer = InvalidBuffer;
 		rdata[0].data = (char *) &insert_xlog;
@@ -738,8 +738,8 @@ dataPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 
 		rdata[1].buffer = buf;
 		rdata[1].buffer_std = TRUE;
-		rdata[1].data = ((char *) GinDataLeafPageGetPostingList(page));
-		rdata[1].len = lsize;
+		rdata[1].data = ((char *) GinDataLeafPageGetPostingList(page)) + untouchedsize;
+		rdata[1].len = lsize - untouchedsize;
 		rdata[1].next = NULL;
 
 		*prdata = rdata;
