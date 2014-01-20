@@ -78,7 +78,7 @@ static void
 ginRedoCreatePTree(XLogRecPtr lsn, XLogRecord *record)
 {
 	ginxlogCreatePostingTree *data = (ginxlogCreatePostingTree *) XLogRecGetData(record);
-	ItemPointerData *items = (ItemPointerData *) (XLogRecGetData(record) + sizeof(ginxlogCreatePostingTree));
+	char	   *ptr;
 	Buffer		buffer;
 	Page		page;
 
@@ -89,9 +89,14 @@ ginRedoCreatePTree(XLogRecPtr lsn, XLogRecord *record)
 	Assert(BufferIsValid(buffer));
 	page = (Page) BufferGetPage(buffer);
 
-	GinInitBuffer(buffer, GIN_DATA | GIN_LEAF);
-	memcpy(GinDataPageGetData(page), items, sizeof(ItemPointerData) * data->nitem);
-	GinPageGetOpaque(page)->maxoff = data->nitem;
+	GinInitBuffer(buffer, GIN_DATA | GIN_LEAF | GIN_COMPRESSED);
+
+	ptr = XLogRecGetData(record) + sizeof(ginxlogCreatePostingTree);
+
+	/* Place page data */
+	memcpy(GinDataLeafPageGetPostingList(page), ptr, data->size);
+
+	GinDataLeafPageSetPostingListSize(page, data->size);
 
 	PageSetLSN(page, lsn);
 
@@ -100,11 +105,11 @@ ginRedoCreatePTree(XLogRecPtr lsn, XLogRecord *record)
 }
 
 static void
-ginRedoInsertEntry(Buffer buffer, OffsetNumber offset, BlockNumber rightblkno,
-				   void *rdata)
+ginRedoInsertEntry(Buffer buffer, bool isLeaf, BlockNumber rightblkno, void *rdata)
 {
 	Page		page = BufferGetPage(buffer);
 	ginxlogInsertEntry *data = (ginxlogInsertEntry *) rdata;
+	OffsetNumber offset = data->offset;
 	IndexTuple	itup;
 
 	if (rightblkno != InvalidBlockNumber)
@@ -138,30 +143,79 @@ ginRedoInsertEntry(Buffer buffer, OffsetNumber offset, BlockNumber rightblkno,
 }
 
 static void
-ginRedoInsertData(Buffer buffer, OffsetNumber offset, BlockNumber rightblkno,
-				  void *rdata)
+ginRedoInsertData(Buffer buffer, bool isLeaf, BlockNumber rightblkno, void *rdata)
 {
 	Page		page = BufferGetPage(buffer);
 
-	if (GinPageIsLeaf(page))
+	if (isLeaf)
 	{
-		ginxlogInsertDataLeaf *data = (ginxlogInsertDataLeaf *) rdata;
-		ItemPointerData *items = data->items;
-		OffsetNumber i;
+		uint16 *firstfield = (uint16 *) rdata;
 
-		for (i = 0; i < data->nitem; i++)
-			GinDataPageAddItemPointer(page, &items[i], offset + i);
+		Assert(GinPageIsLeaf(page));
+
+		if (((*firstfield) & INSERT_RECOMPRESS_FLAG) != 0)
+		{
+			ginxlogInsertDataLeafCompressed *data = (ginxlogInsertDataLeafCompressed *) rdata;
+			int			len = data->length & (~INSERT_RECOMPRESS_FLAG);
+			Pointer		segment;
+
+			/* Copy the new data to the right place */
+			segment = ((Pointer) GinDataLeafPageGetPostingList(page))
+				+ data->unmodifiedsize;
+			memcpy(segment, data->newdata, len - data->unmodifiedsize);
+
+			/* reset the uncompressed area */
+			((PageHeader) page)->pd_upper = ((PageHeader) page)->pd_special;
+			GinDataLeafPageSetPostingListSize(page, len);
+		}
+		else
+		{
+			PageHeader phdr = (PageHeader) page;
+			ginxlogInsertDataLeafUncompressed *data =
+				(ginxlogInsertDataLeafUncompressed *) rdata;
+			ItemPointer olditems;
+			int			nolditems;
+			ItemPointer newitems;
+			int			nnewitems;
+			ItemPointer allitems;
+			int			nallitems;
+
+			/*
+			 * we only allow uncompressed items to be inserted to new-style
+			 * pages.
+			 */
+			Assert(GinPageIsCompressed(page));
+
+			/* merge the old and new items into one list. */
+			nnewitems = data->length / sizeof(ItemPointerData);
+			newitems = data->newitems;
+
+			olditems = GinDataLeafPageGetUncompressed(page, &nolditems);
+
+			allitems = palloc((nnewitems + nolditems) * sizeof(ItemPointerData));
+			nallitems = ginMergeItemPointers(allitems,
+											 olditems, nolditems,
+											 newitems, nnewitems);
+			phdr->pd_upper = phdr->pd_special - nallitems * sizeof(ItemPointerData);
+			Assert(phdr->pd_upper >= phdr->pd_lower);
+			memcpy(page + phdr->pd_upper,
+				   allitems,
+				   nallitems * sizeof(ItemPointerData));
+			pfree(allitems);
+		}
 	}
 	else
 	{
-		PostingItem *pitem = (PostingItem *) rdata;
+		ginxlogInsertDataInternal *data = (ginxlogInsertDataInternal *) rdata;
 		PostingItem *oldpitem;
 
+		Assert(!GinPageIsLeaf(page));
+
 		/* update link to right page after split */
-		oldpitem = GinDataPageGetPostingItem(page, offset);
+		oldpitem = GinDataPageGetPostingItem(page, data->offset);
 		PostingItemSetBlockNumber(oldpitem, rightblkno);
 
-		GinDataPageAddPostingItem(page, pitem, offset);
+		GinDataPageAddPostingItem(page, &data->newitem, data->offset);
 	}
 }
 
@@ -213,12 +267,12 @@ ginRedoInsert(XLogRecPtr lsn, XLogRecord *record)
 		if (data->flags & GIN_INSERT_ISDATA)
 		{
 			Assert(GinPageIsData(page));
-			ginRedoInsertData(buffer, data->offset, rightChildBlkno, payload);
+			ginRedoInsertData(buffer, isLeaf, rightChildBlkno, payload);
 		}
 		else
 		{
 			Assert(!GinPageIsData(page));
-			ginRedoInsertEntry(buffer, data->offset, rightChildBlkno, payload);
+			ginRedoInsertEntry(buffer, isLeaf, rightChildBlkno, payload);
 		}
 
 		PageSetLSN(page, lsn);
@@ -253,38 +307,46 @@ ginRedoSplitEntry(Page lpage, Page rpage, void *rdata)
 static void
 ginRedoSplitData(Page lpage, Page rpage, void *rdata)
 {
-	ginxlogSplitData *data = (ginxlogSplitData *) rdata;
 	bool		isleaf = GinPageIsLeaf(lpage);
-	char	   *ptr = (char *) rdata + sizeof(ginxlogSplitData);
-	OffsetNumber i;
-	ItemPointer bound;
 
 	if (isleaf)
 	{
-		ItemPointer items = (ItemPointer) ptr;
-		for (i = 0; i < data->separator; i++)
-			GinDataPageAddItemPointer(lpage, &items[i], InvalidOffsetNumber);
-		for (i = data->separator; i < data->nitem; i++)
-			GinDataPageAddItemPointer(rpage, &items[i], InvalidOffsetNumber);
+		ginxlogSplitDataLeaf *data = (ginxlogSplitDataLeaf *) rdata;
+		char	   *ptr = (char *) rdata + sizeof(ginxlogSplitDataLeaf);
+		Pointer		lptr, rptr;
+
+		lptr = ptr;
+		rptr = ptr + data->lsize;
+
+		Assert(data->lsize > 0 && data->lsize <= GinDataLeafMaxContentSize);
+		Assert(data->rsize > 0 && data->rsize <= GinDataLeafMaxContentSize);
+
+		/* Place pages data */
+		memcpy(GinDataLeafPageGetPostingList(lpage), lptr, data->lsize);
+		memcpy(GinDataLeafPageGetPostingList(rpage), rptr, data->rsize);
+
+		GinDataLeafPageSetPostingListSize(lpage, data->lsize);
+		GinDataLeafPageSetPostingListSize(rpage, data->rsize);
+		*GinDataPageGetRightBound(lpage) = data->lrightbound;
+		*GinDataPageGetRightBound(rpage) = data->rrightbound;
 	}
 	else
 	{
-		PostingItem *items = (PostingItem *) ptr;
+		ginxlogSplitDataInternal *data = (ginxlogSplitDataInternal *) rdata;
+		PostingItem *items = (PostingItem *) ((char *) rdata + sizeof(ginxlogSplitDataInternal));
+		OffsetNumber i;
+		OffsetNumber maxoff;
+
 		for (i = 0; i < data->separator; i++)
 			GinDataPageAddPostingItem(lpage, &items[i], InvalidOffsetNumber);
 		for (i = data->separator; i < data->nitem; i++)
 			GinDataPageAddPostingItem(rpage, &items[i], InvalidOffsetNumber);
+
+		/* set up right key */
+		maxoff = GinPageGetOpaque(lpage)->maxoff;
+		*GinDataPageGetRightBound(lpage) = GinDataPageGetPostingItem(lpage, maxoff)->key;
+		*GinDataPageGetRightBound(rpage) = data->rightbound;
 	}
-
-	/* set up right key */
-	bound = GinDataPageGetRightBound(lpage);
-	if (isleaf)
-		*bound = *GinDataPageGetItemPointer(lpage, GinPageGetOpaque(lpage)->maxoff);
-	else
-		*bound = GinDataPageGetPostingItem(lpage, GinPageGetOpaque(lpage)->maxoff)->key;
-
-	bound = GinDataPageGetRightBound(rpage);
-	*bound = data->rightbound;
 }
 
 static void
@@ -317,9 +379,10 @@ ginRedoSplit(XLogRecPtr lsn, XLogRecord *record)
 
 	if (isLeaf)
 		flags |= GIN_LEAF;
-
 	if (isData)
 		flags |= GIN_DATA;
+	if (isLeaf && isData)
+		flags |= GIN_COMPRESSED;
 
 	lbuffer = XLogReadBuffer(data->node, data->lblkno, true);
 	Assert(BufferIsValid(lbuffer));
@@ -352,7 +415,7 @@ ginRedoSplit(XLogRecPtr lsn, XLogRecord *record)
 		Buffer		rootBuf = XLogReadBuffer(data->node, rootBlkno, true);
 		Page		rootPage = BufferGetPage(rootBuf);
 
-		GinInitBuffer(rootBuf, flags & ~GIN_LEAF);
+		GinInitBuffer(rootBuf, flags & ~GIN_LEAF & ~GIN_COMPRESSED);
 
 		if (isData)
 		{
@@ -383,10 +446,14 @@ ginRedoSplit(XLogRecPtr lsn, XLogRecord *record)
 	UnlockReleaseBuffer(lbuffer);
 }
 
+/*
+ * This is functionally the same as heap_xlog_newpage.
+ */
 static void
 ginRedoVacuumPage(XLogRecPtr lsn, XLogRecord *record)
 {
-	ginxlogVacuumPage *data = (ginxlogVacuumPage *) XLogRecGetData(record);
+	ginxlogVacuumPage *xlrec = (ginxlogVacuumPage *) XLogRecGetData(record);
+	char	   *blk = ((char *) xlrec) + sizeof(ginxlogVacuumPage);
 	Buffer		buffer;
 	Page		page;
 
@@ -397,45 +464,28 @@ ginRedoVacuumPage(XLogRecPtr lsn, XLogRecord *record)
 		return;
 	}
 
-	buffer = XLogReadBuffer(data->node, data->blkno, false);
+	buffer = XLogReadBuffer(xlrec->node, xlrec->blkno, true);
 	if (!BufferIsValid(buffer))
 		return;
 	page = (Page) BufferGetPage(buffer);
 
-	if (lsn > PageGetLSN(page))
+	if (xlrec->hole_length == 0)
 	{
-		if (GinPageIsData(page))
-		{
-			memcpy(GinDataPageGetData(page),
-				   XLogRecGetData(record) + sizeof(ginxlogVacuumPage),
-				   data->nitem * GinSizeOfDataPageItem(page));
-			GinPageGetOpaque(page)->maxoff = data->nitem;
-		}
-		else
-		{
-			OffsetNumber i,
-					   *tod;
-			IndexTuple	itup = (IndexTuple) (XLogRecGetData(record) + sizeof(ginxlogVacuumPage));
-
-			tod = (OffsetNumber *) palloc(sizeof(OffsetNumber) * PageGetMaxOffsetNumber(page));
-			for (i = FirstOffsetNumber; i <= PageGetMaxOffsetNumber(page); i++)
-				tod[i - 1] = i;
-
-			PageIndexMultiDelete(page, tod, PageGetMaxOffsetNumber(page));
-
-			for (i = 0; i < data->nitem; i++)
-			{
-				if (PageAddItem(page, (Item) itup, IndexTupleSize(itup), InvalidOffsetNumber, false, false) == InvalidOffsetNumber)
-					elog(ERROR, "failed to add item to index page in %u/%u/%u",
-						 data->node.spcNode, data->node.dbNode, data->node.relNode);
-				itup = (IndexTuple) (((char *) itup) + MAXALIGN(IndexTupleSize(itup)));
-			}
-		}
-
-		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+		memcpy((char *) page, blk, BLCKSZ);
+	}
+	else
+	{
+		memcpy((char *) page, blk, xlrec->hole_offset);
+		/* must zero-fill the hole */
+		MemSet((char *) page + xlrec->hole_offset, 0, xlrec->hole_length);
+		memcpy((char *) page + (xlrec->hole_offset + xlrec->hole_length),
+			   blk + xlrec->hole_offset,
+			   BLCKSZ - (xlrec->hole_offset + xlrec->hole_length));
 	}
 
+	PageSetLSN(page, lsn);
+
+	MarkBufferDirty(buffer);
 	UnlockReleaseBuffer(buffer);
 }
 
