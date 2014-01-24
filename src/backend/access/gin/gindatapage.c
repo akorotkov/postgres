@@ -798,7 +798,7 @@ dataPlaceToPageLeafRecompress(Buffer buf, disassembledLeaf *leaf,
 		if (!modified)
 			unmodifiedsize += segsize;
 		else
-			memcpy(ptr, seginfo->seg, segsize);
+			memmove(ptr, seginfo->seg, segsize);
 		ptr += segsize;
 		newsize += segsize;
 	}
