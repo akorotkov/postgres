@@ -3994,6 +3994,42 @@ DESCR("GIN array support");
 DATA(insert OID = 3076 (  ginarrayextract	 PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 2281 "2277 2281" _null_ _null_ _null_ _null_	ginarrayextract_2args _null_ _null_ _null_ ));
 DESCR("GIN array support (obsolete)");
 
+/* VODKA */
+DATA(insert OID = 4034 (  vodkagetbitmap	   PGNSP PGUID 12 1 0 0 0 f f f f t f v 2 0 20 "2281 2281" _null_ _null_ _null_ _null_	vodkagetbitmap _null_ _null_ _null_ ));
+DESCR("vodka(internal)");
+DATA(insert OID = 4035 (  vodkainsert		   PGNSP PGUID 12 1 0 0 0 f f f f t f v 6 0 16 "2281 2281 2281 2281 2281 2281" _null_ _null_ _null_ _null_	vodkainsert _null_ _null_ _null_ ));
+DESCR("vodka(internal)");
+DATA(insert OID = 4036 (  vodkabeginscan	   PGNSP PGUID 12 1 0 0 0 f f f f t f v 3 0 2281 "2281 2281 2281" _null_ _null_ _null_ _null_	vodkabeginscan _null_ _null_ _null_ ));
+DESCR("vodka(internal)");
+DATA(insert OID = 4037 (  vodkarescan		   PGNSP PGUID 12 1 0 0 0 f f f f t f v 5 0 2278 "2281 2281 2281 2281 2281" _null_ _null_ _null_ _null_ vodkarescan _null_ _null_ _null_ ));
+DESCR("vodka(internal)");
+DATA(insert OID = 4038 (  vodkaendscan	   PGNSP PGUID 12 1 0 0 0 f f f f t f v 1 0 2278 "2281" _null_ _null_ _null_ _null_ vodkaendscan _null_ _null_ _null_ ));
+DESCR("vodka(internal)");
+DATA(insert OID = 4039 (  vodkamarkpos	   PGNSP PGUID 12 1 0 0 0 f f f f t f v 1 0 2278 "2281" _null_ _null_ _null_ _null_ vodkamarkpos _null_ _null_ _null_ ));
+DESCR("vodka(internal)");
+DATA(insert OID = 4040 (  vodkarestrpos	   PGNSP PGUID 12 1 0 0 0 f f f f t f v 1 0 2278 "2281" _null_ _null_ _null_ _null_ vodkarestrpos _null_ _null_ _null_ ));
+DESCR("vodka(internal)");
+DATA(insert OID = 4041 (  vodkabuild		   PGNSP PGUID 12 1 0 0 0 f f f f t f v 3 0 2281 "2281 2281 2281" _null_ _null_ _null_ _null_ vodkabuild _null_ _null_ _null_ ));
+DESCR("vodka(internal)");
+DATA(insert OID = 4042 (  vodkabuildempty	   PGNSP PGUID 12 1 0 0 0 f f f f t f v 1 0 2278 "2281" _null_ _null_ _null_ _null_ vodkabuildempty _null_ _null_ _null_ ));
+DESCR("vodka(internal)");
+DATA(insert OID = 4043 (  vodkabulkdelete    PGNSP PGUID 12 1 0 0 0 f f f f t f v 4 0 2281 "2281 2281 2281 2281" _null_ _null_ _null_ _null_ vodkabulkdelete _null_ _null_ _null_ ));
+DESCR("vodka(internal)");
+DATA(insert OID = 4044 (  vodkavacuumcleanup PGNSP PGUID 12 1 0 0 0 f f f f t f v 2 0 2281 "2281 2281" _null_ _null_ _null_ _null_ vodkavacuumcleanup _null_ _null_ _null_ ));
+DESCR("vodka(internal)");
+DATA(insert OID = 4046 (  vodkaoptions	   PGNSP PGUID 12 1 0 0 0 f f f f t f s 2 0 17 "1009 16" _null_ _null_ _null_ _null_  vodkaoptions _null_ _null_ _null_ ));
+DESCR("vodka(internal)");
+
+/* VODKA array support */
+DATA(insert OID = 4047 (  vodkaarrayextract	 PGNSP PGUID 12 1 0 0 0 f f f f t f i 3 0 2281 "2277 2281 2281" _null_ _null_ _null_ _null_ vodkaarrayextract _null_ _null_ _null_ ));
+DESCR("VODKA array support");
+DATA(insert OID = 4048 (  vodkaqueryarrayextract	PGNSP PGUID 12 1 0 0 0 f f f f t f i 7 0 2281 "2277 2281 21 2281 2281 2281 2281" _null_ _null_ _null_ _null_ vodkaqueryarrayextract _null_ _null_ _null_ ));
+DESCR("VODKA array support");
+DATA(insert OID = 4049 (  vodkaarrayconsistent	PGNSP PGUID 12 1 0 0 0 f f f f t f i 8 0 16 "2281 21 2277 23 2281 2281 2281 2281" _null_ _null_ _null_ _null_ vodkaarrayconsistent _null_ _null_ _null_ ));
+DESCR("VODKA array support");
+DATA(insert OID = 4050 (  vodkaarrayextract	 PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 2281 "2277 2281" _null_ _null_ _null_ _null_	vodkaarrayextract_2args _null_ _null_ _null_ ));
+DESCR("VODKA array support (obsolete)");
+
 /* overlap/contains/contained */
 DATA(insert OID = 2747 (  arrayoverlap		   PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 16 "2277 2277" _null_ _null_ _null_ _null_ arrayoverlap _null_ _null_ _null_ ));
 DATA(insert OID = 2748 (  arraycontains		   PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 16 "2277 2277" _null_ _null_ _null_ _null_ arraycontains _null_ _null_ _null_ ));

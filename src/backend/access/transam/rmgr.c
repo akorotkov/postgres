@@ -15,6 +15,7 @@
 #include "access/multixact.h"
 #include "access/nbtree.h"
 #include "access/spgist.h"
+#include "access/vodka.h"
 #include "access/xact.h"
 #include "access/xlog_internal.h"
 #include "catalog/storage_xlog.h"
