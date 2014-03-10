@@ -17,6 +17,7 @@
 #include "catalog/pg_operator.h"
 #include "commands/vacuum.h"
 #include "tsearch/ts_type.h"
+#include "utils/array.h"
 #include "utils/builtins.h"
 
 
@@ -33,9 +34,14 @@ typedef struct
 	LexemeHashKey key;			/* This is 'e' from the LC algorithm. */
 	int			frequency;		/* This is 'f'. */
 	int			delta;			/* And this is 'delta'. */
+	bool		used;
 } TrackItem;
 
 static void compute_tsvector_stats(VacAttrStats *stats,
+					   AnalyzeAttrFetchFunc fetchfunc,
+					   int samplerows,
+					   double totalrows);
+static void compute_tsvector_array_stats(VacAttrStats *stats,
 					   AnalyzeAttrFetchFunc fetchfunc,
 					   int samplerows,
 					   double totalrows);
@@ -62,6 +68,27 @@ ts_typanalyze(PG_FUNCTION_ARGS)
 		attr->attstattarget = default_statistics_target;
 
 	stats->compute_stats = compute_tsvector_stats;
+	/* see comment about the choice of minrows in commands/analyze.c */
+	stats->minrows = 300 * attr->attstattarget;
+
+	PG_RETURN_BOOL(true);
+}
+
+/*
+ *	ts_typanalyze -- a custom typanalyze function for tsvector columns
+ */
+Datum
+ts_array_typanalyze(PG_FUNCTION_ARGS)
+{
+	VacAttrStats *stats = (VacAttrStats *) PG_GETARG_POINTER(0);
+	Form_pg_attribute attr = stats->attr;
+
+	/* If the attstattarget column is negative, use the default value */
+	/* NB: it is okay to scribble on stats->attr since it's a copy */
+	if (attr->attstattarget < 0)
+		attr->attstattarget = default_statistics_target;
+
+	stats->compute_stats = compute_tsvector_array_stats;
 	/* see comment about the choice of minrows in commands/analyze.c */
 	stats->minrows = 300 * attr->attstattarget;
 
@@ -275,6 +302,330 @@ compute_tsvector_stats(VacAttrStats *stats,
 
 			/* Advance to the next WordEntry in the tsvector */
 			curentryptr++;
+		}
+	}
+
+	/* We can only compute real stats if we found some non-null values. */
+	if (null_cnt < samplerows)
+	{
+		int			nonnull_cnt = samplerows - null_cnt;
+		int			i;
+		TrackItem **sort_table;
+		int			track_len;
+		int			cutoff_freq;
+		int			minfreq,
+					maxfreq;
+
+		stats->stats_valid = true;
+		/* Do the simple null-frac and average width stats */
+		stats->stanullfrac = (double) null_cnt / (double) samplerows;
+		stats->stawidth = total_width / (double) nonnull_cnt;
+
+		/* Assume it's a unique column (see notes above) */
+		stats->stadistinct = -1.0;
+
+		/*
+		 * Construct an array of the interesting hashtable items, that is,
+		 * those meeting the cutoff frequency (s - epsilon)*N.	Also identify
+		 * the minimum and maximum frequencies among these items.
+		 *
+		 * Since epsilon = s/10 and bucket_width = 1/epsilon, the cutoff
+		 * frequency is 9*N / bucket_width.
+		 */
+		cutoff_freq = 9 * lexeme_no / bucket_width;
+
+		i = hash_get_num_entries(lexemes_tab);	/* surely enough space */
+		sort_table = (TrackItem **) palloc(sizeof(TrackItem *) * i);
+
+		hash_seq_init(&scan_status, lexemes_tab);
+		track_len = 0;
+		minfreq = lexeme_no;
+		maxfreq = 0;
+		while ((item = (TrackItem *) hash_seq_search(&scan_status)) != NULL)
+		{
+			if (item->frequency > cutoff_freq)
+			{
+				sort_table[track_len++] = item;
+				minfreq = Min(minfreq, item->frequency);
+				maxfreq = Max(maxfreq, item->frequency);
+			}
+		}
+		Assert(track_len <= i);
+
+		/* emit some statistics for debug purposes */
+		elog(DEBUG3, "tsvector_stats: target # mces = %d, bucket width = %d, "
+			 "# lexemes = %d, hashtable size = %d, usable entries = %d",
+			 num_mcelem, bucket_width, lexeme_no, i, track_len);
+
+		/*
+		 * If we obtained more lexemes than we really want, get rid of those
+		 * with least frequencies.	The easiest way is to qsort the array into
+		 * descending frequency order and truncate the array.
+		 */
+		if (num_mcelem < track_len)
+		{
+			qsort(sort_table, track_len, sizeof(TrackItem *),
+				  trackitem_compare_frequencies_desc);
+			/* reset minfreq to the smallest frequency we're keeping */
+			minfreq = sort_table[num_mcelem - 1]->frequency;
+		}
+		else
+			num_mcelem = track_len;
+
+		/* Generate MCELEM slot entry */
+		if (num_mcelem > 0)
+		{
+			MemoryContext old_context;
+			Datum	   *mcelem_values;
+			float4	   *mcelem_freqs;
+
+			/*
+			 * We want to store statistics sorted on the lexeme value using
+			 * first length, then byte-for-byte comparison. The reason for
+			 * doing length comparison first is that we don't care about the
+			 * ordering so long as it's consistent, and comparing lengths
+			 * first gives us a chance to avoid a strncmp() call.
+			 *
+			 * This is different from what we do with scalar statistics --
+			 * they get sorted on frequencies. The rationale is that we
+			 * usually search through most common elements looking for a
+			 * specific value, so we can grab its frequency.  When values are
+			 * presorted we can employ binary search for that.	See
+			 * ts_selfuncs.c for a real usage scenario.
+			 */
+			qsort(sort_table, num_mcelem, sizeof(TrackItem *),
+				  trackitem_compare_lexemes);
+
+			/* Must copy the target values into anl_context */
+			old_context = MemoryContextSwitchTo(stats->anl_context);
+
+			/*
+			 * We sorted statistics on the lexeme value, but we want to be
+			 * able to find out the minimal and maximal frequency without
+			 * going through all the values.  We keep those two extra
+			 * frequencies in two extra cells in mcelem_freqs.
+			 *
+			 * (Note: the MCELEM statistics slot definition allows for a third
+			 * extra number containing the frequency of nulls, but we don't
+			 * create that for a tsvector column, since null elements aren't
+			 * possible.)
+			 */
+			mcelem_values = (Datum *) palloc(num_mcelem * sizeof(Datum));
+			mcelem_freqs = (float4 *) palloc((num_mcelem + 2) * sizeof(float4));
+
+			/*
+			 * See comments above about use of nonnull_cnt as the divisor for
+			 * the final frequency estimates.
+			 */
+			for (i = 0; i < num_mcelem; i++)
+			{
+				TrackItem  *item = sort_table[i];
+
+				mcelem_values[i] =
+					PointerGetDatum(cstring_to_text_with_len(item->key.lexeme,
+														  item->key.length));
+				mcelem_freqs[i] = (double) item->frequency / (double) nonnull_cnt;
+			}
+			mcelem_freqs[i++] = (double) minfreq / (double) nonnull_cnt;
+			mcelem_freqs[i] = (double) maxfreq / (double) nonnull_cnt;
+			MemoryContextSwitchTo(old_context);
+
+			stats->stakind[0] = STATISTIC_KIND_MCELEM;
+			stats->staop[0] = TextEqualOperator;
+			stats->stanumbers[0] = mcelem_freqs;
+			/* See above comment about two extra frequency fields */
+			stats->numnumbers[0] = num_mcelem + 2;
+			stats->stavalues[0] = mcelem_values;
+			stats->numvalues[0] = num_mcelem;
+			/* We are storing text values */
+			stats->statypid[0] = TEXTOID;
+			stats->statyplen[0] = -1;	/* typlen, -1 for varlena */
+			stats->statypbyval[0] = false;
+			stats->statypalign[0] = 'i';
+		}
+	}
+	else
+	{
+		/* We found only nulls; assume the column is entirely null */
+		stats->stats_valid = true;
+		stats->stanullfrac = 1.0;
+		stats->stawidth = 0;	/* "unknown" */
+		stats->stadistinct = 0.0;		/* "unknown" */
+	}
+
+	/*
+	 * We don't need to bother cleaning up any of our temporary palloc's. The
+	 * hashtable should also go away, as it used a child memory context.
+	 */
+}
+
+static void
+compute_tsvector_array_stats(VacAttrStats *stats,
+					   AnalyzeAttrFetchFunc fetchfunc,
+					   int samplerows,
+					   double totalrows)
+{
+	int			num_mcelem;
+	int			null_cnt = 0;
+	double		total_width = 0;
+
+	/* This is D from the LC algorithm. */
+	HTAB	   *lexemes_tab;
+	HASHCTL		hash_ctl;
+	HASH_SEQ_STATUS scan_status;
+
+	/* This is the current bucket number from the LC algorithm */
+	int			b_current;
+
+	/* This is 'w' from the LC algorithm */
+	int			bucket_width;
+	int			array_no,
+				lexeme_no;
+	LexemeHashKey hash_key;
+	TrackItem  *item;
+
+	/*
+	 * We want statistics_target * 10 lexemes in the MCELEM array.	This
+	 * multiplier is pretty arbitrary, but is meant to reflect the fact that
+	 * the number of individual lexeme values tracked in pg_statistic ought to
+	 * be more than the number of values for a simple scalar column.
+	 */
+	num_mcelem = stats->attr->attstattarget * 10;
+
+	/*
+	 * We set bucket width equal to (num_mcelem + 10) / 0.007 as per the
+	 * comment above.
+	 */
+	bucket_width = (num_mcelem + 10) * 1000 / 7;
+
+	/*
+	 * Create the hashtable. It will be in local memory, so we don't need to
+	 * worry about overflowing the initial size. Also we don't need to pay any
+	 * attention to locking and memory management.
+	 */
+	MemSet(&hash_ctl, 0, sizeof(hash_ctl));
+	hash_ctl.keysize = sizeof(LexemeHashKey);
+	hash_ctl.entrysize = sizeof(TrackItem);
+	hash_ctl.hash = lexeme_hash;
+	hash_ctl.match = lexeme_match;
+	hash_ctl.hcxt = CurrentMemoryContext;
+	lexemes_tab = hash_create("Analyzed lexemes table",
+							  num_mcelem,
+							  &hash_ctl,
+					HASH_ELEM | HASH_FUNCTION | HASH_COMPARE | HASH_CONTEXT);
+
+	/* Initialize counters. */
+	b_current = 1;
+	lexeme_no = 0;
+
+	/* Loop over the tsvectors. */
+	for (array_no = 0; array_no < samplerows; array_no++)
+	{
+		Datum		value;
+		bool		isnull;
+		TSVector	vector;
+		WordEntry  *curentryptr;
+		char	   *lexemesptr;
+		int			i, j, nelements;
+		Datum	   *elements;
+		bool	   *elementsisnull;
+		ArrayType  *array;
+		HASH_SEQ_STATUS scan_status;
+		TrackItem  *item;
+
+		vacuum_delay_point();
+
+		value = fetchfunc(stats, array_no, &isnull);
+
+		/*
+		 * Check for null/nonnull.
+		 */
+		if (isnull)
+		{
+			null_cnt++;
+			continue;
+		}
+
+		/*
+		 * Add up widths for average-width calculation.  Since it's a
+		 * tsvector, we know it's varlena.  As in the regular
+		 * compute_minimal_stats function, we use the toasted width for this
+		 * calculation.
+		 */
+		total_width += VARSIZE_ANY(DatumGetPointer(value));
+
+		array = DatumGetArrayTypeP(value);
+		deconstruct_array(array, TSVECTOROID, -1, false, 'i',
+							&elements, &elementsisnull, &nelements);
+
+
+		hash_seq_init(&scan_status, lexemes_tab);
+		while ((item = (TrackItem *) hash_seq_search(&scan_status)) != NULL)
+		{
+			item->used = false;
+		}
+
+		for (i = 0; i < nelements; i++)
+		{
+			if (elementsisnull[i])
+				continue;
+
+			/*
+			 * Now detoast the tsvector if needed.
+			 */
+			vector = DatumGetTSVector(elements[i]);
+
+			/*
+			 * We loop through the lexemes in the tsvector and add them to our
+			 * tracking hashtable.	Note: the hashtable entries will point into
+			 * the (detoasted) tsvector value, therefore we cannot free that
+			 * storage until we're done.
+			 */
+			lexemesptr = STRPTR(vector);
+			curentryptr = ARRPTR(vector);
+			for (j = 0; j < vector->size; j++)
+			{
+				bool		found;
+
+				/* Construct a hash key */
+				hash_key.lexeme = lexemesptr + curentryptr->pos;
+				hash_key.length = curentryptr->len;
+
+				/* Lookup current lexeme in hashtable, adding it if new */
+				item = (TrackItem *) hash_search(lexemes_tab,
+												 (const void *) &hash_key,
+												 HASH_ENTER, &found);
+
+				if (found)
+				{
+					/* The lexeme is already on the tracking list */
+					if (!item->used)
+					{
+						item->frequency++;
+						item->used = true;
+					}
+				}
+				else
+				{
+					/* Initialize new tracking list element */
+					item->frequency = 1;
+					item->delta = b_current - 1;
+					item->used = false;
+				}
+
+				/* lexeme_no is the number of elements processed (ie N) */
+				lexeme_no++;
+
+				/* We prune the D structure after processing each bucket */
+				if (lexeme_no % bucket_width == 0)
+				{
+					prune_lexemes_hashtable(lexemes_tab, b_current);
+					b_current++;
+				}
+
+				/* Advance to the next WordEntry in the tsvector */
+				curentryptr++;
+			}
 		}
 	}
 

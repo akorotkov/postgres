@@ -71,6 +71,45 @@ ginPrepareFindLeafPage(GinBtree btree, BlockNumber blkno)
  * Locates leaf page contained tuple
  */
 GinBtreeStack *
+ginReFindLeafPage(GinBtree btree, GinBtreeStack *stack)
+{
+	bool found = false;
+
+	while (stack->parent)
+	{
+		GinBtreeStack *ptr;
+		Page page;
+		OffsetNumber maxoff;
+
+		LockBuffer(stack->buffer, GIN_UNLOCK);
+		stack->parent->buffer =
+			ReleaseAndReadBuffer(stack->buffer, btree->index, stack->parent->blkno);
+		LockBuffer(stack->parent->buffer, GIN_SHARE);
+
+		ptr = stack;
+		stack = stack->parent;
+		pfree(ptr);
+
+		page = BufferGetPage(stack->buffer);
+		maxoff = GinPageGetOpaque(page)->maxoff;
+
+		if (ginCompareItemPointers(
+				&(((PostingItem *)GinDataPageGetItem(page, maxoff - 1))->key),
+				btree->items + btree->curitem) >= 0)
+		{
+			found = true;
+			break;
+		}
+	}
+
+	stack = ginFindLeafPage(btree, stack);
+	return stack;
+}
+
+/*
+ * Locates leaf page contained tuple
+ */
+GinBtreeStack *
 ginFindLeafPage(GinBtree btree, GinBtreeStack *stack)
 {
 	bool		isfirst = TRUE;
@@ -130,8 +169,16 @@ ginFindLeafPage(GinBtree btree, GinBtreeStack *stack)
 		if (btree->searchMode)
 		{
 			/* in search mode we may forget path to leaf */
+			GinBtreeStack *ptr = (GinBtreeStack *) palloc(sizeof(GinBtreeStack));
+			Buffer buffer = ReleaseAndReadBuffer(stack->buffer, btree->index, child);
+
+			ptr->parent = stack;
+			ptr->predictNumber = stack->predictNumber;
+			stack->buffer = InvalidBuffer;
+
+			stack = ptr;
 			stack->blkno = child;
-			stack->buffer = ReleaseAndReadBuffer(stack->buffer, btree->index, stack->blkno);
+			stack->buffer = buffer;
 		}
 		else
 		{

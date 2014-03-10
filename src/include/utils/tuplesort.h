@@ -58,6 +58,15 @@ typedef struct Tuplesortstate Tuplesortstate;
  * actually sorted by their hash codes not the raw data.
  */
 
+typedef struct
+{
+	ItemPointerData iptr;
+	bool			recheck;
+	float8			data[1];
+} GinSortItem;
+
+#define GinSortItemSize(nKeys) (offsetof(GinSortItem,data)+(nKeys)*sizeof(float8))
+
 extern Tuplesortstate *tuplesort_begin_heap(TupleDesc tupDesc,
 					 int nkeys, AttrNumber *attNums,
 					 Oid *sortOperators, Oid *sortCollations,
@@ -78,6 +87,8 @@ extern Tuplesortstate *tuplesort_begin_datum(Oid datumType,
 					  Oid sortOperator, Oid sortCollation,
 					  bool nullsFirstFlag,
 					  int workMem, bool randomAccess);
+extern Tuplesortstate *tuplesort_begin_gin(int workMem,
+						int nKeys, bool randomAccess);
 
 extern void tuplesort_set_bound(Tuplesortstate *state, int64 bound);
 
@@ -87,6 +98,7 @@ extern void tuplesort_putheaptuple(Tuplesortstate *state, HeapTuple tup);
 extern void tuplesort_putindextuple(Tuplesortstate *state, IndexTuple tuple);
 extern void tuplesort_putdatum(Tuplesortstate *state, Datum val,
 				   bool isNull);
+extern void tuplesort_putgin(Tuplesortstate *state, GinSortItem *item);
 
 extern void tuplesort_performsort(Tuplesortstate *state);
 
@@ -98,6 +110,8 @@ extern IndexTuple tuplesort_getindextuple(Tuplesortstate *state, bool forward,
 						bool *should_free);
 extern bool tuplesort_getdatum(Tuplesortstate *state, bool forward,
 				   Datum *val, bool *isNull);
+extern GinSortItem *tuplesort_getgin(Tuplesortstate *state, bool forward,
+						bool *should_free);
 
 extern void tuplesort_end(Tuplesortstate *state);
 

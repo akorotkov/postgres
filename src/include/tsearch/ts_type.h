@@ -155,11 +155,13 @@ extern Datum ts_rankcd_tt(PG_FUNCTION_ARGS);
 extern Datum ts_rankcd_wtt(PG_FUNCTION_ARGS);
 extern Datum ts_rankcd_ttf(PG_FUNCTION_ARGS);
 extern Datum ts_rankcd_wttf(PG_FUNCTION_ARGS);
+extern Datum ts_distance(PG_FUNCTION_ARGS);
 
 extern Datum tsmatchsel(PG_FUNCTION_ARGS);
 extern Datum tsmatchjoinsel(PG_FUNCTION_ARGS);
 
 extern Datum ts_typanalyze(PG_FUNCTION_ARGS);
+extern Datum ts_array_typanalyze(PG_FUNCTION_ARGS);
 
 
 /*
@@ -298,5 +300,8 @@ extern Datum tsquery_rewrite_query(PG_FUNCTION_ARGS);
 
 extern Datum tsq_mcontains(PG_FUNCTION_ARGS);
 extern Datum tsq_mcontained(PG_FUNCTION_ARGS);
+
+extern QueryOperand **SortAndUniqItems(TSQuery q, int *size);
+extern float4 word_distance(int32 w);
 
 #endif   /* _PG_TSTYPE_H_ */

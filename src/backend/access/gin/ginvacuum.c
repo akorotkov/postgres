@@ -41,44 +41,172 @@ typedef struct
  */
 
 static uint32
-ginVacuumPostingList(GinVacuumState *gvs, ItemPointerData *items, uint32 nitem, ItemPointerData **cleaned)
+ginVacuumPostingList(GinVacuumState *gvs, OffsetNumber attnum, Pointer src, uint32 nitem, Pointer *cleaned, Size size, Size *newSize)
 {
 	uint32		i,
 				j = 0;
+	ItemPointerData iptr = {{0,0},0}, prevIptr;
+	Datum		addInfo = 0;
+	bool		addInfoIsNull;
+	Pointer		dst = NULL, prev, ptr = src;
 
 	/*
 	 * just scan over ItemPointer array
 	 */
 
+	prevIptr = iptr;
 	for (i = 0; i < nitem; i++)
 	{
-		if (gvs->callback(items + i, gvs->callback_state))
+		prev = ptr;
+		ptr = ginDataPageLeafRead(ptr, attnum, &iptr, &addInfo, &addInfoIsNull, &gvs->ginstate);
+		if (gvs->callback(&iptr, gvs->callback_state))
 		{
 			gvs->result->tuples_removed += 1;
-			if (!*cleaned)
+			if (!dst)
 			{
-				*cleaned = (ItemPointerData *) palloc(sizeof(ItemPointerData) * nitem);
+				dst = (Pointer) palloc(size);
+				*cleaned = dst;
 				if (i != 0)
-					memcpy(*cleaned, items, sizeof(ItemPointerData) * i);
+				{
+					memcpy(dst, src, prev - src);
+					dst += prev - src;
+				}
 			}
 		}
 		else
 		{
 			gvs->result->num_index_tuples += 1;
 			if (i != j)
-				(*cleaned)[j] = items[i];
+				dst = ginPlaceToDataPageLeaf(dst, attnum, &iptr, addInfo, addInfoIsNull, &prevIptr, &gvs->ginstate);
 			j++;
+			prevIptr = iptr;
 		}
 	}
 
+	if (i != j)
+		*newSize = dst - *cleaned;
 	return j;
+}
+
+/*
+ * Form a tuple for entry tree based on already encoded array of item pointers
+ * with additional information.
+ */
+static IndexTuple
+GinFormTuple(GinState *ginstate,
+			 OffsetNumber attnum, Datum key, GinNullCategory category,
+			 Pointer data,
+			 Size dataSize,
+			 uint32 nipd,
+			 bool errorTooBig)
+{
+	Datum		datums[3];
+	bool		isnull[3];
+	IndexTuple	itup;
+	uint32		newsize;
+
+	/* Build the basic tuple: optional column number, plus key datum */
+	if (ginstate->oneCol)
+	{
+		datums[0] = key;
+		isnull[0] = (category != GIN_CAT_NORM_KEY);
+		isnull[1] = true;
+	}
+	else
+	{
+		datums[0] = UInt16GetDatum(attnum);
+		isnull[0] = false;
+		datums[1] = key;
+		isnull[1] = (category != GIN_CAT_NORM_KEY);
+		isnull[2] = true;
+	}
+
+	itup = index_form_tuple(ginstate->tupdesc[attnum - 1], datums, isnull);
+
+	/*
+	 * Determine and store offset to the posting list, making sure there is
+	 * room for the category byte if needed.
+	 *
+	 * Note: because index_form_tuple MAXALIGNs the tuple size, there may well
+	 * be some wasted pad space.  Is it worth recomputing the data length to
+	 * prevent that?  That would also allow us to Assert that the real data
+	 * doesn't overlap the GinNullCategory byte, which this code currently
+	 * takes on faith.
+	 */
+	newsize = IndexTupleSize(itup);
+
+	GinSetPostingOffset(itup, newsize);
+
+	GinSetNPosting(itup, nipd);
+
+	/*
+	 * Add space needed for posting list, if any.  Then check that the tuple
+	 * won't be too big to store.
+	 */
+
+	if (nipd > 0)
+	{
+		newsize += dataSize;
+	}
+
+	if (category != GIN_CAT_NORM_KEY)
+	{
+		Assert(IndexTupleHasNulls(itup));
+		newsize = newsize + sizeof(GinNullCategory);
+	}
+	newsize = MAXALIGN(newsize);
+
+	if (newsize > Min(INDEX_SIZE_MASK, GinMaxItemSize))
+	{
+		if (errorTooBig)
+			ereport(ERROR,
+					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+			errmsg("index row size %lu exceeds maximum %lu for index \"%s\"",
+				   (unsigned long) newsize,
+				   (unsigned long) Min(INDEX_SIZE_MASK,
+									   GinMaxItemSize),
+				   RelationGetRelationName(ginstate->index))));
+		pfree(itup);
+		return NULL;
+	}
+
+	/*
+	 * Resize tuple if needed
+	 */
+	if (newsize != IndexTupleSize(itup))
+	{
+		itup = repalloc(itup, newsize);
+
+		/* set new size in tuple header */
+		itup->t_info &= ~INDEX_SIZE_MASK;
+		itup->t_info |= newsize;
+	}
+
+	/*
+	 * Copy in the posting list, if provided
+	 */
+	if (nipd > 0)
+	{
+		char *ptr = GinGetPosting(itup);
+		memcpy(ptr, data, dataSize);
+	}
+
+	/*
+	 * Insert category byte, if needed
+	 */
+	if (category != GIN_CAT_NORM_KEY)
+	{
+		Assert(IndexTupleHasNulls(itup));
+		GinSetNullCategory(itup, ginstate, category);
+	}
+	return itup;
 }
 
 /*
  * fills WAL record for vacuum leaf page
  */
 static void
-xlogVacuumPage(Relation index, Buffer buffer)
+xlogVacuumPage(Relation index, Buffer buffer, OffsetNumber attrnum, GinState *ginstate)
 {
 	Page		page = BufferGetPage(buffer);
 	XLogRecPtr	recptr;
@@ -98,10 +226,20 @@ xlogVacuumPage(Relation index, Buffer buffer)
 
 	if (GinPageIsData(page))
 	{
-		backup = GinDataPageGetData(page);
-		data.nitem = GinPageGetOpaque(page)->maxoff;
+		Form_pg_attribute attr = ginstate->addAttrs[attrnum - 1];
+
+		memcpy(itups, page, BLCKSZ);
+		backup = GinDataPageGetData(itups);
+		data.nitem = GinPageGetOpaque(itups)->maxoff;
+		if (attr)
+		{
+			data.typlen = attr->attlen;
+			data.typalign = attr->attalign;
+			data.typbyval = attr->attbyval;
+			data.typstorage = attr->attstorage;
+		}
 		if (data.nitem)
-			len = MAXALIGN(sizeof(ItemPointerData) * data.nitem);
+			len = MAXALIGN(GinDataPageSize - GinPageGetOpaque(itups)->freespace);
 	}
 	else
 	{
@@ -150,7 +288,7 @@ xlogVacuumPage(Relation index, Buffer buffer)
 }
 
 static bool
-ginVacuumPostingTreeLeaves(GinVacuumState *gvs, BlockNumber blkno, bool isRoot, Buffer *rootBuffer)
+ginVacuumPostingTreeLeaves(GinVacuumState *gvs, OffsetNumber attnum, BlockNumber blkno, bool isRoot, Buffer *rootBuffer)
 {
 	Buffer		buffer;
 	Page		page;
@@ -178,10 +316,12 @@ ginVacuumPostingTreeLeaves(GinVacuumState *gvs, BlockNumber blkno, bool isRoot, 
 	{
 		OffsetNumber newMaxOff,
 					oldMaxOff = GinPageGetOpaque(page)->maxoff;
-		ItemPointerData *cleaned = NULL;
+		Pointer cleaned = NULL;
+		Size newSize;
 
-		newMaxOff = ginVacuumPostingList(gvs,
-				(ItemPointer) GinDataPageGetData(page), oldMaxOff, &cleaned);
+		newMaxOff = ginVacuumPostingList(gvs, attnum,
+				GinDataPageGetData(page), oldMaxOff, &cleaned,
+				GinDataPageSize - GinPageGetOpaque(page)->freespace, &newSize);
 
 		/* saves changes about deleted tuple ... */
 		if (oldMaxOff != newMaxOff)
@@ -189,12 +329,14 @@ ginVacuumPostingTreeLeaves(GinVacuumState *gvs, BlockNumber blkno, bool isRoot, 
 			START_CRIT_SECTION();
 
 			if (newMaxOff > 0)
-				memcpy(GinDataPageGetData(page), cleaned, sizeof(ItemPointerData) * newMaxOff);
+				memcpy(GinDataPageGetData(page), cleaned, newSize);
+
 			pfree(cleaned);
 			GinPageGetOpaque(page)->maxoff = newMaxOff;
+			updateItemIndexes(page, attnum, &gvs->ginstate);
 
 			MarkBufferDirty(buffer);
-			xlogVacuumPage(gvs->index, buffer);
+			xlogVacuumPage(gvs->index, buffer, attnum, &gvs->ginstate);
 
 			END_CRIT_SECTION();
 
@@ -212,7 +354,7 @@ ginVacuumPostingTreeLeaves(GinVacuumState *gvs, BlockNumber blkno, bool isRoot, 
 		{
 			PostingItem *pitem = (PostingItem *) GinDataPageGetItem(page, i);
 
-			if (ginVacuumPostingTreeLeaves(gvs, PostingItemGetBlockNumber(pitem), FALSE, NULL))
+			if (ginVacuumPostingTreeLeaves(gvs, attnum, PostingItemGetBlockNumber(pitem), FALSE, NULL))
 				isChildHasVoid = TRUE;
 		}
 
@@ -445,14 +587,14 @@ ginScanToDelete(GinVacuumState *gvs, BlockNumber blkno, bool isRoot, DataPageDel
 }
 
 static void
-ginVacuumPostingTree(GinVacuumState *gvs, BlockNumber rootBlkno)
+ginVacuumPostingTree(GinVacuumState *gvs, OffsetNumber attnum, BlockNumber rootBlkno)
 {
 	Buffer		rootBuffer = InvalidBuffer;
 	DataPageDeleteStack root,
 			   *ptr,
 			   *tmp;
 
-	if (ginVacuumPostingTreeLeaves(gvs, rootBlkno, TRUE, &rootBuffer) == FALSE)
+	if (ginVacuumPostingTreeLeaves(gvs, attnum, rootBlkno, TRUE, &rootBuffer) == FALSE)
 	{
 		Assert(rootBuffer == InvalidBuffer);
 		return;
@@ -483,7 +625,7 @@ ginVacuumPostingTree(GinVacuumState *gvs, BlockNumber rootBlkno)
  * then page is copied into temporary one.
  */
 static Page
-ginVacuumEntryPage(GinVacuumState *gvs, Buffer buffer, BlockNumber *roots, uint32 *nroot)
+ginVacuumEntryPage(GinVacuumState *gvs, Buffer buffer, BlockNumber *roots, OffsetNumber *attnums, uint32 *nroot)
 {
 	Page		origpage = BufferGetPage(buffer),
 				tmppage;
@@ -505,6 +647,7 @@ ginVacuumEntryPage(GinVacuumState *gvs, Buffer buffer, BlockNumber *roots, uint3
 			 * vacuum it just now due to risk of deadlocks with scans/inserts
 			 */
 			roots[*nroot] = GinGetDownlink(itup);
+			attnums[*nroot] = gintuple_get_attrnum(&gvs->ginstate, itup);
 			(*nroot)++;
 		}
 		else if (GinGetNPosting(itup) > 0)
@@ -513,8 +656,13 @@ ginVacuumEntryPage(GinVacuumState *gvs, Buffer buffer, BlockNumber *roots, uint3
 			 * if we already create temporary page, we will make changes in
 			 * place
 			 */
-			ItemPointerData *cleaned = (tmppage == origpage) ? NULL : GinGetPosting(itup);
-			uint32		newN = ginVacuumPostingList(gvs, GinGetPosting(itup), GinGetNPosting(itup), &cleaned);
+			Size cleanedSize;
+			Pointer cleaned = NULL;
+			uint32		newN =
+				ginVacuumPostingList(gvs, gintuple_get_attrnum(&gvs->ginstate, itup),
+					GinGetPosting(itup), GinGetNPosting(itup), &cleaned,
+					IndexTupleSize(itup) - GinGetPostingOffset(itup),
+					&cleanedSize);
 
 			if (GinGetNPosting(itup) != newN)
 			{
@@ -535,23 +683,16 @@ ginVacuumEntryPage(GinVacuumState *gvs, Buffer buffer, BlockNumber *roots, uint3
 					 */
 					tmppage = PageGetTempPageCopy(origpage);
 
-					if (newN > 0)
-					{
-						Size		pos = ((char *) GinGetPosting(itup)) - ((char *) origpage);
-
-						memcpy(tmppage + pos, cleaned, sizeof(ItemPointerData) * newN);
-					}
-
-					pfree(cleaned);
-
 					/* set itup pointer to new page */
 					itup = (IndexTuple) PageGetItem(tmppage, PageGetItemId(tmppage, i));
 				}
 
 				attnum = gintuple_get_attrnum(&gvs->ginstate, itup);
 				key = gintuple_get_key(&gvs->ginstate, itup, &category);
+				/* FIXME */
 				itup = GinFormTuple(&gvs->ginstate, attnum, key, category,
-									GinGetPosting(itup), newN, true);
+									cleaned, cleanedSize, newN, true);
+				pfree(cleaned);
 				PageIndexTupleDelete(tmppage, i);
 
 				if (PageAddItem(tmppage, (Item) itup, IndexTupleSize(itup), i, false, false) != i)
@@ -578,6 +719,7 @@ ginbulkdelete(PG_FUNCTION_ARGS)
 	GinVacuumState gvs;
 	Buffer		buffer;
 	BlockNumber rootOfPostingTree[BLCKSZ / (sizeof(IndexTupleData) + sizeof(ItemId))];
+	OffsetNumber attnumOfPostingTree[BLCKSZ / (sizeof(IndexTupleData) + sizeof(ItemId))];
 	uint32		nRoot;
 
 	gvs.index = index;
@@ -646,7 +788,7 @@ ginbulkdelete(PG_FUNCTION_ARGS)
 
 		Assert(!GinPageIsData(page));
 
-		resPage = ginVacuumEntryPage(&gvs, buffer, rootOfPostingTree, &nRoot);
+		resPage = ginVacuumEntryPage(&gvs, buffer, rootOfPostingTree, attnumOfPostingTree, &nRoot);
 
 		blkno = GinPageGetOpaque(page)->rightlink;
 
@@ -655,7 +797,7 @@ ginbulkdelete(PG_FUNCTION_ARGS)
 			START_CRIT_SECTION();
 			PageRestoreTempPage(resPage, page);
 			MarkBufferDirty(buffer);
-			xlogVacuumPage(gvs.index, buffer);
+			xlogVacuumPage(gvs.index, buffer, InvalidOffsetNumber, &gvs.ginstate);
 			UnlockReleaseBuffer(buffer);
 			END_CRIT_SECTION();
 		}
@@ -668,7 +810,7 @@ ginbulkdelete(PG_FUNCTION_ARGS)
 
 		for (i = 0; i < nRoot; i++)
 		{
-			ginVacuumPostingTree(&gvs, rootOfPostingTree[i]);
+			ginVacuumPostingTree(&gvs, attnumOfPostingTree[i], rootOfPostingTree[i]);
 			vacuum_delay_point();
 		}
 

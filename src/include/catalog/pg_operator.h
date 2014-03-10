@@ -1624,6 +1624,8 @@ DATA(insert OID = 3636 (  "@@"	   PGNSP PGUID b f f 3614	 3615	 16 3637	0	 ts_ma
 DESCR("text search match");
 DATA(insert OID = 3637 (  "@@"	   PGNSP PGUID b f f 3615	 3614	 16 3636	0	 ts_match_qv   tsmatchsel tsmatchjoinsel ));
 DESCR("text search match");
+DATA(insert OID = 3802 (  "><"	   PGNSP PGUID b f f 3614	 3615	 700   0	0	 3177   - - ));
+DESCR("text distance");
 DATA(insert OID = 3660 (  "@@@"    PGNSP PGUID b f f 3614	 3615	 16 3661	0	 ts_match_vq   tsmatchsel tsmatchjoinsel ));
 DESCR("deprecated, use @@ instead");
 DATA(insert OID = 3661 (  "@@@"    PGNSP PGUID b f f 3615	 3614	 16 3660	0	 ts_match_qv   tsmatchsel tsmatchjoinsel ));

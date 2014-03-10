@@ -23,7 +23,7 @@
 #include "storage/indexfsm.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
-
+#include "utils/datum.h"
 
 typedef struct
 {
@@ -42,14 +42,18 @@ typedef struct
  * items[] must be in sorted order with no duplicates.
  */
 static BlockNumber
-createPostingTree(Relation index, ItemPointerData *items, uint32 nitems)
+createPostingTree(GinState *ginstate, OffsetNumber attnum, Relation index,
+	ItemPointerData *items, Datum *addInfo, bool *addInfoIsNull, uint32 nitems)
 {
 	BlockNumber blkno;
 	Buffer		buffer = GinNewBuffer(index);
 	Page		page;
+	int			i;
+	Pointer		ptr;
+	ItemPointerData prev_iptr = {{0,0},0};
+	static char	pageCopy[BLCKSZ];
 
 	/* Assert that the items[] array will fit on one page */
-	Assert(nitems <= GinMaxLeafDataItems);
 
 	START_CRIT_SECTION();
 
@@ -57,8 +61,17 @@ createPostingTree(Relation index, ItemPointerData *items, uint32 nitems)
 	page = BufferGetPage(buffer);
 	blkno = BufferGetBlockNumber(buffer);
 
-	memcpy(GinDataPageGetData(page), items, sizeof(ItemPointerData) * nitems);
 	GinPageGetOpaque(page)->maxoff = nitems;
+	ptr = GinDataPageGetData(page);
+	for (i = 0; i < nitems; i++)
+	{
+		if (i > 0)
+			prev_iptr = items[i - 1];
+		ptr = ginPlaceToDataPageLeaf(ptr, attnum, &items[i], addInfo[i],
+			addInfoIsNull[i], &prev_iptr, ginstate);
+	}
+	Assert(GinDataPageFreeSpacePre(page, ptr) >= 0);
+	updateItemIndexes(page, attnum, ginstate);
 
 	MarkBufferDirty(buffer);
 
@@ -72,14 +85,23 @@ createPostingTree(Relation index, ItemPointerData *items, uint32 nitems)
 		data.blkno = blkno;
 		data.nitem = nitems;
 
+		if (ginstate->addAttrs[attnum - 1])
+		{
+			data.typlen = ginstate->addAttrs[attnum - 1]->attlen;
+			data.typalign = ginstate->addAttrs[attnum - 1]->attalign;
+			data.typbyval = ginstate->addAttrs[attnum - 1]->attbyval;
+			data.typstorage = ginstate->addAttrs[attnum - 1]->attstorage;
+		}
+
 		rdata[0].buffer = InvalidBuffer;
 		rdata[0].data = (char *) &data;
-		rdata[0].len = sizeof(ginxlogCreatePostingTree);
+		rdata[0].len = MAXALIGN(sizeof(ginxlogCreatePostingTree));
 		rdata[0].next = &rdata[1];
 
+		memcpy(pageCopy, page, BLCKSZ);
 		rdata[1].buffer = InvalidBuffer;
-		rdata[1].data = (char *) items;
-		rdata[1].len = sizeof(ItemPointerData) * nitems;
+		rdata[1].data = GinDataPageGetData(pageCopy);
+		rdata[1].len = GinDataPageSize - GinPageGetOpaque(pageCopy)->freespace;
 		rdata[1].next = NULL;
 
 		recptr = XLogInsert(RM_GIN_ID, XLOG_GIN_CREATE_PTREE, rdata);
@@ -93,6 +115,145 @@ createPostingTree(Relation index, ItemPointerData *items, uint32 nitems)
 	return blkno;
 }
 
+/*
+ * Form a tuple for entry tree.
+ *
+ * If the tuple would be too big to be stored, function throws a suitable
+ * error if errorTooBig is TRUE, or returns NULL if errorTooBig is FALSE.
+ *
+ * See src/backend/access/gin/README for a description of the index tuple
+ * format that is being built here.  We build on the assumption that we
+ * are making a leaf-level key entry containing a posting list of nipd items.
+ * If the caller is actually trying to make a posting-tree entry, non-leaf
+ * entry, or pending-list entry, it should pass nipd = 0 and then overwrite
+ * the t_tid fields as necessary.  In any case, ipd can be NULL to skip
+ * copying any itempointers into the posting list; the caller is responsible
+ * for filling the posting list afterwards, if ipd = NULL and nipd > 0.
+ */
+static IndexTuple
+GinFormTuple(GinState *ginstate,
+			 OffsetNumber attnum, Datum key, GinNullCategory category,
+			 ItemPointerData *ipd,
+			 Datum *addInfo,
+			 bool *addInfoIsNull,
+			 uint32 nipd,
+			 bool errorTooBig)
+{
+	Datum		datums[3];
+	bool		isnull[3];
+	IndexTuple	itup;
+	uint32		newsize;
+	int			i;
+	ItemPointerData nullItemPointer = {{0,0},0};
+
+	/* Build the basic tuple: optional column number, plus key datum */
+	if (ginstate->oneCol)
+	{
+		datums[0] = key;
+		isnull[0] = (category != GIN_CAT_NORM_KEY);
+		isnull[1] = true;
+	}
+	else
+	{
+		datums[0] = UInt16GetDatum(attnum);
+		isnull[0] = false;
+		datums[1] = key;
+		isnull[1] = (category != GIN_CAT_NORM_KEY);
+		isnull[2] = true;
+	}
+
+	itup = index_form_tuple(ginstate->tupdesc[attnum - 1], datums, isnull);
+
+	/*
+	 * Determine and store offset to the posting list, making sure there is
+	 * room for the category byte if needed.
+	 *
+	 * Note: because index_form_tuple MAXALIGNs the tuple size, there may well
+	 * be some wasted pad space.  Is it worth recomputing the data length to
+	 * prevent that?  That would also allow us to Assert that the real data
+	 * doesn't overlap the GinNullCategory byte, which this code currently
+	 * takes on faith.
+	 */
+	newsize = IndexTupleSize(itup);
+
+	GinSetPostingOffset(itup, newsize);
+
+	GinSetNPosting(itup, nipd);
+
+	/*
+	 * Add space needed for posting list, if any.  Then check that the tuple
+	 * won't be too big to store.
+	 */
+
+	if (nipd > 0)
+	{
+		newsize = ginCheckPlaceToDataPageLeaf(attnum, &ipd[0], addInfo[0],
+			addInfoIsNull[0], &nullItemPointer, ginstate, newsize);
+		for (i = 1; i < nipd; i++)
+		{
+			newsize = ginCheckPlaceToDataPageLeaf(attnum, &ipd[i], addInfo[i],
+							addInfoIsNull[i], &ipd[i - 1], ginstate, newsize);
+		}
+	}
+
+	if (category != GIN_CAT_NORM_KEY)
+	{
+		Assert(IndexTupleHasNulls(itup));
+		newsize = newsize + sizeof(GinNullCategory);
+	}
+	newsize = MAXALIGN(newsize);
+
+	if (newsize > Min(INDEX_SIZE_MASK, GinMaxItemSize))
+	{
+		if (errorTooBig)
+			ereport(ERROR,
+					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+			errmsg("index row size %lu exceeds maximum %lu for index \"%s\"",
+				   (unsigned long) newsize,
+				   (unsigned long) Min(INDEX_SIZE_MASK,
+									   GinMaxItemSize),
+				   RelationGetRelationName(ginstate->index))));
+		pfree(itup);
+		return NULL;
+	}
+
+	/*
+	 * Resize tuple if needed
+	 */
+	if (newsize != IndexTupleSize(itup))
+	{
+		itup = repalloc(itup, newsize);
+
+		/* set new size in tuple header */
+		itup->t_info &= ~INDEX_SIZE_MASK;
+		itup->t_info |= newsize;
+	}
+
+	/*
+	 * Copy in the posting list, if provided
+	 */
+	if (nipd > 0)
+	{
+		char *ptr = GinGetPosting(itup);
+		ptr = ginPlaceToDataPageLeaf(ptr, attnum, &ipd[0], addInfo[0],
+								addInfoIsNull[0], &nullItemPointer, ginstate);
+		for (i = 1; i < nipd; i++)
+		{
+			ptr = ginPlaceToDataPageLeaf(ptr, attnum, &ipd[i], addInfo[i],
+										addInfoIsNull[i], &ipd[i-1], ginstate);
+		}
+	}
+
+	/*
+	 * Insert category byte, if needed
+	 */
+	if (category != GIN_CAT_NORM_KEY)
+	{
+		Assert(IndexTupleHasNulls(itup));
+		GinSetNullCategory(itup, ginstate, category);
+	}
+	return itup;
+}
 
 /*
  * Adds array of item pointers to tuple's posting list, or
@@ -104,38 +265,49 @@ createPostingTree(Relation index, ItemPointerData *items, uint32 nitems)
 static IndexTuple
 addItemPointersToLeafTuple(GinState *ginstate,
 						   IndexTuple old,
-						   ItemPointerData *items, uint32 nitem,
+						   ItemPointerData *items, Datum *addInfo,
+						   bool *addInfoIsNull, uint32 nitem,
 						   GinStatsData *buildStats)
 {
 	OffsetNumber attnum;
 	Datum		key;
 	GinNullCategory category;
 	IndexTuple	res;
+	Datum		*oldAddInfo, *newAddInfo;
+	bool		*oldAddInfoIsNull, *newAddInfoIsNull;
+	ItemPointerData *newItems, *oldItems;
+	int			oldNPosting, newNPosting;
 
 	Assert(!GinIsPostingTree(old));
 
 	attnum = gintuple_get_attrnum(ginstate, old);
 	key = gintuple_get_key(ginstate, old, &category);
 
+	oldNPosting = GinGetNPosting(old);
+
+	oldItems = (ItemPointerData *)palloc(sizeof(ItemPointerData) * oldNPosting);
+	oldAddInfo = (Datum *)palloc(sizeof(Datum) * oldNPosting);
+	oldAddInfoIsNull = (bool *)palloc(sizeof(bool) * oldNPosting);
+
+	newNPosting = oldNPosting + nitem;
+
+	newItems = (ItemPointerData *)palloc(sizeof(ItemPointerData) * newNPosting);
+	newAddInfo = (Datum *)palloc(sizeof(Datum) * newNPosting);
+	newAddInfoIsNull = (bool *)palloc(sizeof(bool) * newNPosting);
+
+	ginReadTuple(ginstate, attnum, old, oldItems, oldAddInfo, oldAddInfoIsNull);
+
+	newNPosting = ginMergeItemPointers(newItems, newAddInfo, newAddInfoIsNull,
+		items, addInfo, addInfoIsNull, nitem,
+		oldItems, oldAddInfo, oldAddInfoIsNull, oldNPosting);
+
+
 	/* try to build tuple with room for all the items */
 	res = GinFormTuple(ginstate, attnum, key, category,
-					   NULL, nitem + GinGetNPosting(old),
+					   newItems, newAddInfo, newAddInfoIsNull, newNPosting,
 					   false);
 
-	if (res)
-	{
-		/* good, small enough */
-		uint32		newnitem;
-
-		/* fill in the posting list with union of old and new TIDs */
-		newnitem = ginMergeItemPointers(GinGetPosting(res),
-										GinGetPosting(old),
-										GinGetNPosting(old),
-										items, nitem);
-		/* merge might have eliminated some duplicate items */
-		GinShortenTuple(res, newnitem);
-	}
-	else
+	if (!res)
 	{
 		/* posting list would be too big, convert to posting tree */
 		BlockNumber postingRoot;
@@ -146,24 +318,28 @@ addItemPointersToLeafTuple(GinState *ginstate,
 		 * surely small enough to fit on one posting-tree page, and should
 		 * already be in order with no duplicates.
 		 */
-		postingRoot = createPostingTree(ginstate->index,
-										GinGetPosting(old),
-										GinGetNPosting(old));
+		postingRoot = createPostingTree(ginstate,
+										attnum,
+										ginstate->index,
+										oldItems,
+										oldAddInfo,
+										oldAddInfoIsNull,
+										oldNPosting);
 
 		/* During index build, count the newly-added data page */
 		if (buildStats)
 			buildStats->nDataPages++;
 
 		/* Now insert the TIDs-to-be-added into the posting tree */
-		gdi = ginPrepareScanPostingTree(ginstate->index, postingRoot, FALSE);
+		gdi = ginPrepareScanPostingTree(ginstate->index, postingRoot, FALSE, attnum, ginstate);
 		gdi->btree.isBuild = (buildStats != NULL);
 
-		ginInsertItemPointers(gdi, items, nitem, buildStats);
+		ginInsertItemPointers(ginstate, attnum, gdi, items, addInfo, addInfoIsNull, nitem, buildStats);
 
 		pfree(gdi);
 
 		/* And build a new posting-tree-only result tuple */
-		res = GinFormTuple(ginstate, attnum, key, category, NULL, 0, true);
+		res = GinFormTuple(ginstate, attnum, key, category, NULL, NULL, NULL, 0, true);
 		GinSetPostingTree(res, postingRoot);
 	}
 
@@ -181,49 +357,73 @@ addItemPointersToLeafTuple(GinState *ginstate,
 static IndexTuple
 buildFreshLeafTuple(GinState *ginstate,
 					OffsetNumber attnum, Datum key, GinNullCategory category,
-					ItemPointerData *items, uint32 nitem,
+					ItemPointerData *items, Datum *addInfo,
+					bool *addInfoIsNull, uint32 nitem,
 					GinStatsData *buildStats)
 {
 	IndexTuple	res;
 
 	/* try to build tuple with room for all the items */
 	res = GinFormTuple(ginstate, attnum, key, category,
-					   items, nitem, false);
+					   items, addInfo, addInfoIsNull, nitem, false);
 
 	if (!res)
 	{
 		/* posting list would be too big, build posting tree */
 		BlockNumber postingRoot;
+		ItemPointerData prevIptr = {{0,0},0};
+		Size size = 0;
+		int itemsCount = 0;
+
+		do
+		{
+			size = ginCheckPlaceToDataPageLeaf(attnum, &items[itemsCount],
+				addInfo[itemsCount], addInfoIsNull[itemsCount], &prevIptr,
+				ginstate, size);
+			prevIptr = items[itemsCount];
+			itemsCount++;
+		}
+		while (itemsCount < nitem && size < GinDataPageSize);
+		itemsCount--;
+
 
 		/*
 		 * Build posting-tree-only result tuple.  We do this first so as to
 		 * fail quickly if the key is too big.
 		 */
-		res = GinFormTuple(ginstate, attnum, key, category, NULL, 0, true);
+		res = GinFormTuple(ginstate, attnum, key, category, NULL, NULL, NULL, 0, true);
 
 		/*
 		 * Initialize posting tree with as many TIDs as will fit on the first
 		 * page.
 		 */
-		postingRoot = createPostingTree(ginstate->index,
+		postingRoot = createPostingTree(ginstate,
+										attnum,
+										ginstate->index,
 										items,
-										Min(nitem, GinMaxLeafDataItems));
+										addInfo,
+										addInfoIsNull,
+										itemsCount);
 
 		/* During index build, count the newly-added data page */
 		if (buildStats)
 			buildStats->nDataPages++;
 
 		/* Add any remaining TIDs to the posting tree */
-		if (nitem > GinMaxLeafDataItems)
+		if (nitem > itemsCount)
 		{
 			GinPostingTreeScan *gdi;
 
-			gdi = ginPrepareScanPostingTree(ginstate->index, postingRoot, FALSE);
+			gdi = ginPrepareScanPostingTree(ginstate->index, postingRoot, FALSE, attnum, ginstate);
 			gdi->btree.isBuild = (buildStats != NULL);
 
-			ginInsertItemPointers(gdi,
-								  items + GinMaxLeafDataItems,
-								  nitem - GinMaxLeafDataItems,
+			ginInsertItemPointers(ginstate,
+								  attnum,
+								  gdi,
+								  items + itemsCount,
+								  addInfo + itemsCount,
+								  addInfoIsNull + itemsCount,
+								  nitem - itemsCount,
 								  buildStats);
 
 			pfree(gdi);
@@ -246,13 +446,28 @@ buildFreshLeafTuple(GinState *ginstate,
 void
 ginEntryInsert(GinState *ginstate,
 			   OffsetNumber attnum, Datum key, GinNullCategory category,
-			   ItemPointerData *items, uint32 nitem,
+			   ItemPointerData *items,
+			   Datum *addInfo,
+			   bool *addInfoIsNull,
+			   uint32 nitem,
 			   GinStatsData *buildStats)
 {
 	GinBtreeData btree;
 	GinBtreeStack *stack;
 	IndexTuple	itup;
 	Page		page;
+	int i;
+
+	if (!addInfoIsNull || !addInfo)
+	{
+		addInfoIsNull = (bool *)palloc(sizeof(bool) * nitem);
+		addInfo = (Datum *)palloc(sizeof(Datum) * nitem);
+		for (i = 0; i < nitem; i++)
+		{
+			addInfoIsNull[i] = true;
+			addInfo[i] = (Datum) 0;
+		}
+	}
 
 	/* During index build, count the to-be-inserted entry */
 	if (buildStats)
@@ -279,9 +494,9 @@ ginEntryInsert(GinState *ginstate,
 			freeGinBtreeStack(stack);
 
 			/* insert into posting tree */
-			gdi = ginPrepareScanPostingTree(ginstate->index, rootPostingTree, FALSE);
+			gdi = ginPrepareScanPostingTree(ginstate->index, rootPostingTree, FALSE, attnum, ginstate);
 			gdi->btree.isBuild = (buildStats != NULL);
-			ginInsertItemPointers(gdi, items, nitem, buildStats);
+			ginInsertItemPointers(ginstate, attnum, gdi, items, addInfo, addInfoIsNull, nitem, buildStats);
 			pfree(gdi);
 
 			return;
@@ -289,7 +504,7 @@ ginEntryInsert(GinState *ginstate,
 
 		/* modify an existing leaf entry */
 		itup = addItemPointersToLeafTuple(ginstate, itup,
-										  items, nitem, buildStats);
+										  items, addInfo, addInfoIsNull, nitem, buildStats);
 
 		btree.isDelete = TRUE;
 	}
@@ -297,7 +512,7 @@ ginEntryInsert(GinState *ginstate,
 	{
 		/* no match, so construct a new leaf entry */
 		itup = buildFreshLeafTuple(ginstate, attnum, key, category,
-								   items, nitem, buildStats);
+								   items, addInfo, addInfoIsNull, nitem, buildStats);
 	}
 
 	/* Insert the new or modified leaf tuple */
@@ -321,15 +536,27 @@ ginHeapTupleBulkInsert(GinBuildState *buildstate, OffsetNumber attnum,
 	GinNullCategory *categories;
 	int32		nentries;
 	MemoryContext oldCtx;
+	Datum	   *addInfo;
+	bool	   *addInfoIsNull;
+	int			i;
+	Form_pg_attribute attr = buildstate->ginstate.addAttrs[attnum - 1];
 
 	oldCtx = MemoryContextSwitchTo(buildstate->funcCtx);
 	entries = ginExtractEntries(buildstate->accum.ginstate, attnum,
 								value, isNull,
-								&nentries, &categories);
+								&nentries, &categories,
+								&addInfo, &addInfoIsNull);
 	MemoryContextSwitchTo(oldCtx);
+	for (i = 0; i < nentries; i++)
+	{
+		if (!addInfoIsNull[i])
+		{
+			addInfo[i] = datumCopy(addInfo[i], attr->attbyval, attr->attlen);
+		}
+	}
 
 	ginInsertBAEntries(&buildstate->accum, heapptr, attnum,
-					   entries, categories, nentries);
+					   entries, addInfo, addInfoIsNull, categories, nentries);
 
 	buildstate->indtuples += nentries;
 
@@ -354,7 +581,7 @@ ginBuildCallback(Relation index, HeapTuple htup, Datum *values,
 	/* If we've maxed out our available memory, dump everything to the index */
 	if (buildstate->accum.allocatedMemory >= maintenance_work_mem * 1024L)
 	{
-		ItemPointerData *list;
+		GinEntryAccumulatorItem *list;
 		Datum		key;
 		GinNullCategory category;
 		uint32		nlist;
@@ -364,10 +591,23 @@ ginBuildCallback(Relation index, HeapTuple htup, Datum *values,
 		while ((list = ginGetBAEntry(&buildstate->accum,
 								  &attnum, &key, &category, &nlist)) != NULL)
 		{
+			ItemPointerData *iptrs = (ItemPointerData *)palloc(sizeof(ItemPointerData) *nlist);
+			Datum *addInfo = (Datum *)palloc(sizeof(Datum) * nlist);
+			bool *addInfoIsNull = (bool *)palloc(sizeof(bool) * nlist);
+			int i;
+
+			for (i = 0; i < nlist; i++)
+			{
+				iptrs[i] = list[i].iptr;
+				addInfo[i] = list[i].addInfo;
+				addInfoIsNull[i] = list[i].addInfoIsNull;
+			}
+
+
 			/* there could be many entries, so be willing to abort here */
 			CHECK_FOR_INTERRUPTS();
 			ginEntryInsert(&buildstate->ginstate, attnum, key, category,
-						   list, nlist, &buildstate->buildStats);
+						   iptrs, addInfo, addInfoIsNull, nlist, &buildstate->buildStats);
 		}
 
 		MemoryContextReset(buildstate->tmpCtx);
@@ -388,7 +628,7 @@ ginbuild(PG_FUNCTION_ARGS)
 	GinBuildState buildstate;
 	Buffer		RootBuffer,
 				MetaBuffer;
-	ItemPointerData *list;
+	GinEntryAccumulatorItem *list;
 	Datum		key;
 	GinNullCategory category;
 	uint32		nlist;
@@ -474,10 +714,22 @@ ginbuild(PG_FUNCTION_ARGS)
 	while ((list = ginGetBAEntry(&buildstate.accum,
 								 &attnum, &key, &category, &nlist)) != NULL)
 	{
+		ItemPointerData *iptrs = (ItemPointerData *)palloc(sizeof(ItemPointerData) *nlist);
+		Datum *addInfo = (Datum *)palloc(sizeof(Datum) * nlist);
+		bool *addInfoIsNull = (bool *)palloc(sizeof(bool) * nlist);
+		int i;
+
+		for (i = 0; i < nlist; i++)
+		{
+			iptrs[i] = list[i].iptr;
+			addInfo[i] = list[i].addInfo;
+			addInfoIsNull[i] = list[i].addInfoIsNull;
+		}
+
 		/* there could be many entries, so be willing to abort here */
 		CHECK_FOR_INTERRUPTS();
 		ginEntryInsert(&buildstate.ginstate, attnum, key, category,
-					   list, nlist, &buildstate.buildStats);
+					   iptrs, addInfo, addInfoIsNull, nlist, &buildstate.buildStats);
 	}
 	MemoryContextSwitchTo(oldCtx);
 
@@ -548,13 +800,15 @@ ginHeapTupleInsert(GinState *ginstate, OffsetNumber attnum,
 	GinNullCategory *categories;
 	int32		i,
 				nentries;
+	Datum	   *addInfo;
+	bool	   *addInfoIsNull;
 
 	entries = ginExtractEntries(ginstate, attnum, value, isNull,
-								&nentries, &categories);
+								&nentries, &categories, &addInfo, &addInfoIsNull);
 
 	for (i = 0; i < nentries; i++)
 		ginEntryInsert(ginstate, attnum, entries[i], categories[i],
-					   item, 1, NULL);
+					   item, &addInfo[i], &addInfoIsNull[i], 1, NULL);
 }
 
 Datum

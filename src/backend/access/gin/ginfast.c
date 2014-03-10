@@ -19,10 +19,12 @@
 #include "postgres.h"
 
 #include "access/gin_private.h"
+#include "access/htup_details.h"
 #include "commands/vacuum.h"
 #include "miscadmin.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
+#include "utils/datum.h"
 
 
 #define GIN_PAGE_FREESIZE \
@@ -30,10 +32,12 @@
 
 typedef struct KeyArray
 {
-	Datum	   *keys;			/* expansible array */
-	GinNullCategory *categories;	/* another expansible array */
-	int32		nvalues;		/* current number of valid entries */
-	int32		maxvalues;		/* allocated size of arrays */
+	Datum	   *keys;			 /* expansible array of keys */
+	Datum	   *addInfo;		 /* expansible array of additional information */
+	bool	   *addInfoIsNull;   /* expansible array of  NULL flag of additional information */
+	GinNullCategory *categories; /* another expansible array */
+	int32		nvalues;		 /* current number of valid entries */
+	int32		maxvalues;		 /* allocated size of arrays */
 } KeyArray;
 
 
@@ -437,6 +441,95 @@ ginHeapTupleFastInsert(GinState *ginstate, GinTupleCollector *collector)
 		ginInsertCleanup(ginstate, false, NULL);
 }
 
+static IndexTuple
+GinFastFormTuple(GinState *ginstate,
+			 OffsetNumber attnum, Datum key, GinNullCategory category,
+			 Datum addInfo,
+			 bool addInfoIsNull)
+{
+	Datum		datums[3];
+	bool		isnull[3];
+	IndexTuple	itup;
+	uint32		newsize;
+
+	/* Build the basic tuple: optional column number, plus key datum */
+
+	if (ginstate->oneCol)
+	{
+		datums[0] = key;
+		isnull[0] = (category != GIN_CAT_NORM_KEY);
+		datums[1] = addInfo;
+		isnull[1] = addInfoIsNull;
+	}
+	else
+	{
+		datums[0] = UInt16GetDatum(attnum);
+		isnull[0] = false;
+		datums[1] = key;
+		isnull[1] = (category != GIN_CAT_NORM_KEY);
+		datums[2] = addInfo;
+		isnull[2] = addInfoIsNull;
+	}
+
+	itup = index_form_tuple(ginstate->tupdesc[attnum - 1], datums, isnull);
+
+	/*
+	 * Place category to the last byte of index tuple extending it's size if
+	 * needed
+	 */
+	newsize = IndexTupleSize(itup);
+
+	if (category != GIN_CAT_NORM_KEY)
+	{
+		uint32		minsize;
+
+		Assert(IndexTupleHasNulls(itup));
+		minsize = IndexInfoFindDataOffset(itup->t_info) +
+			heap_compute_data_size(ginstate->tupdesc[attnum - 1], datums, isnull) +
+			sizeof(GinNullCategory);
+		newsize = Max(newsize, minsize);
+	}
+
+	newsize = MAXALIGN(newsize);
+
+	if (newsize > Min(INDEX_SIZE_MASK, GinMaxItemSize))
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+		errmsg("index row size %lu exceeds maximum %lu for index \"%s\"",
+			   (unsigned long) newsize,
+			   (unsigned long) Min(INDEX_SIZE_MASK,
+								   GinMaxItemSize),
+			   RelationGetRelationName(ginstate->index))));
+		pfree(itup);
+		return NULL;
+	}
+
+	/*
+	 * Resize tuple if needed
+	 */
+	if (newsize != IndexTupleSize(itup))
+	{
+		itup = repalloc(itup, newsize);
+
+		/* set new size in tuple header */
+		itup->t_info &= ~INDEX_SIZE_MASK;
+		itup->t_info |= newsize;
+	}
+
+	/*
+	 * Insert category byte, if needed
+	 */
+	if (category != GIN_CAT_NORM_KEY)
+	{
+		Assert(IndexTupleHasNulls(itup));
+		GinSetNullCategory(itup, ginstate, category);
+	}
+
+	return itup;
+}
+
+
 /*
  * Create temporary index tuples for a single indexable item (one index column
  * for the heap tuple specified by ht_ctid), and append them to the array
@@ -455,12 +548,14 @@ ginHeapTupleFastCollect(GinState *ginstate,
 	GinNullCategory *categories;
 	int32		i,
 				nentries;
+	Datum	   *addInfo;
+	bool	   *addInfoIsNull;
 
 	/*
 	 * Extract the key values that need to be inserted in the index
 	 */
 	entries = ginExtractEntries(ginstate, attnum, value, isNull,
-								&nentries, &categories);
+								&nentries, &categories, &addInfo, &addInfoIsNull);
 
 	/*
 	 * Allocate/reallocate memory for storing collected tuples
@@ -486,8 +581,7 @@ ginHeapTupleFastCollect(GinState *ginstate,
 	{
 		IndexTuple	itup;
 
-		itup = GinFormTuple(ginstate, attnum, entries[i], categories[i],
-							NULL, 0, true);
+		itup = GinFastFormTuple(ginstate, attnum, entries[i], categories[i], addInfo[i], addInfoIsNull[i]);
 		itup->t_tid = *ht_ctid;
 		collector->tuples[collector->ntuples++] = itup;
 		collector->sumsize += IndexTupleSize(itup);
@@ -613,6 +707,8 @@ static void
 initKeyArray(KeyArray *keys, int32 maxvalues)
 {
 	keys->keys = (Datum *) palloc(sizeof(Datum) * maxvalues);
+	keys->addInfo = (Datum *) palloc(sizeof(Datum) * maxvalues);
+	keys->addInfoIsNull = (bool *) palloc(sizeof(bool) * maxvalues);
 	keys->categories = (GinNullCategory *)
 		palloc(sizeof(GinNullCategory) * maxvalues);
 	keys->nvalues = 0;
@@ -621,19 +717,25 @@ initKeyArray(KeyArray *keys, int32 maxvalues)
 
 /* Add datum to KeyArray, resizing if needed */
 static void
-addDatum(KeyArray *keys, Datum datum, GinNullCategory category)
+addDatum(KeyArray *keys, Datum datum, Datum addInfo, bool addInfoIsNull, GinNullCategory category)
 {
 	if (keys->nvalues >= keys->maxvalues)
 	{
 		keys->maxvalues *= 2;
 		keys->keys = (Datum *)
 			repalloc(keys->keys, sizeof(Datum) * keys->maxvalues);
+		keys->addInfo = (Datum *)
+			repalloc(keys->addInfo, sizeof(Datum) * keys->maxvalues);
+		keys->addInfoIsNull = (bool *)
+			repalloc(keys->addInfoIsNull, sizeof(bool) * keys->maxvalues);
 		keys->categories = (GinNullCategory *)
 			repalloc(keys->categories, sizeof(GinNullCategory) * keys->maxvalues);
 	}
 
 	keys->keys[keys->nvalues] = datum;
 	keys->categories[keys->nvalues] = category;
+	keys->addInfo[keys->nvalues] = addInfo;
+	keys->addInfoIsNull[keys->nvalues] = addInfoIsNull;
 	keys->nvalues++;
 }
 
@@ -667,11 +769,24 @@ processPendingPage(BuildAccumulator *accum, KeyArray *ka,
 	{
 		IndexTuple	itup = (IndexTuple) PageGetItem(page, PageGetItemId(page, i));
 		OffsetNumber curattnum;
-		Datum		curkey;
+		Datum		curkey, addInfo = 0;
+		bool		addInfoIsNull = true;
 		GinNullCategory curcategory;
 
 		/* Check for change of heap TID or attnum */
 		curattnum = gintuple_get_attrnum(accum->ginstate, itup);
+
+		if (OidIsValid(accum->ginstate->addInfoTypeOid[curattnum - 1]))
+		{
+			Form_pg_attribute attr = accum->ginstate->addAttrs[curattnum - 1];
+			if (accum->ginstate->oneCol)
+				addInfo = index_getattr(itup, 2,
+					accum->ginstate->tupdesc[curattnum - 1], &addInfoIsNull);
+			else
+				addInfo = index_getattr(itup, 3,
+					accum->ginstate->tupdesc[curattnum - 1], &addInfoIsNull);
+			addInfo = datumCopy(addInfo, attr->attbyval, attr->attlen);
+		}
 
 		if (!ItemPointerIsValid(&heapptr))
 		{
@@ -687,7 +802,7 @@ processPendingPage(BuildAccumulator *accum, KeyArray *ka,
 			 * and reset ka.
 			 */
 			ginInsertBAEntries(accum, &heapptr, attrnum,
-							   ka->keys, ka->categories, ka->nvalues);
+							   ka->keys, ka->addInfo, ka->addInfoIsNull, ka->categories, ka->nvalues);
 			ka->nvalues = 0;
 			heapptr = itup->t_tid;
 			attrnum = curattnum;
@@ -695,12 +810,12 @@ processPendingPage(BuildAccumulator *accum, KeyArray *ka,
 
 		/* Add key to KeyArray */
 		curkey = gintuple_get_key(accum->ginstate, itup, &curcategory);
-		addDatum(ka, curkey, curcategory);
+		addDatum(ka, curkey, addInfo, addInfoIsNull, curcategory);
 	}
 
 	/* Dump out all remaining keys */
 	ginInsertBAEntries(accum, &heapptr, attrnum,
-					   ka->keys, ka->categories, ka->nvalues);
+					   ka->keys, ka->addInfo, ka->addInfoIsNull, ka->categories, ka->nvalues);
 }
 
 /*
@@ -810,7 +925,7 @@ ginInsertCleanup(GinState *ginstate,
 			(GinPageHasFullRow(page) &&
 			 (accum.allocatedMemory >= maintenance_work_mem * 1024L)))
 		{
-			ItemPointerData *list;
+			GinEntryAccumulatorItem *list;
 			uint32		nlist;
 			Datum		key;
 			GinNullCategory category;
@@ -834,8 +949,19 @@ ginInsertCleanup(GinState *ginstate,
 			while ((list = ginGetBAEntry(&accum,
 								  &attnum, &key, &category, &nlist)) != NULL)
 			{
+				ItemPointerData *iptrs = (ItemPointerData *)palloc(sizeof(ItemPointerData) *nlist);
+				Datum *addInfo = (Datum *)palloc(sizeof(Datum) * nlist);
+				bool *addInfoIsNull = (bool *)palloc(sizeof(bool) * nlist);
+				int i;
+
+				for (i = 0; i < nlist; i++)
+				{
+					iptrs[i] = list[i].iptr;
+					addInfo[i] = list[i].addInfo;
+					addInfoIsNull[i] = list[i].addInfoIsNull;
+				}
 				ginEntryInsert(ginstate, attnum, key, category,
-							   list, nlist, NULL);
+							   iptrs, addInfo, addInfoIsNull, nlist, NULL);
 				if (vac_delay)
 					vacuum_delay_point();
 			}
@@ -870,8 +996,22 @@ ginInsertCleanup(GinState *ginstate,
 				ginBeginBAScan(&accum);
 				while ((list = ginGetBAEntry(&accum,
 								  &attnum, &key, &category, &nlist)) != NULL)
+				{
+					ItemPointerData *iptrs = (ItemPointerData *)palloc(sizeof(ItemPointerData) *nlist);
+					Datum *addInfo = (Datum *)palloc(sizeof(Datum) * nlist);
+					bool *addInfoIsNull = (bool *)palloc(sizeof(bool) * nlist);
+					int i;
+
+					for (i = 0; i < nlist; i++)
+					{
+						iptrs[i] = list[i].iptr;
+						addInfo[i] = list[i].addInfo;
+						addInfoIsNull[i] = list[i].addInfoIsNull;
+					}
+
 					ginEntryInsert(ginstate, attnum, key, category,
-								   list, nlist, NULL);
+								   iptrs, addInfo, addInfoIsNull, nlist, NULL);
+				}
 			}
 
 			/*

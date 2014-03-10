@@ -3932,6 +3932,8 @@ DATA(insert OID = 3064 (  gist_point_distance	PGNSP PGUID 12 1 0 0 0 f f f f t f
 DESCR("GiST support");
 
 /* GIN */
+DATA(insert OID = 3800 (  gingettuple	   PGNSP PGUID 12 1 0 0 0 f f f f t f v 2 0 16 "2281 2281" _null_ _null_ _null_ _null_	gingettuple _null_ _null_ _null_ ));
+DESCR("gin(internal)");
 DATA(insert OID = 2731 (  gingetbitmap	   PGNSP PGUID 12 1 0 0 0 f f f f t f v 2 0 20 "2281 2281" _null_ _null_ _null_ _null_	gingetbitmap _null_ _null_ _null_ ));
 DESCR("gin(internal)");
 DATA(insert OID = 2732 (  gininsert		   PGNSP PGUID 12 1 0 0 0 f f f f t f v 6 0 16 "2281 2281 2281 2281 2281 2281" _null_ _null_ _null_ _null_	gininsert _null_ _null_ _null_ ));
@@ -4272,6 +4274,12 @@ DATA(insert OID = 3657 (  gin_extract_tsquery	PGNSP PGUID 12 1 0 0 0 f f f f t f
 DESCR("GIN tsvector support");
 DATA(insert OID = 3658 (  gin_tsquery_consistent PGNSP PGUID 12 1 0 0 0 f f f f t f i 8 0 16 "2281 21 3615 23 2281 2281 2281 2281" _null_ _null_ _null_ _null_	gin_tsquery_consistent _null_ _null_ _null_ ));
 DESCR("GIN tsvector support");
+DATA(insert OID = 3847 (  gin_tsquery_pre_consistent PGNSP PGUID 12 1 0 0 0 f f f f t f i 8 0 16 "2281 21 3615 23 2281 2281 2281 2281" _null_ _null_ _null_ _null_	gin_tsquery_pre_consistent _null_ _null_ _null_ ));
+DESCR("GIN tsvector support");
+DATA(insert OID = 3801 (  gin_tsquery_distance PGNSP PGUID 12 1 0 0 0 f f f f t f i 9 0 701 "2281 21 3615 23 2281 2281 2281 2281 2281" _null_ _null_ _null_ _null_	gin_tsquery_distance _null_ _null_ _null_ ));
+DESCR("GIN tsvector support");
+DATA(insert OID = 3803 (  gin_tsvector_config	PGNSP PGUID 12 1 0 0 0 f f f f t f i 1 0 2278 "2281" _null_ _null_ _null_ _null_	gin_tsvector_config _null_ _null_ _null_ ));
+DESCR("GIN tsvector support");
 DATA(insert OID = 3724 (  gin_cmp_tslexeme		PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 23 "25 25" _null_ _null_ _null_ _null_ gin_cmp_tslexeme _null_ _null_ _null_ ));
 DESCR("GIN tsvector support");
 DATA(insert OID = 2700 (  gin_cmp_prefix		PGNSP PGUID 12 1 0 0 0 f f f f t f i 4 0 23 "25 25 21 2281" _null_ _null_ _null_ _null_ gin_cmp_prefix _null_ _null_ _null_ ));
@@ -4330,6 +4338,8 @@ DATA(insert OID = 3687 (  tsmatchjoinsel	PGNSP PGUID 12 1 0 0 0 f f f f t f s 5 
 DESCR("join selectivity of tsvector @@ tsquery");
 DATA(insert OID = 3688 (  ts_typanalyze		PGNSP PGUID 12 1 0 0 0 f f f f t f s 1 0 16 "2281" _null_ _null_ _null_ _null_ ts_typanalyze _null_ _null_ _null_ ));
 DESCR("tsvector typanalyze");
+DATA(insert OID = 3838 (  ts_array_typanalyze		PGNSP PGUID 12 1 0 0 0 f f f f t f s 1 0 16 "2281" _null_ _null_ _null_ _null_ ts_array_typanalyze _null_ _null_ _null_ ));
+DESCR("tsvector typanalyze");
 
 DATA(insert OID = 3689 (  ts_stat		PGNSP PGUID 12 10 10000 0 0 f f f f t t v 1 0 2249 "25" "{25,25,23,23}" "{i,o,o,o}" "{query,word,ndoc,nentry}" _null_ ts_stat1 _null_ _null_ _null_ ));
 DESCR("statistics of tsvector column");
@@ -4352,6 +4362,8 @@ DATA(insert OID = 3709 (  ts_rank_cd	PGNSP PGUID 12 1 0 0 0 f f f f t f i 3 0 70
 DESCR("relevance");
 DATA(insert OID = 3710 (  ts_rank_cd	PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 700 "3614 3615" _null_ _null_ _null_ _null_ ts_rankcd_tt _null_ _null_ _null_ ));
 DESCR("relevance");
+DATA(insert OID = 3177 (  ts_distance	PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 700 "3614 3615" _null_ _null_ _null_ _null_ ts_distance _null_ _null_ _null_ ));
+DESCR("implementation of >< operator");
 
 DATA(insert OID = 3713 (  ts_token_type PGNSP PGUID 12 1 16 0 0 f f f f t t i 1 0 2249 "26" "{26,23,25,25}" "{i,o,o,o}" "{parser_oid,tokid,alias,description}" _null_ ts_token_type_byid _null_ _null_ _null_ ));
 DESCR("get parser's token types");

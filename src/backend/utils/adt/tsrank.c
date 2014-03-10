@@ -39,7 +39,7 @@ static float calc_rank_and(float *w, TSVector t, TSQuery q);
 /*
  * Returns a weight of a word collocation
  */
-static float4
+float4
 word_distance(int32 w)
 {
 	if (w > 100)
@@ -149,7 +149,7 @@ compareQueryOperand(const void *a, const void *b, void *arg)
  *
  * Length of the returned array is stored in *size
  */
-static QueryOperand **
+QueryOperand **
 SortAndUniqItems(TSQuery q, int *size)
 {
 	char	   *operand = GETOPERAND(q);
@@ -481,6 +481,20 @@ ts_rank_tt(PG_FUNCTION_ARGS)
 	float		res;
 
 	res = calc_rank(getWeights(NULL), txt, query, DEF_NORM_METHOD);
+
+	PG_FREE_IF_COPY(txt, 0);
+	PG_FREE_IF_COPY(query, 1);
+	PG_RETURN_FLOAT4(res);
+}
+
+Datum
+ts_distance(PG_FUNCTION_ARGS)
+{
+	TSVector	txt = PG_GETARG_TSVECTOR(0);
+	TSQuery		query = PG_GETARG_TSQUERY(1);
+	float		res;
+
+	res = 1.0 / calc_rank(getWeights(NULL), txt, query, DEF_NORM_METHOD);
 
 	PG_FREE_IF_COPY(txt, 0);
 	PG_FREE_IF_COPY(query, 1);

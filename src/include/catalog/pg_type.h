@@ -595,7 +595,8 @@ DATA(insert OID = 3769 ( regdictionary	PGNSP PGUID 4 t b N f t \054 0 0 3770 reg
 DESCR("registered text search dictionary");
 #define REGDICTIONARYOID	3769
 
-DATA(insert OID = 3643 ( _tsvector		PGNSP PGUID -1 f b A f t \054 0 3614 0 array_in array_out array_recv array_send - - array_typanalyze i x f 0 -1 0 0 _null_ _null_ _null_ ));
+DATA(insert OID = 3643 ( _tsvector		PGNSP PGUID -1 f b A f t \054 0 3614 0 array_in array_out array_recv array_send - - ts_array_typanalyze i x f 0 -1 0 0 _null_ _null_ _null_ ));
+#define TSVECTORARRAYOID		3643
 DATA(insert OID = 3644 ( _gtsvector		PGNSP PGUID -1 f b A f t \054 0 3642 0 array_in array_out array_recv array_send - - array_typanalyze i x f 0 -1 0 0 _null_ _null_ _null_ ));
 DATA(insert OID = 3645 ( _tsquery		PGNSP PGUID -1 f b A f t \054 0 3615 0 array_in array_out array_recv array_send - - array_typanalyze i x f 0 -1 0 0 _null_ _null_ _null_ ));
 DATA(insert OID = 3735 ( _regconfig		PGNSP PGUID -1 f b A f t \054 0 3734 0 array_in array_out array_recv array_send - - array_typanalyze i x f 0 -1 0 0 _null_ _null_ _null_ ));

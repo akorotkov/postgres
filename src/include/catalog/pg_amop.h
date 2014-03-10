@@ -690,6 +690,7 @@ DATA(insert (	3655   3614 3615 1 s	3636 783 0 ));
  */
 DATA(insert (	3659   3614 3615 1 s	3636 2742 0 ));
 DATA(insert (	3659   3614 3615 2 s	3660 2742 0 ));
+DATA(insert (	3659   3614 3615 3 o	3802 2742 1970 ));
 
 /*
  * btree tsquery_ops

@@ -112,7 +112,7 @@ tsmatchsel(PG_FUNCTION_ARGS)
 	if (((Const *) other)->consttype == TSQUERYOID)
 	{
 		/* tsvector @@ tsquery or the other way around */
-		Assert(vardata.vartype == TSVECTOROID);
+		Assert(vardata.vartype == TSVECTOROID || vardata.vartype == TSVECTORARRAYOID);
 
 		selec = tsquerysel(&vardata, ((Const *) other)->constvalue);
 	}

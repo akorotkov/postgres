@@ -1065,6 +1065,7 @@ ORDER BY 1, 2, 3;
        2742 |            2 | @>
        2742 |            2 | @@@
        2742 |            3 | <@
+       2742 |            3 | ><
        2742 |            4 | =
        4000 |            1 | <<
        4000 |            1 | ~<~
@@ -1088,7 +1089,7 @@ ORDER BY 1, 2, 3;
        4000 |           15 | >
        4000 |           16 | @>
        4000 |           18 | =
-(62 rows)
+(63 rows)
 
 -- Check that all opclass search operators have selectivity estimators.
 -- This is not absolutely required, but it seems a reasonable thing
@@ -1245,7 +1246,8 @@ WHERE p2.opfmethod = p1.oid AND p3.amprocfamily = p2.oid AND
            p4.amproclefttype = p3.amproclefttype AND
            p4.amprocrighttype = p3.amprocrighttype)
     NOT BETWEEN
-      (CASE WHEN p1.amname IN ('btree', 'gist', 'gin') THEN p1.amsupport - 1
+      (CASE WHEN p1.amname IN ('btree', 'gist') THEN p1.amsupport - 1
+            WHEN p1.amname = 'gin' THEN p1.amsupport - 4
             ELSE p1.amsupport END)
       AND p1.amsupport;
  amname | opfname | amproclefttype | amprocrighttype 
@@ -1272,8 +1274,10 @@ FROM pg_am am JOIN pg_opclass op ON opcmethod = am.oid
          amproclefttype = amprocrighttype AND amproclefttype = opcintype
 WHERE am.amname = 'btree' OR am.amname = 'gist' OR am.amname = 'gin'
 GROUP BY amname, amsupport, opcname, amprocfamily
-HAVING (count(*) != amsupport AND count(*) != amsupport - 1)
-    OR amprocfamily IS NULL;
+HAVING count(*) NOT BETWEEN 
+    (CASE WHEN am.amname IN ('btree', 'gist')THEN am.amsupport - 1
+     WHEN am.amname = 'gin' THEN am.amsupport - 4 ELSE am.amsupport - 1 END)
+    AND amsupport OR amprocfamily IS NULL;
  amname | opcname | count 
 --------+---------+-------
 (0 rows)

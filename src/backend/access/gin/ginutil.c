@@ -42,12 +42,45 @@ initGinState(GinState *state, Relation index)
 
 	for (i = 0; i < origTupdesc->natts; i++)
 	{
+		GinConfig ginConfig;
+
+		ginConfig.addInfoTypeOid = InvalidOid;
+
+		if (index_getprocid(index, i + 1, GIN_CONFIG_PROC) != InvalidOid)
+		{
+			fmgr_info_copy(&(state->configFn[i]),
+						   index_getprocinfo(index, i + 1, GIN_CONFIG_PROC),
+						   CurrentMemoryContext);
+
+			FunctionCall1(&state->configFn[i], PointerGetDatum(&ginConfig));
+		}
+		state->addInfoTypeOid[i] = ginConfig.addInfoTypeOid;
+
 		if (state->oneCol)
-			state->tupdesc[i] = state->origTupdesc;
+		{
+			state->tupdesc[i] = CreateTemplateTupleDesc(
+				OidIsValid(state->addInfoTypeOid[i]) ? 2 : 1, false);
+			TupleDescInitEntry(state->tupdesc[i], (AttrNumber) 1, NULL,
+							   origTupdesc->attrs[i]->atttypid,
+							   origTupdesc->attrs[i]->atttypmod,
+							   origTupdesc->attrs[i]->attndims);
+			TupleDescInitEntryCollation(state->tupdesc[i], (AttrNumber) 1,
+										origTupdesc->attrs[i]->attcollation);
+			if (OidIsValid(state->addInfoTypeOid[i]))
+			{
+				TupleDescInitEntry(state->tupdesc[i], (AttrNumber) 2, NULL,
+											state->addInfoTypeOid[i], -1, 0);
+				state->addAttrs[i] = state->tupdesc[i]->attrs[1];
+			}
+			else
+			{
+				state->addAttrs[i] = NULL;
+			}
+		}
 		else
 		{
-			state->tupdesc[i] = CreateTemplateTupleDesc(2, false);
-
+			state->tupdesc[i] = CreateTemplateTupleDesc(
+				OidIsValid(state->addInfoTypeOid[i]) ? 3 : 2, false);
 			TupleDescInitEntry(state->tupdesc[i], (AttrNumber) 1, NULL,
 							   INT2OID, -1, 0);
 			TupleDescInitEntry(state->tupdesc[i], (AttrNumber) 2, NULL,
@@ -56,6 +89,16 @@ initGinState(GinState *state, Relation index)
 							   origTupdesc->attrs[i]->attndims);
 			TupleDescInitEntryCollation(state->tupdesc[i], (AttrNumber) 2,
 										origTupdesc->attrs[i]->attcollation);
+			if (OidIsValid(state->addInfoTypeOid[i]))
+			{
+				TupleDescInitEntry(state->tupdesc[i], (AttrNumber) 3, NULL,
+											state->addInfoTypeOid[i], -1, 0);
+				state->addAttrs[i] = state->tupdesc[i]->attrs[2];
+			}
+			else
+			{
+				state->addAttrs[i] = NULL;
+			}
 		}
 
 		fmgr_info_copy(&(state->compareFn[i]),
@@ -84,6 +127,36 @@ initGinState(GinState *state, Relation index)
 		else
 		{
 			state->canPartialMatch[i] = false;
+		}
+
+		/*
+		 * Check opclass capability to do pre consistent check.
+		 */
+		if (index_getprocid(index, i + 1, GIN_PRE_CONSISTENT_PROC) != InvalidOid)
+		{
+			fmgr_info_copy(&(state->preConsistentFn[i]),
+				   index_getprocinfo(index, i + 1, GIN_PRE_CONSISTENT_PROC),
+						   CurrentMemoryContext);
+			state->canPreConsistent[i] = true;
+		}
+		else
+		{
+			state->canPreConsistent[i] = false;
+		}
+
+  		/*
+		 * Check opclass capability to do order by.
+		 */
+		if (index_getprocid(index, i + 1, GIN_ORDERING_PROC) != InvalidOid)
+		{
+			fmgr_info_copy(&(state->orderingFn[i]),
+				   index_getprocinfo(index, i + 1, GIN_ORDERING_PROC),
+						   CurrentMemoryContext);
+			state->canOrdering[i] = true;
+		}
+		else
+		{
+			state->canOrdering[i] = false;
 		}
 
 		/*
@@ -321,7 +394,9 @@ ginCompareAttEntries(GinState *ginstate,
 typedef struct
 {
 	Datum		datum;
+	Datum		addInfo;
 	bool		isnull;
+	bool		addInfoIsNull;
 } keyEntryData;
 
 typedef struct
@@ -374,7 +449,8 @@ cmpEntries(const void *a, const void *b, void *arg)
 Datum *
 ginExtractEntries(GinState *ginstate, OffsetNumber attnum,
 				  Datum value, bool isNull,
-				  int32 *nentries, GinNullCategory **categories)
+				  int32 *nentries, GinNullCategory **categories,
+				  Datum **addInfo, bool **addInfoIsNull)
 {
 	Datum	   *entries;
 	bool	   *nullFlags;
@@ -389,6 +465,10 @@ ginExtractEntries(GinState *ginstate, OffsetNumber attnum,
 		*nentries = 1;
 		entries = (Datum *) palloc(sizeof(Datum));
 		entries[0] = (Datum) 0;
+		*addInfo = (Datum *) palloc(sizeof(Datum));
+		(*addInfo)[0] = (Datum) 0;
+		*addInfoIsNull = (bool *) palloc(sizeof(bool));
+		(*addInfoIsNull)[0] = true;
 		*categories = (GinNullCategory *) palloc(sizeof(GinNullCategory));
 		(*categories)[0] = GIN_CAT_NULL_ITEM;
 		return entries;
@@ -396,12 +476,17 @@ ginExtractEntries(GinState *ginstate, OffsetNumber attnum,
 
 	/* OK, call the opclass's extractValueFn */
 	nullFlags = NULL;			/* in case extractValue doesn't set it */
+	*addInfo = NULL;
+	*addInfoIsNull = NULL;
 	entries = (Datum *)
-		DatumGetPointer(FunctionCall3Coll(&ginstate->extractValueFn[attnum - 1],
+		DatumGetPointer(FunctionCall5Coll(&ginstate->extractValueFn[attnum - 1],
 									  ginstate->supportCollation[attnum - 1],
 										  value,
 										  PointerGetDatum(nentries),
-										  PointerGetDatum(&nullFlags)));
+										  PointerGetDatum(&nullFlags),
+										  PointerGetDatum(addInfo),
+										  PointerGetDatum(addInfoIsNull)
+									));
 
 	/*
 	 * Generate a placeholder if the item contained no keys.
@@ -411,9 +496,26 @@ ginExtractEntries(GinState *ginstate, OffsetNumber attnum,
 		*nentries = 1;
 		entries = (Datum *) palloc(sizeof(Datum));
 		entries[0] = (Datum) 0;
+		*addInfo = (Datum *) palloc(sizeof(Datum));
+		(*addInfo)[0] = (Datum) 0;
+		*addInfoIsNull = (bool *) palloc(sizeof(bool));
+		(*addInfoIsNull)[0] = true;
 		*categories = (GinNullCategory *) palloc(sizeof(GinNullCategory));
 		(*categories)[0] = GIN_CAT_EMPTY_ITEM;
 		return entries;
+	}
+
+	if (!(*addInfo))
+	{
+		(*addInfo) = (Datum *)palloc(sizeof(Datum) * *nentries);
+		for (i = 0; i < *nentries; i++)
+			(*addInfo)[i] = (Datum) 0;
+	}
+	if (!(*addInfoIsNull))
+	{
+		(*addInfoIsNull) = (bool *)palloc(sizeof(bool) * *nentries);
+		for (i = 0; i < *nentries; i++)
+			(*addInfoIsNull)[i] = true;
 	}
 
 	/*
@@ -449,6 +551,8 @@ ginExtractEntries(GinState *ginstate, OffsetNumber attnum,
 		{
 			keydata[i].datum = entries[i];
 			keydata[i].isnull = nullFlags[i];
+			keydata[i].addInfo = (*addInfo)[i];
+			keydata[i].addInfoIsNull = (*addInfoIsNull)[i];
 		}
 
 		arg.cmpDatumFunc = &ginstate->compareFn[attnum - 1];
@@ -464,6 +568,8 @@ ginExtractEntries(GinState *ginstate, OffsetNumber attnum,
 
 			entries[0] = keydata[0].datum;
 			nullFlags[0] = keydata[0].isnull;
+			(*addInfo)[0] = keydata[0].addInfo;
+			(*addInfoIsNull)[0] = keydata[0].addInfoIsNull;
 			j = 1;
 			for (i = 1; i < *nentries; i++)
 			{
@@ -471,6 +577,8 @@ ginExtractEntries(GinState *ginstate, OffsetNumber attnum,
 				{
 					entries[j] = keydata[i].datum;
 					nullFlags[j] = keydata[i].isnull;
+					(*addInfo)[j] = keydata[i].addInfo;
+					(*addInfoIsNull)[j] = keydata[i].addInfoIsNull;
 					j++;
 				}
 			}
@@ -483,6 +591,8 @@ ginExtractEntries(GinState *ginstate, OffsetNumber attnum,
 			{
 				entries[i] = keydata[i].datum;
 				nullFlags[i] = keydata[i].isnull;
+				(*addInfo)[i] = keydata[i].addInfo;
+				(*addInfoIsNull)[i] = keydata[i].addInfoIsNull;
 			}
 		}
 

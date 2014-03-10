@@ -1281,6 +1281,47 @@ DirectFunctionCall9Coll(PGFunction func, Oid collation, Datum arg1, Datum arg2,
 	return result;
 }
 
+Datum
+DirectFunctionCall10Coll(PGFunction func, Oid collation, Datum arg1, Datum arg2,
+						Datum arg3, Datum arg4, Datum arg5,
+						Datum arg6, Datum arg7, Datum arg8,
+						Datum arg9, Datum arg10)
+{
+	FunctionCallInfoData fcinfo;
+	Datum		result;
+
+	InitFunctionCallInfoData(fcinfo, NULL, 10, collation, NULL, NULL);
+
+	fcinfo.arg[0] = arg1;
+	fcinfo.arg[1] = arg2;
+	fcinfo.arg[2] = arg3;
+	fcinfo.arg[3] = arg4;
+	fcinfo.arg[4] = arg5;
+	fcinfo.arg[5] = arg6;
+	fcinfo.arg[6] = arg7;
+	fcinfo.arg[7] = arg8;
+	fcinfo.arg[8] = arg9;
+	fcinfo.arg[9] = arg10;
+	fcinfo.argnull[0] = false;
+	fcinfo.argnull[1] = false;
+	fcinfo.argnull[2] = false;
+	fcinfo.argnull[3] = false;
+	fcinfo.argnull[4] = false;
+	fcinfo.argnull[5] = false;
+	fcinfo.argnull[6] = false;
+	fcinfo.argnull[7] = false;
+	fcinfo.argnull[8] = false;
+	fcinfo.argnull[9] = false;
+
+	result = (*func) (&fcinfo);
+
+	/* Check for null result, since caller is clearly not expecting one */
+	if (fcinfo.isnull)
+		elog(ERROR, "function %p returned NULL", (void *) func);
+
+	return result;
+}
+
 
 /*
  * These are for invocation of a previously-looked-up function with a
@@ -1555,6 +1596,46 @@ FunctionCall9Coll(FmgrInfo *flinfo, Oid collation, Datum arg1, Datum arg2,
 	return result;
 }
 
+Datum
+FunctionCall10Coll(FmgrInfo *flinfo, Oid collation, Datum arg1, Datum arg2,
+				  Datum arg3, Datum arg4, Datum arg5,
+				  Datum arg6, Datum arg7, Datum arg8,
+				  Datum arg9, Datum arg10)
+{
+	FunctionCallInfoData fcinfo;
+	Datum		result;
+
+	InitFunctionCallInfoData(fcinfo, flinfo, 10, collation, NULL, NULL);
+
+	fcinfo.arg[0] = arg1;
+	fcinfo.arg[1] = arg2;
+	fcinfo.arg[2] = arg3;
+	fcinfo.arg[3] = arg4;
+	fcinfo.arg[4] = arg5;
+	fcinfo.arg[5] = arg6;
+	fcinfo.arg[6] = arg7;
+	fcinfo.arg[7] = arg8;
+	fcinfo.arg[8] = arg9;
+	fcinfo.arg[9] = arg10;
+	fcinfo.argnull[0] = false;
+	fcinfo.argnull[1] = false;
+	fcinfo.argnull[2] = false;
+	fcinfo.argnull[3] = false;
+	fcinfo.argnull[4] = false;
+	fcinfo.argnull[5] = false;
+	fcinfo.argnull[6] = false;
+	fcinfo.argnull[7] = false;
+	fcinfo.argnull[8] = false;
+	fcinfo.argnull[9] = false;
+
+	result = FunctionCallInvoke(&fcinfo);
+
+	/* Check for null result, since caller is clearly not expecting one */
+	if (fcinfo.isnull)
+		elog(ERROR, "function %u returned NULL", fcinfo.flinfo->fn_oid);
+
+	return result;
+}
 
 /*
  * These are for invocation of a function identified by OID with a
@@ -1864,6 +1945,50 @@ OidFunctionCall9Coll(Oid functionId, Oid collation, Datum arg1, Datum arg2,
 	fcinfo.argnull[6] = false;
 	fcinfo.argnull[7] = false;
 	fcinfo.argnull[8] = false;
+
+	result = FunctionCallInvoke(&fcinfo);
+
+	/* Check for null result, since caller is clearly not expecting one */
+	if (fcinfo.isnull)
+		elog(ERROR, "function %u returned NULL", flinfo.fn_oid);
+
+	return result;
+}
+
+Datum
+OidFunctionCall10Coll(Oid functionId, Oid collation, Datum arg1, Datum arg2,
+					 Datum arg3, Datum arg4, Datum arg5,
+					 Datum arg6, Datum arg7, Datum arg8,
+					 Datum arg9, Datum arg10)
+{
+	FmgrInfo	flinfo;
+	FunctionCallInfoData fcinfo;
+	Datum		result;
+
+	fmgr_info(functionId, &flinfo);
+
+	InitFunctionCallInfoData(fcinfo, &flinfo, 10, collation, NULL, NULL);
+
+	fcinfo.arg[0] = arg1;
+	fcinfo.arg[1] = arg2;
+	fcinfo.arg[2] = arg3;
+	fcinfo.arg[3] = arg4;
+	fcinfo.arg[4] = arg5;
+	fcinfo.arg[5] = arg6;
+	fcinfo.arg[6] = arg7;
+	fcinfo.arg[7] = arg8;
+	fcinfo.arg[8] = arg9;
+	fcinfo.arg[9] = arg10;
+	fcinfo.argnull[0] = false;
+	fcinfo.argnull[1] = false;
+	fcinfo.argnull[2] = false;
+	fcinfo.argnull[3] = false;
+	fcinfo.argnull[4] = false;
+	fcinfo.argnull[5] = false;
+	fcinfo.argnull[6] = false;
+	fcinfo.argnull[7] = false;
+	fcinfo.argnull[8] = false;
+	fcinfo.argnull[9] = false;
 
 	result = FunctionCallInvoke(&fcinfo);
 

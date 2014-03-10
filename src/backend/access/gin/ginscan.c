@@ -30,15 +30,14 @@ ginbeginscan(PG_FUNCTION_ARGS)
 	IndexScanDesc scan;
 	GinScanOpaque so;
 
-	/* no order by operators allowed */
-	Assert(norderbys == 0);
-
 	scan = RelationGetIndexScan(rel, nkeys, norderbys);
 
 	/* allocate private workspace */
 	so = (GinScanOpaque) palloc(sizeof(GinScanOpaqueData));
+	so->sortstate = NULL;
 	so->keys = NULL;
 	so->nkeys = 0;
+	so->firstCall = true;
 	so->tempCtx = AllocSetContextCreate(CurrentMemoryContext,
 										"Gin scan temporary context",
 										ALLOCSET_DEFAULT_MINSIZE,
@@ -71,7 +70,7 @@ ginFillScanEntry(GinScanOpaque so, OffsetNumber attnum,
 	 * Entries with non-null extra_data are never considered identical, since
 	 * we can't know exactly what the opclass might be doing with that.
 	 */
-	if (extra_data == NULL)
+	if (extra_data == NULL || !isPartialMatch)
 	{
 		for (i = 0; i < so->totalentries; i++)
 		{
@@ -135,7 +134,8 @@ ginFillScanKey(GinScanOpaque so, OffsetNumber attnum,
 			   StrategyNumber strategy, int32 searchMode,
 			   Datum query, uint32 nQueryValues,
 			   Datum *queryValues, GinNullCategory *queryCategories,
-			   bool *partial_matches, Pointer *extra_data)
+			   bool *partial_matches, Pointer *extra_data,
+			   bool orderBy)
 {
 	GinScanKey	key = &(so->keys[so->nkeys++]);
 	GinState   *ginstate = &so->ginstate;
@@ -147,9 +147,14 @@ ginFillScanKey(GinScanOpaque so, OffsetNumber attnum,
 		nQueryValues++;
 	key->nentries = nQueryValues;
 	key->nuserentries = nUserQueryValues;
+	key->orderBy = orderBy;
 
 	key->scanEntry = (GinScanEntry *) palloc(sizeof(GinScanEntry) * nQueryValues);
 	key->entryRes = (bool *) palloc0(sizeof(bool) * nQueryValues);
+	key->addInfo = (Datum *) palloc0(sizeof(Datum) * nQueryValues);
+	key->addInfoIsNull = (bool *) palloc(sizeof(bool) * nQueryValues);
+	for (i = 0; i < nQueryValues; i++)
+		key->addInfoIsNull[i] = true;
 
 	key->query = query;
 	key->queryValues = queryValues;
@@ -245,8 +250,16 @@ freeScanKeys(GinScanOpaque so)
 	{
 		GinScanEntry entry = so->entries[i];
 
-		if (entry->buffer != InvalidBuffer)
-			ReleaseBuffer(entry->buffer);
+		if (entry->gdi)
+		{
+			freeGinBtreeStack(entry->gdi->stack);
+			pfree(entry->gdi);
+		}
+		else
+		{
+			if (entry->buffer != InvalidBuffer)
+				ReleaseBuffer(entry->buffer);
+		}
 		if (entry->list)
 			pfree(entry->list);
 		if (entry->matchIterator)
@@ -261,17 +274,107 @@ freeScanKeys(GinScanOpaque so)
 	so->totalentries = 0;
 }
 
+static void
+initScanKey(GinScanOpaque so, ScanKey skey, bool *hasNullQuery)
+{
+	Datum	   *queryValues;
+	int32		nQueryValues = 0;
+	bool	   *partial_matches = NULL;
+	Pointer    *extra_data = NULL;
+	bool	   *nullFlags = NULL;
+	int32		searchMode = GIN_SEARCH_MODE_DEFAULT;
+
+	/*
+		* We assume that GIN-indexable operators are strict, so a null query
+		* argument means an unsatisfiable query.
+		*/
+	if (skey->sk_flags & SK_ISNULL)
+	{
+		so->isVoidRes = true;
+		return;
+	}
+
+	/* OK to call the extractQueryFn */
+	queryValues = (Datum *)
+		DatumGetPointer(FunctionCall7Coll(&so->ginstate.extractQueryFn[skey->sk_attno - 1],
+						so->ginstate.supportCollation[skey->sk_attno - 1],
+											skey->sk_argument,
+											PointerGetDatum(&nQueryValues),
+										UInt16GetDatum(skey->sk_strategy),
+										PointerGetDatum(&partial_matches),
+											PointerGetDatum(&extra_data),
+											PointerGetDatum(&nullFlags),
+											PointerGetDatum(&searchMode)));
+
+	/*
+		* If bogus searchMode is returned, treat as GIN_SEARCH_MODE_ALL; note
+		* in particular we don't allow extractQueryFn to select
+		* GIN_SEARCH_MODE_EVERYTHING.
+		*/
+	if (searchMode < GIN_SEARCH_MODE_DEFAULT ||
+		searchMode > GIN_SEARCH_MODE_ALL)
+		searchMode = GIN_SEARCH_MODE_ALL;
+
+	/* Non-default modes require the index to have placeholders */
+	if (searchMode != GIN_SEARCH_MODE_DEFAULT)
+		*hasNullQuery = true;
+
+	/*
+		* In default mode, no keys means an unsatisfiable query.
+		*/
+	if (queryValues == NULL || nQueryValues <= 0)
+	{
+		if (searchMode == GIN_SEARCH_MODE_DEFAULT)
+		{
+			so->isVoidRes = true;
+			return;
+		}
+		nQueryValues = 0;	/* ensure sane value */
+	}
+
+	/*
+		* If the extractQueryFn didn't create a nullFlags array, create one,
+		* assuming that everything's non-null.  Otherwise, run through the
+		* array and make sure each value is exactly 0 or 1; this ensures
+		* binary compatibility with the GinNullCategory representation. While
+		* at it, detect whether any null keys are present.
+		*/
+	if (nullFlags == NULL)
+		nullFlags = (bool *) palloc0(nQueryValues * sizeof(bool));
+	else
+	{
+		int32		j;
+
+		for (j = 0; j < nQueryValues; j++)
+		{
+			if (nullFlags[j])
+			{
+				nullFlags[j] = true;		/* not any other nonzero value */
+				*hasNullQuery = true;
+			}
+		}
+	}
+	/* now we can use the nullFlags as category codes */
+
+	ginFillScanKey(so, skey->sk_attno,
+					skey->sk_strategy, searchMode,
+					skey->sk_argument, nQueryValues,
+					queryValues, (GinNullCategory *) nullFlags,
+					partial_matches, extra_data,
+					(skey->sk_flags & SK_ORDER_BY) ? true: false);
+}
+
 void
 ginNewScanKey(IndexScanDesc scan)
 {
-	ScanKey		scankey = scan->keyData;
 	GinScanOpaque so = (GinScanOpaque) scan->opaque;
 	int			i;
 	bool		hasNullQuery = false;
 
 	/* if no scan keys provided, allocate extra EVERYTHING GinScanKey */
 	so->keys = (GinScanKey)
-		palloc(Max(scan->numberOfKeys, 1) * sizeof(GinScanKeyData));
+		palloc(Max(scan->numberOfKeys + scan->numberOfOrderBys, 1) *
+														sizeof(GinScanKeyData));
 	so->nkeys = 0;
 
 	/* initialize expansible array of GinScanEntry pointers */
@@ -282,94 +385,19 @@ ginNewScanKey(IndexScanDesc scan)
 
 	so->isVoidRes = false;
 
-	for (i = 0; i < scan->numberOfKeys; i++)
-	{
-		ScanKey		skey = &scankey[i];
-		Datum	   *queryValues;
-		int32		nQueryValues = 0;
-		bool	   *partial_matches = NULL;
-		Pointer    *extra_data = NULL;
-		bool	   *nullFlags = NULL;
-		int32		searchMode = GIN_SEARCH_MODE_DEFAULT;
-
-		/*
-		 * We assume that GIN-indexable operators are strict, so a null query
-		 * argument means an unsatisfiable query.
-		 */
-		if (skey->sk_flags & SK_ISNULL)
-		{
-			so->isVoidRes = true;
-			break;
-		}
-
-		/* OK to call the extractQueryFn */
-		queryValues = (Datum *)
-			DatumGetPointer(FunctionCall7Coll(&so->ginstate.extractQueryFn[skey->sk_attno - 1],
-						   so->ginstate.supportCollation[skey->sk_attno - 1],
-											  skey->sk_argument,
-											  PointerGetDatum(&nQueryValues),
-										   UInt16GetDatum(skey->sk_strategy),
-										   PointerGetDatum(&partial_matches),
-											  PointerGetDatum(&extra_data),
-											  PointerGetDatum(&nullFlags),
-											  PointerGetDatum(&searchMode)));
-
-		/*
-		 * If bogus searchMode is returned, treat as GIN_SEARCH_MODE_ALL; note
-		 * in particular we don't allow extractQueryFn to select
-		 * GIN_SEARCH_MODE_EVERYTHING.
-		 */
-		if (searchMode < GIN_SEARCH_MODE_DEFAULT ||
-			searchMode > GIN_SEARCH_MODE_ALL)
-			searchMode = GIN_SEARCH_MODE_ALL;
-
-		/* Non-default modes require the index to have placeholders */
-		if (searchMode != GIN_SEARCH_MODE_DEFAULT)
-			hasNullQuery = true;
-
-		/*
-		 * In default mode, no keys means an unsatisfiable query.
-		 */
-		if (queryValues == NULL || nQueryValues <= 0)
-		{
-			if (searchMode == GIN_SEARCH_MODE_DEFAULT)
-			{
-				so->isVoidRes = true;
-				break;
-			}
-			nQueryValues = 0;	/* ensure sane value */
-		}
-
-		/*
-		 * If the extractQueryFn didn't create a nullFlags array, create one,
-		 * assuming that everything's non-null.  Otherwise, run through the
-		 * array and make sure each value is exactly 0 or 1; this ensures
-		 * binary compatibility with the GinNullCategory representation. While
-		 * at it, detect whether any null keys are present.
-		 */
-		if (nullFlags == NULL)
-			nullFlags = (bool *) palloc0(nQueryValues * sizeof(bool));
-		else
-		{
-			int32		j;
-
-			for (j = 0; j < nQueryValues; j++)
-			{
-				if (nullFlags[j])
-				{
-					nullFlags[j] = true;		/* not any other nonzero value */
-					hasNullQuery = true;
-				}
-			}
-		}
-		/* now we can use the nullFlags as category codes */
-
-		ginFillScanKey(so, skey->sk_attno,
-					   skey->sk_strategy, searchMode,
-					   skey->sk_argument, nQueryValues,
-					   queryValues, (GinNullCategory *) nullFlags,
-					   partial_matches, extra_data);
+  	for (i = 0; i < scan->numberOfKeys; i++)
+  	{
+		initScanKey(so, &scan->keyData[i], &hasNullQuery);
+		if (so->isVoidRes)
+  			break;
 	}
+
+	for (i = 0; i < scan->numberOfOrderBys; i++)
+	{
+		initScanKey(so, &scan->orderByData[i], &hasNullQuery);
+		if (so->isVoidRes)
+			break;
+  	}
 
 	/*
 	 * If there are no regular scan keys, generate an EVERYTHING scankey to
@@ -381,7 +409,7 @@ ginNewScanKey(IndexScanDesc scan)
 		ginFillScanKey(so, FirstOffsetNumber,
 					   InvalidStrategy, GIN_SEARCH_MODE_EVERYTHING,
 					   (Datum) 0, 0,
-					   NULL, NULL, NULL, NULL);
+					   NULL, NULL, NULL, NULL, false);
 	}
 
 	/*
@@ -410,9 +438,12 @@ ginrescan(PG_FUNCTION_ARGS)
 {
 	IndexScanDesc scan = (IndexScanDesc) PG_GETARG_POINTER(0);
 	ScanKey		scankey = (ScanKey) PG_GETARG_POINTER(1);
+	ScanKey		orderby = (ScanKey) PG_GETARG_POINTER(3);
 
 	/* remaining arguments are ignored */
 	GinScanOpaque so = (GinScanOpaque) scan->opaque;
+
+	so->firstCall = true;
 
 	freeScanKeys(so);
 
@@ -420,6 +451,8 @@ ginrescan(PG_FUNCTION_ARGS)
 	{
 		memmove(scan->keyData, scankey,
 				scan->numberOfKeys * sizeof(ScanKeyData));
+		memmove(scan->orderByData, orderby,
+				scan->numberOfOrderBys * sizeof(ScanKeyData));
 	}
 
 	PG_RETURN_VOID();
@@ -433,6 +466,9 @@ ginendscan(PG_FUNCTION_ARGS)
 	GinScanOpaque so = (GinScanOpaque) scan->opaque;
 
 	freeScanKeys(so);
+
+	if (so->sortstate)
+		tuplesort_end(so->sortstate);
 
 	MemoryContextDelete(so->tempCtx);
 

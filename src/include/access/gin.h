@@ -23,7 +23,10 @@
 #define GIN_EXTRACTQUERY_PROC		   3
 #define GIN_CONSISTENT_PROC			   4
 #define GIN_COMPARE_PARTIAL_PROC	   5
-#define GINNProcs					   5
+#define GIN_CONFIG_PROC				   6
+#define GIN_PRE_CONSISTENT_PROC		   7
+#define GIN_ORDERING_PROC			   8
+#define GINNProcs					   8
 
 /*
  * searchMode settings for extractQueryFn.
@@ -45,6 +48,12 @@ typedef struct GinStatsData
 	int64		nEntries;
 	int32		ginVersion;
 } GinStatsData;
+
+
+typedef struct GinConfig
+{
+	Oid			addInfoTypeOid;
+} GinConfig;
 
 /* GUC parameter */
 extern PGDLLIMPORT int GinFuzzySearchLimit;

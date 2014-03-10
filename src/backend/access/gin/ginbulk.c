@@ -38,8 +38,8 @@ ginCombineData(RBNode *existing, const RBNode *newdata, void *arg)
 	{
 		accum->allocatedMemory -= GetMemoryChunkSpace(eo->list);
 		eo->maxcount *= 2;
-		eo->list = (ItemPointerData *)
-			repalloc(eo->list, sizeof(ItemPointerData) * eo->maxcount);
+		eo->list = (GinEntryAccumulatorItem *)
+			repalloc(eo->list, sizeof(GinEntryAccumulatorItem) * eo->maxcount);
 		accum->allocatedMemory += GetMemoryChunkSpace(eo->list);
 	}
 
@@ -48,7 +48,8 @@ ginCombineData(RBNode *existing, const RBNode *newdata, void *arg)
 	{
 		int			res;
 
-		res = ginCompareItemPointers(eo->list + eo->count - 1, en->list);
+		res = ginCompareItemPointers(&eo->list[eo->count - 1].iptr,
+															&en->list->iptr);
 		Assert(res != 0);
 
 		if (res > 0)
@@ -138,11 +139,13 @@ getDatumCopy(BuildAccumulator *accum, OffsetNumber attnum, Datum value)
 static void
 ginInsertBAEntry(BuildAccumulator *accum,
 				 ItemPointer heapptr, OffsetNumber attnum,
-				 Datum key, GinNullCategory category)
+				 Datum key, Datum addInfo, bool addInfoIsNull,
+				 GinNullCategory category)
 {
 	GinEntryAccumulator eatmp;
 	GinEntryAccumulator *ea;
 	bool		isNew;
+	GinEntryAccumulatorItem item;
 
 	/*
 	 * For the moment, fill only the fields of eatmp that will be looked at by
@@ -152,7 +155,10 @@ ginInsertBAEntry(BuildAccumulator *accum,
 	eatmp.key = key;
 	eatmp.category = category;
 	/* temporarily set up single-entry itempointer list */
-	eatmp.list = heapptr;
+	eatmp.list = &item;
+	item.iptr = *heapptr;
+	item.addInfo = addInfo;
+	item.addInfoIsNull = addInfoIsNull;
 
 	ea = (GinEntryAccumulator *) rb_insert(accum->tree, (RBNode *) &eatmp,
 										   &isNew);
@@ -169,8 +175,10 @@ ginInsertBAEntry(BuildAccumulator *accum,
 		ea->count = 1;
 		ea->shouldSort = FALSE;
 		ea->list =
-			(ItemPointerData *) palloc(sizeof(ItemPointerData) * DEF_NPTR);
-		ea->list[0] = *heapptr;
+			(GinEntryAccumulatorItem *) palloc(sizeof(GinEntryAccumulatorItem) * DEF_NPTR);
+		ea->list[0].iptr = *heapptr;
+		ea->list[0].addInfo = addInfo;
+		ea->list[0].addInfoIsNull = addInfoIsNull;
 		accum->allocatedMemory += GetMemoryChunkSpace(ea->list);
 	}
 	else
@@ -200,8 +208,8 @@ ginInsertBAEntry(BuildAccumulator *accum,
 void
 ginInsertBAEntries(BuildAccumulator *accum,
 				   ItemPointer heapptr, OffsetNumber attnum,
-				   Datum *entries, GinNullCategory *categories,
-				   int32 nentries)
+				   Datum *entries, Datum *addInfo, bool *addInfoIsNull,
+				   GinNullCategory *categories, int32 nentries)
 {
 	uint32		step = nentries;
 
@@ -227,7 +235,7 @@ ginInsertBAEntries(BuildAccumulator *accum,
 
 		for (i = step - 1; i < nentries && i >= 0; i += step << 1 /* *2 */ )
 			ginInsertBAEntry(accum, heapptr, attnum,
-							 entries[i], categories[i]);
+							 entries[i], addInfo[i], addInfoIsNull[i], categories[i]);
 
 		step >>= 1;				/* /2 */
 	}
@@ -255,13 +263,13 @@ ginBeginBAScan(BuildAccumulator *accum)
  * This consists of a single key datum and a list (array) of one or more
  * heap TIDs in which that key is found.  The list is guaranteed sorted.
  */
-ItemPointerData *
+GinEntryAccumulatorItem *
 ginGetBAEntry(BuildAccumulator *accum,
 			  OffsetNumber *attnum, Datum *key, GinNullCategory *category,
 			  uint32 *n)
 {
 	GinEntryAccumulator *entry;
-	ItemPointerData *list;
+	GinEntryAccumulatorItem *list;
 
 	entry = (GinEntryAccumulator *) rb_iterate(accum->tree);
 
@@ -277,7 +285,7 @@ ginGetBAEntry(BuildAccumulator *accum,
 	Assert(list != NULL && entry->count > 0);
 
 	if (entry->shouldSort && entry->count > 1)
-		qsort(list, entry->count, sizeof(ItemPointerData),
+		qsort(list, entry->count, sizeof(GinEntryAccumulatorItem),
 			  qsortCompareItemPointers);
 
 	return list;

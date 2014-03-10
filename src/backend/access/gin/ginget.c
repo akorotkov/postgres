@@ -30,6 +30,12 @@ typedef struct pendingPosition
 	bool	   *hasMatchKey;
 } pendingPosition;
 
+static bool scanPage(GinState *ginstate, GinScanEntry entry, ItemPointer item,
+		Page page, bool equalOk);
+static void insertScanItem(GinScanOpaque so, bool recheck);
+static int scan_entry_cmp(const void *p1, const void *p2);
+static void entryGetItem(GinState *ginstate, GinScanEntry entry);
+
 
 /*
  * Convenience function for invoking a key's consistentFn
@@ -53,7 +59,7 @@ callConsistentFn(GinState *ginstate, GinScanKey key)
 	 */
 	key->recheckCurItem = true;
 
-	return DatumGetBool(FunctionCall8Coll(&ginstate->consistentFn[key->attnum - 1],
+	return DatumGetBool(FunctionCall10Coll(&ginstate->consistentFn[key->attnum - 1],
 								 ginstate->supportCollation[key->attnum - 1],
 										  PointerGetDatum(key->entryRes),
 										  UInt16GetDatum(key->strategy),
@@ -62,29 +68,37 @@ callConsistentFn(GinState *ginstate, GinScanKey key)
 										  PointerGetDatum(key->extra_data),
 									   PointerGetDatum(&key->recheckCurItem),
 										  PointerGetDatum(key->queryValues),
-									 PointerGetDatum(key->queryCategories)));
+									 PointerGetDatum(key->queryCategories),
+										  PointerGetDatum(key->addInfo),
+										  PointerGetDatum(key->addInfoIsNull)
+		));
 }
 
 /*
  * Tries to refind previously taken ItemPointer on a posting page.
  */
 static bool
-findItemInPostingPage(Page page, ItemPointer item, OffsetNumber *off)
+findItemInPostingPage(Page page, ItemPointer item, OffsetNumber *off,
+	OffsetNumber attnum, GinState *ginstate)
 {
 	OffsetNumber maxoff = GinPageGetOpaque(page)->maxoff;
 	int			res;
+	Pointer		ptr;
+	ItemPointerData iptr = {{0, 0}, 0};
 
 	if (GinPageGetOpaque(page)->flags & GIN_DELETED)
 		/* page was deleted by concurrent vacuum */
 		return false;
 
+	ptr = GinDataPageGetData(page);
 	/*
 	 * scan page to find equal or first greater value
 	 */
 	for (*off = FirstOffsetNumber; *off <= maxoff; (*off)++)
 	{
-		res = ginCompareItemPointers(item, (ItemPointer) GinDataPageGetItem(page, *off));
+		ptr = ginDataPageLeafRead(ptr, attnum, &iptr, NULL, NULL, ginstate);
 
+		res = ginCompareItemPointers(item, &iptr);
 		if (res <= 0)
 			return true;
 	}
@@ -122,14 +136,14 @@ moveRightIfItNeeded(GinBtreeData *btree, GinBtreeStack *stack)
  */
 static void
 scanPostingTree(Relation index, GinScanEntry scanEntry,
-				BlockNumber rootPostingTree)
+				BlockNumber rootPostingTree, OffsetNumber attnum, GinState *ginstate)
 {
 	GinPostingTreeScan *gdi;
 	Buffer		buffer;
 	Page		page;
 
 	/* Descend to the leftmost leaf page */
-	gdi = ginPrepareScanPostingTree(index, rootPostingTree, TRUE);
+	gdi = ginPrepareScanPostingTree(index, rootPostingTree, TRUE, attnum, ginstate);
 
 	buffer = ginScanBeginPostingTree(gdi);
 	IncrBufferRefCount(buffer); /* prevent unpin in freeGinBtreeStack */
@@ -142,15 +156,26 @@ scanPostingTree(Relation index, GinScanEntry scanEntry,
 	 */
 	for (;;)
 	{
+		OffsetNumber maxoff, i;
+
 		page = BufferGetPage(buffer);
+		maxoff = GinPageGetOpaque(page)->maxoff;
 
 		if ((GinPageGetOpaque(page)->flags & GIN_DELETED) == 0 &&
-			GinPageGetOpaque(page)->maxoff >= FirstOffsetNumber)
+			maxoff >= FirstOffsetNumber)
 		{
-			tbm_add_tuples(scanEntry->matchBitmap,
-				   (ItemPointer) GinDataPageGetItem(page, FirstOffsetNumber),
-						   GinPageGetOpaque(page)->maxoff, false);
-			scanEntry->predictNumberResult += GinPageGetOpaque(page)->maxoff;
+			ItemPointerData iptr = {{0, 0}, 0};
+			Pointer ptr;
+
+			ptr = GinDataPageGetData(page);
+			for (i = FirstOffsetNumber; i <= maxoff; i++)
+			{
+				ptr = ginDataPageLeafRead(ptr, attnum, &iptr, NULL, NULL,
+																	ginstate);
+				tbm_add_tuples(scanEntry->matchBitmap, &iptr, 1, false);
+			}
+
+			scanEntry->predictNumberResult += maxoff;
 		}
 
 		if (GinPageRightMost(page))
@@ -287,7 +312,7 @@ collectMatchBitmap(GinBtreeData *btree, GinBtreeStack *stack,
 			LockBuffer(stack->buffer, GIN_UNLOCK);
 
 			/* Collect all the TIDs in this entry's posting tree */
-			scanPostingTree(btree->index, scanEntry, rootPostingTree);
+			scanPostingTree(btree->index, scanEntry, rootPostingTree, attnum, btree->ginstate);
 
 			/*
 			 * We lock again the entry page and while it was unlocked insert
@@ -335,8 +360,13 @@ collectMatchBitmap(GinBtreeData *btree, GinBtreeStack *stack,
 		}
 		else
 		{
+			ItemPointerData *ipd = (ItemPointerData *)palloc(
+								sizeof(ItemPointerData) * GinGetNPosting(itup));
+			ginReadTuple(btree->ginstate, scanEntry->attnum,
+				itup, ipd, NULL, NULL);
+
 			tbm_add_tuples(scanEntry->matchBitmap,
-						   GinGetPosting(itup), GinGetNPosting(itup), false);
+						   ipd, GinGetNPosting(itup), false);
 			scanEntry->predictNumberResult += GinGetNPosting(itup);
 		}
 
@@ -361,8 +391,11 @@ startScanEntry(GinState *ginstate, GinScanEntry entry)
 restartScanEntry:
 	entry->buffer = InvalidBuffer;
 	ItemPointerSetMin(&entry->curItem);
+	entry->curAddInfo = (Datum) 0;
+	entry->curAddInfoIsNull = true;
 	entry->offset = InvalidOffsetNumber;
 	entry->list = NULL;
+	entry->gdi = NULL;
 	entry->nlist = 0;
 	entry->matchBitmap = NULL;
 	entry->matchResult = NULL;
@@ -429,6 +462,9 @@ restartScanEntry:
 			BlockNumber rootPostingTree = GinGetPostingTree(itup);
 			GinPostingTreeScan *gdi;
 			Page		page;
+			OffsetNumber maxoff, i;
+			Pointer ptr;
+			ItemPointerData iptr = {{0,0},0};
 
 			/*
 			 * We should unlock entry page before touching posting tree to
@@ -439,38 +475,57 @@ restartScanEntry:
 			 */
 			LockBuffer(stackEntry->buffer, GIN_UNLOCK);
 			needUnlock = FALSE;
-			gdi = ginPrepareScanPostingTree(ginstate->index, rootPostingTree, TRUE);
+			gdi = ginPrepareScanPostingTree(ginstate->index, rootPostingTree, TRUE, entry->attnum, ginstate);
 
 			entry->buffer = ginScanBeginPostingTree(gdi);
+			entry->gdi = gdi;
+			entry->context = AllocSetContextCreate(CurrentMemoryContext,
+								 "GiST temporary context",
+								 ALLOCSET_DEFAULT_MINSIZE,
+								 ALLOCSET_DEFAULT_INITSIZE,
+								 ALLOCSET_DEFAULT_MAXSIZE);
 
 			/*
 			 * We keep buffer pinned because we need to prevent deletion of
 			 * page during scan. See GIN's vacuum implementation. RefCount is
 			 * increased to keep buffer pinned after freeGinBtreeStack() call.
 			 */
-			IncrBufferRefCount(entry->buffer);
-
 			page = BufferGetPage(entry->buffer);
 			entry->predictNumberResult = gdi->stack->predictNumber * GinPageGetOpaque(page)->maxoff;
 
 			/*
 			 * Keep page content in memory to prevent durable page locking
 			 */
-			entry->list = (ItemPointerData *) palloc(BLCKSZ);
-			entry->nlist = GinPageGetOpaque(page)->maxoff;
-			memcpy(entry->list, GinDataPageGetItem(page, FirstOffsetNumber),
-				   GinPageGetOpaque(page)->maxoff * sizeof(ItemPointerData));
+			entry->list = (ItemPointerData *) palloc(BLCKSZ * sizeof(ItemPointerData));
+			entry->addInfo = (Datum *) palloc(BLCKSZ * sizeof(Datum));
+			entry->addInfoIsNull = (bool *) palloc(BLCKSZ * sizeof(bool));
+			maxoff = GinPageGetOpaque(page)->maxoff;
+			entry->nlist = maxoff;
+
+			ptr = GinDataPageGetData(page);
+
+			for (i = FirstOffsetNumber; i <= maxoff; i = OffsetNumberNext(i))
+			{
+				ptr = ginDataPageLeafRead(ptr, entry->attnum, &iptr,
+					&entry->addInfo[i - FirstOffsetNumber],
+					&entry->addInfoIsNull[i - FirstOffsetNumber], ginstate);
+				entry->list[i - FirstOffsetNumber] = iptr;
+			}
 
 			LockBuffer(entry->buffer, GIN_UNLOCK);
-			freeGinBtreeStack(gdi->stack);
-			pfree(gdi);
 			entry->isFinished = FALSE;
 		}
 		else if (GinGetNPosting(itup) > 0)
 		{
 			entry->nlist = GinGetNPosting(itup);
+			entry->predictNumberResult = entry->nlist;
 			entry->list = (ItemPointerData *) palloc(sizeof(ItemPointerData) * entry->nlist);
-			memcpy(entry->list, GinGetPosting(itup), sizeof(ItemPointerData) * entry->nlist);
+			entry->addInfo = (Datum *) palloc(sizeof(Datum) * entry->nlist);
+			entry->addInfoIsNull = (bool *) palloc(sizeof(bool) * entry->nlist);
+
+			ginReadTuple(ginstate, entry->attnum, itup,
+				entry->list, entry->addInfo, entry->addInfoIsNull);
+
 			entry->isFinished = FALSE;
 		}
 	}
@@ -489,15 +544,42 @@ startScanKey(GinState *ginstate, GinScanKey key)
 	key->isFinished = false;
 }
 
+static int
+cmpEntries(GinScanEntry e1, GinScanEntry e2)
+{
+	if (e1->isFinished == TRUE)
+	{
+		if (e2->isFinished == TRUE)
+			return 0;
+		else
+			return 1;
+	}
+	if (e2->isFinished)
+		return -1;
+	return ginCompareItemPointers(&e1->curItem, &e2->curItem);
+}
+
+static int
+scan_entry_cmp(const void *p1, const void *p2)
+{
+	GinScanEntry e1 = *((GinScanEntry *)p1);
+	GinScanEntry e2 = *((GinScanEntry *)p2);
+
+	return -cmpEntries(e1, e2);
+}
+
 static void
 startScan(IndexScanDesc scan)
 {
 	GinScanOpaque so = (GinScanOpaque) scan->opaque;
 	GinState   *ginstate = &so->ginstate;
 	uint32		i;
+	bool		useFastScan = false;
 
 	for (i = 0; i < so->totalentries; i++)
+	{
 		startScanEntry(ginstate, so->entries[i]);
+	}
 
 	if (GinFuzzySearchLimit > 0)
 	{
@@ -522,6 +604,49 @@ startScan(IndexScanDesc scan)
 
 	for (i = 0; i < so->nkeys; i++)
 		startScanKey(ginstate, so->keys + i);
+
+	for (i = 0; i < so->nkeys; i++)
+	{
+		GinScanKey key = &so->keys[i];
+
+		if (so->ginstate.canPreConsistent[key->attnum - 1])
+		{
+			useFastScan = true;
+			break;
+		}
+	}
+
+	if (useFastScan)
+	{
+		for (i = 0; i < so->totalentries; i++)
+		{
+			GinScanEntry entry = so->entries[i];
+			if (entry->isPartialMatch)
+			{
+				useFastScan = false;
+				break;
+			}
+		}
+	}
+
+	ItemPointerSetMin(&so->iptr);
+
+	if (useFastScan)
+	{
+		so->sortedEntries = (GinScanEntry *)palloc(sizeof(GinScanEntry) *
+															so->totalentries);
+		memcpy(so->sortedEntries, so->entries, sizeof(GinScanEntry) *
+															so->totalentries);
+		for (i = 0; i < so->totalentries; i++)
+		{
+			if (!so->sortedEntries[i]->isFinished)
+				entryGetItem(&so->ginstate, so->sortedEntries[i]);
+		}
+		qsort(so->sortedEntries, so->totalentries, sizeof(GinScanEntry),
+																scan_entry_cmp);
+	}
+
+	so->useFastScan = useFastScan;
 }
 
 /*
@@ -538,12 +663,22 @@ entryGetNextItem(GinState *ginstate, GinScanEntry entry)
 	{
 		if (entry->offset < entry->nlist)
 		{
-			entry->curItem = entry->list[entry->offset++];
+			entry->curItem = entry->list[entry->offset];
+			entry->curAddInfo = entry->addInfo[entry->offset];
+			entry->curAddInfoIsNull = entry->addInfoIsNull[entry->offset];
+			entry->offset++;
 			return;
 		}
 
 		LockBuffer(entry->buffer, GIN_SHARE);
 		page = BufferGetPage(entry->buffer);
+
+		if (scanPage(ginstate, entry, &entry->curItem, BufferGetPage(entry->buffer), false))
+		{
+			LockBuffer(entry->buffer, GIN_UNLOCK);
+			return;
+		}
+
 		for (;;)
 		{
 			/*
@@ -554,26 +689,43 @@ entryGetNextItem(GinState *ginstate, GinScanEntry entry)
 			{
 				UnlockReleaseBuffer(entry->buffer);
 				ItemPointerSetInvalid(&entry->curItem);
+
 				entry->buffer = InvalidBuffer;
 				entry->isFinished = TRUE;
+				entry->gdi->stack->buffer = InvalidBuffer;
 				return;
 			}
 
 			entry->buffer = ginStepRight(entry->buffer,
 										 ginstate->index,
 										 GIN_SHARE);
+			entry->gdi->stack->buffer = entry->buffer;
+			entry->gdi->stack->blkno = BufferGetBlockNumber(entry->buffer);
 			page = BufferGetPage(entry->buffer);
 
 			entry->offset = InvalidOffsetNumber;
 			if (!ItemPointerIsValid(&entry->curItem) ||
-				findItemInPostingPage(page, &entry->curItem, &entry->offset))
+				findItemInPostingPage(page, &entry->curItem, &entry->offset,
+				entry->attnum, ginstate))
 			{
+				OffsetNumber maxoff, i;
+				Pointer ptr;
+				ItemPointerData iptr = {{0,0},0};
+
 				/*
 				 * Found position equal to or greater than stored
 				 */
-				entry->nlist = GinPageGetOpaque(page)->maxoff;
-				memcpy(entry->list, GinDataPageGetItem(page, FirstOffsetNumber),
-				   GinPageGetOpaque(page)->maxoff * sizeof(ItemPointerData));
+				maxoff = GinPageGetOpaque(page)->maxoff;
+				entry->nlist = maxoff;
+
+				ptr = GinDataPageGetData(page);
+
+				for (i = FirstOffsetNumber; i <= maxoff; i = OffsetNumberNext(i))
+				{
+					ptr = ginDataPageLeafRead(ptr, entry->attnum, &iptr,
+						&entry->addInfo[i - FirstOffsetNumber], &entry->addInfoIsNull[i - FirstOffsetNumber], ginstate);
+					entry->list[i - FirstOffsetNumber] = iptr;
+				}
 
 				LockBuffer(entry->buffer, GIN_UNLOCK);
 
@@ -592,6 +744,8 @@ entryGetNextItem(GinState *ginstate, GinScanEntry entry)
 				 * Find greater than entry->curItem position, store it.
 				 */
 				entry->curItem = entry->list[entry->offset - 1];
+				entry->curAddInfo = entry->addInfo[entry->offset - 1];
+				entry->curAddInfoIsNull = entry->addInfoIsNull[entry->offset - 1];
 
 				return;
 			}
@@ -673,7 +827,11 @@ entryGetItem(GinState *ginstate, GinScanEntry entry)
 	{
 		entry->offset++;
 		if (entry->offset <= entry->nlist)
+		{
 			entry->curItem = entry->list[entry->offset - 1];
+			entry->curAddInfo = entry->addInfo[entry->offset - 1];
+			entry->curAddInfoIsNull = entry->addInfoIsNull[entry->offset - 1];
+		}
 		else
 		{
 			ItemPointerSetInvalid(&entry->curItem);
@@ -817,6 +975,11 @@ keyGetItem(GinState *ginstate, MemoryContext tempCtx, GinScanKey key)
 	if (haveLossyEntry)
 	{
 		/* Single lossy-page entry, so see if whole page matches */
+		for (i = 0; i < key->nentries; i++)
+		{
+			key->addInfo[i] = (Datum) 0;
+			key->addInfoIsNull[i] = true;
+		}
 		memset(key->entryRes, FALSE, key->nentries);
 		key->entryRes[lossyEntry] = TRUE;
 
@@ -851,12 +1014,24 @@ keyGetItem(GinState *ginstate, MemoryContext tempCtx, GinScanKey key)
 		entry = key->scanEntry[i];
 		if (entry->isFinished == FALSE &&
 			ginCompareItemPointers(&entry->curItem, &key->curItem) == 0)
+		{
 			key->entryRes[i] = TRUE;
+			key->addInfo[i] = entry->curAddInfo;
+			key->addInfoIsNull[i] = entry->curAddInfoIsNull;
+		}
 		else
+		{
 			key->entryRes[i] = FALSE;
+			key->addInfo[i] = (Datum) 0;
+			key->addInfoIsNull[i] = true;
+		}
 	}
 	if (haveLossyEntry)
+	{
 		key->entryRes[lossyEntry] = TRUE;
+		key->addInfo[lossyEntry] = (Datum) 0;
+		key->addInfoIsNull[lossyEntry] = true;
+	}
 
 	res = callConsistentFn(ginstate, key);
 
@@ -864,6 +1039,8 @@ keyGetItem(GinState *ginstate, MemoryContext tempCtx, GinScanKey key)
 	{
 		/* try the other way for the lossy item */
 		key->entryRes[lossyEntry] = FALSE;
+		key->addInfo[lossyEntry] = (Datum) 0;
+		key->addInfoIsNull[lossyEntry] = true;
 
 		res = callConsistentFn(ginstate, key);
 	}
@@ -888,7 +1065,7 @@ keyGetItem(GinState *ginstate, MemoryContext tempCtx, GinScanKey key)
  * keyGetItem() the combination logic is known only to the consistentFn.
  */
 static bool
-scanGetItem(IndexScanDesc scan, ItemPointer advancePast,
+scanGetItemRegular(IndexScanDesc scan, ItemPointer advancePast,
 			ItemPointerData *item, bool *recheck)
 {
 	GinScanOpaque so = (GinScanOpaque) scan->opaque;
@@ -938,6 +1115,9 @@ scanGetItem(IndexScanDesc scan, ItemPointer advancePast,
 		{
 			GinScanKey	key = so->keys + i;
 
+			if (key->orderBy)
+				continue;
+
 			keyGetItem(&so->ginstate, so->tempCtx, key);
 
 			if (key->isFinished)
@@ -975,6 +1155,9 @@ scanGetItem(IndexScanDesc scan, ItemPointer advancePast,
 		{
 			GinScanKey	key = so->keys + i;
 
+			if (key->orderBy)
+				continue;
+
 			if (key->curItemMatches)
 			{
 				if (ginCompareItemPointers(item, &key->curItem) == 0)
@@ -1006,6 +1189,9 @@ scanGetItem(IndexScanDesc scan, ItemPointer advancePast,
 	{
 		GinScanKey	key = so->keys + i;
 
+		if (key->orderBy)
+			continue;
+
 		if (key->recheckCurItem)
 		{
 			*recheck = true;
@@ -1014,6 +1200,365 @@ scanGetItem(IndexScanDesc scan, ItemPointer advancePast,
 	}
 
 	return TRUE;
+}
+
+static bool
+scanPage(GinState *ginstate, GinScanEntry entry, ItemPointer item, Page page, bool equalOk)
+{
+	int j;
+	ItemPointerData iptr = {{0,0},0};
+	Pointer ptr;
+	OffsetNumber first = FirstOffsetNumber, i, maxoff;
+	bool found;
+	int cmp;
+
+	if (!GinPageRightMost(page))
+	{
+		cmp = ginCompareItemPointers(GinDataPageGetRightBound(page), item);
+		if (cmp < 0 || (cmp <= 0 && !equalOk))
+			return false;
+	}
+
+	ptr = GinDataPageGetData(page);
+	maxoff = GinPageGetOpaque(page)->maxoff;
+	for (j = 0; j < GinDataLeafIndexCount; j++)
+	{
+		GinDataLeafItemIndex *index = &GinPageGetIndexes(page)[j];
+		if (index->offsetNumer == InvalidOffsetNumber)
+			break;
+
+		cmp = ginCompareItemPointers(&index->iptr, item);
+		if (cmp < 0 || (cmp <= 0 && !equalOk))
+		{
+			ptr = GinDataPageGetData(page) + index->pageOffset;
+			first = index->offsetNumer;
+			iptr = index->iptr;
+		}
+		else
+		{
+			maxoff = index->offsetNumer - 1;
+			break;
+		}
+	}
+
+	entry->nlist = maxoff - first + 1;
+	entry->offset = InvalidOffsetNumber;
+	found = false;
+	for (i = first; i <= maxoff; i++)
+	{
+		ptr = ginDataPageLeafRead(ptr, entry->attnum, &iptr,
+			&entry->addInfo[i - first],
+			&entry->addInfoIsNull[i - first],
+			ginstate);
+		entry->list[i - first] = iptr;
+		cmp = ginCompareItemPointers(item, &iptr);
+		if ((cmp < 0 || (cmp <= 0 && equalOk))&& entry->offset == InvalidOffsetNumber)
+		{
+			found = true;
+			entry->offset = i - first + 1;
+		}
+	}
+	if (!found)
+		return false;
+
+	entry->curItem = entry->list[entry->offset - 1];
+	entry->curAddInfo = entry->addInfo[entry->offset - 1];
+	entry->curAddInfoIsNull = entry->addInfoIsNull[entry->offset - 1];
+	return true;
+}
+
+static void
+entryFindItem(GinState *ginstate, GinScanEntry entry, ItemPointer item)
+{
+	Page page = NULL;
+
+	if (entry->nlist == 0)
+	{
+		entry->isFinished = TRUE;
+		return;
+	}
+
+	if (ginCompareItemPointers(&entry->list[entry->nlist - 1], item) >= 0)
+	{
+		if (ginCompareItemPointers(&entry->curItem, item) >= 0)
+			return;
+		while (entry->offset < entry->nlist)
+		{
+			if (ginCompareItemPointers(&entry->list[entry->offset], item) >= 0)
+			{
+				entry->curItem = entry->list[entry->offset];
+				entry->curAddInfo = entry->addInfo[entry->offset];
+				entry->curAddInfoIsNull = entry->addInfoIsNull[entry->offset];
+				entry->offset++;
+				return;
+			}
+			entry->offset++;
+		}
+	}
+
+
+	if (!BufferIsValid(entry->buffer))
+	{
+		entry->isFinished = TRUE;
+		return;
+	}
+
+	LockBuffer(entry->buffer, GIN_SHARE);
+
+	if (scanPage(ginstate, entry, item, BufferGetPage(entry->buffer), true))
+	{
+		LockBuffer(entry->buffer, GIN_UNLOCK);
+		return;
+	}
+
+	entry->gdi->btree.items = item;
+	entry->gdi->btree.curitem = 0;
+
+	entry->gdi->stack->buffer = entry->buffer;
+	entry->gdi->stack = ginReFindLeafPage(&entry->gdi->btree, entry->gdi->stack);
+	entry->buffer = entry->gdi->stack->buffer;
+
+	page = BufferGetPage(entry->buffer);
+
+	if (scanPage(ginstate, entry, item, BufferGetPage(entry->buffer), true))
+	{
+		LockBuffer(entry->buffer, GIN_UNLOCK);
+		return;
+	}
+
+	for (;;)
+	{
+		/*
+		 * It's needed to go by right link. During that we should refind
+		 * first ItemPointer greater that stored
+		 */
+		BlockNumber blkno;
+
+		blkno = GinPageGetOpaque(page)->rightlink;
+
+		LockBuffer(entry->buffer, GIN_UNLOCK);
+		if (blkno == InvalidBlockNumber)
+		{
+			ReleaseBuffer(entry->buffer);
+			ItemPointerSetInvalid(&entry->curItem);
+			entry->buffer = InvalidBuffer;
+			entry->gdi->stack->buffer = InvalidBuffer;
+			entry->isFinished = TRUE;
+			return;
+		}
+
+		entry->buffer = ReleaseAndReadBuffer(entry->buffer,
+											 ginstate->index,
+											 blkno);
+		entry->gdi->stack->buffer = entry->buffer;
+		entry->gdi->stack->blkno = blkno;
+		LockBuffer(entry->buffer, GIN_SHARE);
+		page = BufferGetPage(entry->buffer);
+
+		if (scanPage(ginstate, entry, item, BufferGetPage(entry->buffer), true))
+		{
+			LockBuffer(entry->buffer, GIN_UNLOCK);
+			return;
+		}
+	}
+}
+
+static bool
+preConsistentCheck(GinScanOpaque so)
+{
+	GinState *ginstate = &so->ginstate;
+	int i, j;
+	bool recheck;
+
+	for (j = 0; j < so->nkeys; j++)
+	{
+		GinScanKey key = &so->keys[j];
+		bool hasFalse = false;
+
+		if (key->orderBy)
+			continue;
+
+		if (!so->ginstate.canPreConsistent[key->attnum - 1])
+			continue;
+
+		for (i = 0; i < key->nentries; i++)
+		{
+			GinScanEntry entry = key->scanEntry[i];
+			key->entryRes[i] = entry->preValue;
+			if (!entry->preValue)
+				hasFalse = true;
+		}
+
+		if (!hasFalse)
+			continue;
+
+		if (!DatumGetBool(FunctionCall8Coll(&ginstate->preConsistentFn[key->attnum - 1],
+									 ginstate->supportCollation[key->attnum - 1],
+											  PointerGetDatum(key->entryRes),
+											  UInt16GetDatum(key->strategy),
+											  key->query,
+											  UInt32GetDatum(key->nuserentries),
+											  PointerGetDatum(key->extra_data),
+											   PointerGetDatum(&recheck),
+												  PointerGetDatum(key->queryValues),
+											 PointerGetDatum(key->queryCategories)
+
+			)))
+			return false;
+	}
+	return true;
+}
+
+static void
+entryShift(int i, GinScanOpaque so, bool find)
+{
+	int minIndex = -1, j;
+	uint32 minPredictNumberResult = 0;
+	GinState *ginstate = &so->ginstate;
+
+	for (j = i; j < so->totalentries; j++)
+	{
+		if (minIndex < 0 || so->sortedEntries[j]->predictNumberResult < minPredictNumberResult)
+		{
+			minIndex = j;
+			minPredictNumberResult = so->sortedEntries[j]->predictNumberResult;
+		}
+	}
+
+	if (find)
+		entryFindItem(ginstate, so->sortedEntries[minIndex], &so->sortedEntries[i - 1]->curItem);
+	else if (!so->sortedEntries[minIndex]->isFinished)
+		entryGetItem(ginstate, so->sortedEntries[minIndex]);
+
+	while (minIndex > 0 &&
+		cmpEntries(so->sortedEntries[minIndex], so->sortedEntries[minIndex - 1]) > 0)
+	{
+		GinScanEntry tmp;
+		tmp = so->sortedEntries[minIndex];
+		so->sortedEntries[minIndex] = so->sortedEntries[minIndex - 1];
+		so->sortedEntries[minIndex - 1] = tmp;
+		minIndex--;
+	}
+}
+
+static bool
+scanGetItemFast(IndexScanDesc scan, ItemPointer advancePast,
+			ItemPointerData *item, bool *recheck)
+{
+	GinScanOpaque so = (GinScanOpaque) scan->opaque;
+	int i, j, k;
+	bool preConsistentFalse, consistentFalse;
+
+	if (so->entriesIncrIndex >= 0)
+	{
+		for (k = so->entriesIncrIndex; k < so->totalentries; k++)
+			entryShift(k, so, false);
+	}
+
+	for (;;)
+	{
+		preConsistentFalse = false;
+		j = 0;
+		k = 0;
+		for (i = 0; i < so->totalentries; i++)
+			so->sortedEntries[i]->preValue = true;
+		for (i = 1; i < so->totalentries; i++)
+		{
+			if (cmpEntries(so->sortedEntries[i], so->sortedEntries[i - 1]) < 0)
+			{
+				k = i;
+				for (; j < i; j++)
+					so->sortedEntries[j]->preValue = false;
+
+				if (!preConsistentCheck(so))
+				{
+					preConsistentFalse = true;
+					break;
+				}
+			}
+		}
+
+		if (so->sortedEntries[i - 1]->isFinished == TRUE)
+			return false;
+
+		if (preConsistentFalse)
+		{
+			entryShift(i, so, true);
+			continue;
+		}
+
+		consistentFalse = false;
+		for (i = 0; i < so->nkeys; i++)
+		{
+			GinScanKey	key = so->keys + i;
+			ItemPointer iptr;
+
+			if (key->orderBy)
+				continue;
+
+			for (j = 0; j < key->nentries; j++)
+			{
+				GinScanEntry entry = key->scanEntry[j];
+				if (entry->isFinished == FALSE &&
+					ginCompareItemPointers(&entry->curItem,
+					&so->sortedEntries[so->totalentries - 1]->curItem) == 0)
+				{
+					key->entryRes[j] = TRUE;
+					key->addInfo[j] = entry->curAddInfo;
+					key->addInfoIsNull[j] = entry->curAddInfoIsNull;
+				}
+				else
+				{
+					key->entryRes[j] = FALSE;
+					key->addInfo[j] = (Datum) 0;
+					key->addInfoIsNull[j] = true;
+				}
+			}
+			iptr = &so->sortedEntries[so->totalentries - 1]->curItem;
+			if (!callConsistentFn(&so->ginstate, key))
+			{
+				consistentFalse = true;
+				entryShift(k, so, false);
+				continue;
+			}
+		}
+
+		if (consistentFalse)
+			continue;
+
+		*recheck = false;
+		for (i = 0; i < so->nkeys; i++)
+		{
+			GinScanKey	key = so->keys + i;
+
+			if (key->orderBy)
+				continue;
+
+			if (key->recheckCurItem)
+			{
+				*recheck = true;
+				break;
+			}
+		}
+
+		*item = so->sortedEntries[so->totalentries - 1]->curItem;
+		so->entriesIncrIndex = k;
+
+		return true;
+	}
+	return false;
+}
+
+static bool
+scanGetItem(IndexScanDesc scan, ItemPointer advancePast,
+			ItemPointerData *item, bool *recheck)
+{
+	GinScanOpaque so = (GinScanOpaque) scan->opaque;
+
+	if (so->useFastScan)
+		return scanGetItemFast(scan, advancePast, item, recheck);
+	else
+		return scanGetItemRegular(scan, advancePast, item, recheck);
 }
 
 
@@ -1205,6 +1750,8 @@ collectMatchesForHeapRow(IndexScanDesc scan, pendingPosition *pos)
 		GinScanKey	key = so->keys + i;
 
 		memset(key->entryRes, FALSE, key->nentries);
+		memset(key->addInfo, FALSE, sizeof(Datum) * key->nentries);
+		memset(key->addInfoIsNull, TRUE, key->nentries);
 	}
 	memset(pos->hasMatchKey, FALSE, so->nkeys);
 
@@ -1323,7 +1870,14 @@ collectMatchesForHeapRow(IndexScanDesc scan, pendingPosition *pos)
 														  category,
 														  datumExtracted);
 						else
+						{
 							key->entryRes[j] = true;
+							if (OidIsValid(so->ginstate.addInfoTypeOid[i]))
+								key->addInfo[j] = index_getattr(itup,
+												so->ginstate.oneCol ? 2 : 3,
+											so->ginstate.tupdesc[attrnum - 1],
+														&key->addInfoIsNull[j]);
+						}
 
 						/* done with binary search */
 						break;
@@ -1399,8 +1953,8 @@ collectMatchesForHeapRow(IndexScanDesc scan, pendingPosition *pos)
 /*
  * Collect all matched rows from pending list into bitmap
  */
-static void
-scanPendingInsert(IndexScanDesc scan, TIDBitmap *tbm, int64 *ntids)
+static int64
+scanPendingInsert(IndexScanDesc scan)
 {
 	GinScanOpaque so = (GinScanOpaque) scan->opaque;
 	MemoryContext oldCtx;
@@ -1410,8 +1964,8 @@ scanPendingInsert(IndexScanDesc scan, TIDBitmap *tbm, int64 *ntids)
 	pendingPosition pos;
 	Buffer		metabuffer = ReadBuffer(scan->indexRelation, GIN_METAPAGE_BLKNO);
 	BlockNumber blkno;
-
-	*ntids = 0;
+	int64		ntids = 0;
+	TIDBitmap  *tbm = so->tbm;
 
 	LockBuffer(metabuffer, GIN_SHARE);
 	blkno = GinPageGetMeta(BufferGetPage(metabuffer))->head;
@@ -1424,7 +1978,7 @@ scanPendingInsert(IndexScanDesc scan, TIDBitmap *tbm, int64 *ntids)
 	{
 		/* No pending list, so proceed with normal scan */
 		UnlockReleaseBuffer(metabuffer);
-		return;
+		return ntids;
 	}
 
 	pos.pendingBuffer = ReadBuffer(scan->indexRelation, blkno);
@@ -1474,12 +2028,21 @@ scanPendingInsert(IndexScanDesc scan, TIDBitmap *tbm, int64 *ntids)
 
 		if (match)
 		{
-			tbm_add_tuples(tbm, &pos.item, 1, recheck);
-			(*ntids)++;
+			if (tbm)
+			{
+				tbm_add_tuples(tbm, &pos.item, 1, recheck);
+			}
+			else
+			{
+				so->iptr = pos.item;
+				insertScanItem(so, recheck);
+			}
+			ntids++;
 		}
 	}
 
 	pfree(pos.hasMatchKey);
+	return ntids;
 }
 
 
@@ -1491,8 +2054,8 @@ gingetbitmap(PG_FUNCTION_ARGS)
 {
 	IndexScanDesc scan = (IndexScanDesc) PG_GETARG_POINTER(0);
 	TIDBitmap  *tbm = (TIDBitmap *) PG_GETARG_POINTER(1);
+	GinScanOpaque so = (GinScanOpaque)scan->opaque;
 	int64		ntids;
-	ItemPointerData iptr;
 	bool		recheck;
 
 	/*
@@ -1516,28 +2079,145 @@ gingetbitmap(PG_FUNCTION_ARGS)
 	 * to scan the main index before the pending list, since concurrent
 	 * cleanup could then make us miss entries entirely.
 	 */
-	scanPendingInsert(scan, tbm, &ntids);
+	so->tbm = tbm;
+	so->entriesIncrIndex = -1;
+	ntids = scanPendingInsert(scan);
 
 	/*
 	 * Now scan the main index.
 	 */
 	startScan(scan);
 
-	ItemPointerSetMin(&iptr);
-
 	for (;;)
 	{
 		CHECK_FOR_INTERRUPTS();
 
-		if (!scanGetItem(scan, &iptr, &iptr, &recheck))
+		if (!scanGetItem(scan, &so->iptr, &so->iptr, &recheck))
 			break;
 
-		if (ItemPointerIsLossyPage(&iptr))
-			tbm_add_page(tbm, ItemPointerGetBlockNumber(&iptr));
+		if (ItemPointerIsLossyPage(&so->iptr))
+			tbm_add_page(tbm, ItemPointerGetBlockNumber(&so->iptr));
 		else
-			tbm_add_tuples(tbm, &iptr, 1, recheck);
+			tbm_add_tuples(tbm, &so->iptr, 1, recheck);
 		ntids++;
 	}
 
 	PG_RETURN_INT64(ntids);
 }
+
+static float8
+keyGetOrdering(GinState *ginstate, MemoryContext tempCtx, GinScanKey key,
+	ItemPointer iptr)
+{
+	GinScanEntry entry;
+	int i;
+
+	for (i = 0; i < key->nentries; i++)
+	{
+		entry = key->scanEntry[i];
+		if (entry->isFinished == FALSE &&
+			ginCompareItemPointers(&entry->curItem, iptr) == 0)
+		{
+			key->addInfo[i] = entry->curAddInfo;
+			key->addInfoIsNull[i] = entry->curAddInfoIsNull;
+			key->entryRes[i] = true;
+		}
+		else
+		{
+			key->addInfo[i] = (Datum) 0;
+			key->addInfoIsNull[i] = true;
+			key->entryRes[i] = false;
+		}
+	}
+
+	return DatumGetFloat8(FunctionCall10Coll(&ginstate->orderingFn[key->attnum - 1],
+										  ginstate->supportCollation[key->attnum - 1],
+										  PointerGetDatum(key->entryRes),
+										  UInt16GetDatum(key->strategy),
+										  key->query,
+										  UInt32GetDatum(key->nuserentries),
+										  PointerGetDatum(key->extra_data),
+										  PointerGetDatum(&key->recheckCurItem),
+										  PointerGetDatum(key->queryValues),
+										  PointerGetDatum(key->queryCategories),
+										  PointerGetDatum(key->addInfo),
+										  PointerGetDatum(key->addInfoIsNull)
+		));
+}
+
+static void
+insertScanItem(GinScanOpaque so, bool recheck)
+{
+	GinSortItem *item;
+	int i, j = 0;
+
+	item = (GinSortItem *)palloc(GinSortItemSize(so->norderbys));
+	item->iptr = so->iptr;
+	item->recheck = recheck;
+	for (i = 0; i < so->nkeys; i++)
+	{
+		if (!so->keys[i].orderBy)
+			continue;
+		item->data[j] = keyGetOrdering(&so->ginstate, so->tempCtx, &so->keys[i], &so->iptr);
+		j++;
+	}
+	tuplesort_putgin(so->sortstate, item);
+}
+
+Datum
+gingettuple(PG_FUNCTION_ARGS)
+{
+	IndexScanDesc scan = (IndexScanDesc) PG_GETARG_POINTER(0);
+	bool		recheck;
+	GinScanOpaque so = (GinScanOpaque)scan->opaque;
+	GinSortItem *item;
+	bool	should_free;
+
+	if (so->firstCall)
+	{
+		so->norderbys = scan->numberOfOrderBys;
+
+		/*
+		 * Set up the scan keys, and check for unsatisfiable query.
+		 */
+		if (GinIsNewKey(scan))
+			ginNewScanKey(scan);
+
+		if (GinIsVoidRes(scan))
+			PG_RETURN_INT64(0);
+
+		so->tbm = NULL;
+		so->entriesIncrIndex = -1;
+		so->firstCall = false;
+		so->sortstate = tuplesort_begin_gin(work_mem, so->norderbys, false);
+
+		scanPendingInsert(scan);
+
+		/*
+		 * Now scan the main index.
+		 */
+		startScan(scan);
+
+		while (scanGetItem(scan, &so->iptr, &so->iptr, &recheck))
+		{
+			insertScanItem(so, recheck);
+		}
+		tuplesort_performsort(so->sortstate);
+	}
+
+	item = tuplesort_getgin(so->sortstate, true, &should_free);
+	if (item)
+	{
+		scan->xs_ctup.t_self = item->iptr;
+		scan->xs_recheck = item->recheck;
+
+		if (should_free)
+			pfree(item);
+		PG_RETURN_BOOL(true);
+	}
+	else
+	{
+		PG_RETURN_BOOL(false);
+	}
+}
+
