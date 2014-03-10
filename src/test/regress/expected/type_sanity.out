@@ -406,11 +406,12 @@ WHERE t.typbasetype = 0 AND
     (t.typanalyze = 'array_typanalyze'::regproc) !=
     (typelem != 0 AND typlen < 0)
 ORDER BY 1;
- oid |  typname   | typanalyze 
------+------------+------------
-  22 | int2vector | -
-  30 | oidvector  | -
-(2 rows)
+ oid  |  typname   |     typanalyze      
+------+------------+---------------------
+   22 | int2vector | -
+   30 | oidvector  | -
+ 3643 | _tsvector  | ts_array_typanalyze
+(3 rows)
 
 -- **************** pg_class ****************
 -- Look for illegal values in pg_class fields
