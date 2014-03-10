@@ -575,7 +575,7 @@ extern void initVodkaState(VodkaState *state, Relation index);
 extern Buffer VodkaNewBuffer(Relation index);
 extern void VodkaInitBuffer(Buffer b, uint32 f);
 extern void VodkaInitPage(Page page, uint32 f, Size pageSize);
-extern void VodkaInitMetabuffer(Buffer b);
+extern void VodkaInitMetabuffer(VodkaState *state, Buffer b);
 extern int vodkaCompareEntries(VodkaState *vodkastate, OffsetNumber attnum,
 				  Datum a, VodkaNullCategory categorya,
 				  Datum b, VodkaNullCategory categoryb);
@@ -898,7 +898,7 @@ extern void vodkaInsertBAEntries(BuildAccumulator *accum,
 				   ItemPointer heapptr, OffsetNumber attnum,
 				   Datum *entries, VodkaNullCategory *categories,
 				   int32 nentries);
-extern void vodkaBevodkaBAScan(BuildAccumulator *accum);
+extern void vodkaBeginBAScan(BuildAccumulator *accum);
 extern ItemPointerData *vodkaGetBAEntry(BuildAccumulator *accum,
 			  OffsetNumber *attnum, Datum *key, VodkaNullCategory *category,
 			  uint32 *n);

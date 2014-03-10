@@ -16,6 +16,7 @@
 
 #include "access/vodka_private.h"
 #include "access/reloptions.h"
+#include "catalog/catalog.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_type.h"
 #include "miscadmin.h"
@@ -253,7 +254,7 @@ VodkaInitBuffer(Buffer b, uint32 f)
 }
 
 void
-VodkaInitMetabuffer(Buffer b)
+VodkaInitMetabuffer(VodkaState *state, Buffer b)
 {
 	VodkaMetaPageData *metadata;
 	Page		page = BufferGetPage(b);
@@ -271,6 +272,12 @@ VodkaInitMetabuffer(Buffer b)
 	metadata->nDataPages = 0;
 	metadata->nEntries = 0;
 	metadata->vodkaVersion = VODKA_CURRENT_VERSION;
+	metadata->entryTreeNode.dbNode = MyDatabaseId;
+	metadata->entryTreeNode.spcNode = state->index->rd_rel->reltablespace;
+	metadata->entryTreeNode.relNode = GetNewRelFileNode(
+			state->index->rd_rel->reltablespace,
+			NULL,
+			state->index->rd_rel->relpersistence);
 }
 
 /*

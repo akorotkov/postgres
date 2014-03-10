@@ -342,7 +342,7 @@ vodkabuild(PG_FUNCTION_ARGS)
 	RootBuffer = VodkaNewBuffer(index);
 
 	START_CRIT_SECTION();
-	VodkaInitMetabuffer(MetaBuffer);
+	VodkaInitMetabuffer(&buildstate.vodkastate, MetaBuffer);
 	MarkBufferDirty(MetaBuffer);
 	VodkaInitBuffer(RootBuffer, VODKA_LEAF);
 	MarkBufferDirty(RootBuffer);
@@ -402,7 +402,7 @@ vodkabuild(PG_FUNCTION_ARGS)
 
 	/* dump remaining entries to the index */
 	oldCtx = MemoryContextSwitchTo(buildstate.tmpCtx);
-	vodkaBevodkaBAScan(&buildstate.accum);
+	vodkaBeginBAScan(&buildstate.accum);
 	while ((list = vodkaGetBAEntry(&buildstate.accum,
 								 &attnum, &key, &category, &nlist)) != NULL)
 	{
@@ -441,6 +441,9 @@ vodkabuildempty(PG_FUNCTION_ARGS)
 	Relation	index = (Relation) PG_GETARG_POINTER(0);
 	Buffer		RootBuffer,
 				MetaBuffer;
+	VodkaState	vodkastate;
+
+	initVodkaState(&vodkastate, index);
 
 	/* An empty VODKA index has two pages. */
 	MetaBuffer =
@@ -452,7 +455,7 @@ vodkabuildempty(PG_FUNCTION_ARGS)
 
 	/* Initialize and xlog metabuffer and root buffer. */
 	START_CRIT_SECTION();
-	VodkaInitMetabuffer(MetaBuffer);
+	VodkaInitMetabuffer(&vodkastate, MetaBuffer);
 	MarkBufferDirty(MetaBuffer);
 	log_newpage_buffer(MetaBuffer, false);
 	VodkaInitBuffer(RootBuffer, VODKA_LEAF);

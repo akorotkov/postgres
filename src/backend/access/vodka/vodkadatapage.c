@@ -1177,7 +1177,7 @@ disassembleLeaf(Page page)
 {
 	disassembledLeaf *leaf;
 	VodkaPostingList *seg;
-	Pointer		segbevodka;
+	Pointer		segbegin;
 	Pointer		segend;
 
 	leaf = palloc0(sizeof(disassembledLeaf));
@@ -1189,8 +1189,8 @@ disassembleLeaf(Page page)
 		 * Create a leafSegment entry for each segment.
 		 */
 		seg = VodkaDataLeafPageGetPostingList(page);
-		segbevodka = (Pointer) seg;
-		segend = segbevodka + VodkaDataLeafPageGetPostingListSize(page);
+		segbegin = (Pointer) seg;
+		segend = segbegin + VodkaDataLeafPageGetPostingListSize(page);
 		while ((Pointer) seg < segend)
 		{
 			leafSegmentInfo *sevodkafo = palloc(sizeof(leafSegmentInfo));

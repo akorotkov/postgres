@@ -43,6 +43,7 @@ vodkaarrayextract(PG_FUNCTION_ARGS)
 	bool	   *nulls;
 	int			nelems;
 
+
 	get_typlenbyvalalign(ARR_ELEMTYPE(array),
 						 &elmlen, &elmbyval, &elmalign);
 
