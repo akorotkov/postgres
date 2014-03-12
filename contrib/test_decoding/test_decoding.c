@@ -33,6 +33,7 @@
 
 PG_MODULE_MAGIC;
 
+/* These must be available to pg_dlsym() */
 extern void		_PG_init(void);
 extern void		_PG_output_plugin_init(OutputPluginCallbacks *cb);
 
@@ -43,7 +44,6 @@ typedef struct
 	bool		include_timestamp;
 } TestDecodingData;
 
-/* These must be available to pg_dlsym() */
 static void pg_decode_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 							  bool is_init);
 static void pg_decode_shutdown(LogicalDecodingContext *ctx);
@@ -358,43 +358,45 @@ pg_decode_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	{
 		case REORDER_BUFFER_CHANGE_INSERT:
 			appendStringInfoString(ctx->out, " INSERT:");
-			if (change->tp.newtuple == NULL)
+			if (change->data.tp.newtuple == NULL)
 				appendStringInfoString(ctx->out, " (no-tuple-data)");
 			else
 				tuple_to_stringinfo(ctx->out, tupdesc,
-									&change->tp.newtuple->tuple,
+									&change->data.tp.newtuple->tuple,
 									false);
 			break;
 		case REORDER_BUFFER_CHANGE_UPDATE:
 			appendStringInfoString(ctx->out, " UPDATE:");
-			if (change->tp.oldtuple != NULL)
+			if (change->data.tp.oldtuple != NULL)
 			{
 				appendStringInfoString(ctx->out, " old-key:");
 				tuple_to_stringinfo(ctx->out, tupdesc,
-									&change->tp.oldtuple->tuple,
+									&change->data.tp.oldtuple->tuple,
 									true);
 				appendStringInfoString(ctx->out, " new-tuple:");
 			}
 
-			if (change->tp.newtuple == NULL)
+			if (change->data.tp.newtuple == NULL)
 				appendStringInfoString(ctx->out, " (no-tuple-data)");
 			else
 				tuple_to_stringinfo(ctx->out, tupdesc,
-									&change->tp.newtuple->tuple,
+									&change->data.tp.newtuple->tuple,
 									false);
 			break;
 		case REORDER_BUFFER_CHANGE_DELETE:
 			appendStringInfoString(ctx->out, " DELETE:");
 
 			/* if there was no PK, we only know that a delete happened */
-			if (change->tp.oldtuple == NULL)
+			if (change->data.tp.oldtuple == NULL)
 				appendStringInfoString(ctx->out, " (no-tuple-data)");
 			/* In DELETE, only the replica identity is present; display that */
 			else
 				tuple_to_stringinfo(ctx->out, tupdesc,
-									&change->tp.oldtuple->tuple,
+									&change->data.tp.oldtuple->tuple,
 									true);
 			break;
+		default:
+			Assert(false);
 	}
 
 	MemoryContextSwitchTo(old);
