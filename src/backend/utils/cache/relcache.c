@@ -198,23 +198,6 @@ do { \
 		elog(WARNING, "trying to delete a rd_id reldesc that does not exist"); \
 } while(0)
 
-
-/*
- * Special cache for opclass-related information
- *
- * Note: only default support procs get cached, ie, those with
- * lefttype = righttype = opcintype.
- */
-typedef struct opclasscacheent
-{
-	Oid			opclassoid;		/* lookup key: OID of opclass */
-	bool		valid;			/* set TRUE after successful fill-in */
-	StrategyNumber numSupport;	/* max # of support procs (from pg_am) */
-	Oid			opcfamily;		/* OID of opclass's family */
-	Oid			opcintype;		/* OID of opclass's declared input type */
-	RegProcedure *supportProcs; /* OIDs of support procedures */
-} OpClassCacheEnt;
-
 static HTAB *OpClassCache = NULL;
 
 
@@ -254,8 +237,6 @@ static void IndexSupportInitialize(oidvector *indclass,
 					   Oid *opcInType,
 					   StrategyNumber maxSupportNumber,
 					   AttrNumber maxAttributeNumber);
-static OpClassCacheEnt *LookupOpclassInfo(Oid operatorClassOid,
-				  StrategyNumber numSupport);
 static void RelationCacheInitFileRemoveInDir(const char *tblspcpath);
 static void unlink_initfile(const char *initfilename);
 
@@ -1271,7 +1252,7 @@ IndexSupportInitialize(oidvector *indclass,
  * be able to flush this cache as well as the contents of relcache entries
  * for indexes.
  */
-static OpClassCacheEnt *
+OpClassCacheEnt *
 LookupOpclassInfo(Oid operatorClassOid,
 				  StrategyNumber numSupport)
 {

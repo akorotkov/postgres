@@ -16,6 +16,7 @@
 #include "fmgr.h"
 #include "storage/bufmgr.h"
 #include "utils/rbtree.h"
+#include "utils/rel.h"
 
 
 /*
@@ -273,9 +274,9 @@ typedef signed char VodkaNullCategory;
 #define VodkaDataPageGetRightBound(page)	((ItemPointer) PageGetContents(page))
 /*
  * Pointer to the data portion of a posting tree page. For internal pages,
- * that's the bevodkaning of the array of PostingItems. For compressed leaf
+ * that's the beginning of the array of PostingItems. For compressed leaf
  * pages, the first compressed posting list. For uncompressed (pre-9.4) leaf
- * pages, it's the bevodkaning of the ItemPointer array.
+ * pages, it's the beginning of the ItemPointer array.
  */
 #define VodkaDataPageGetData(page)	\
 	(PageGetContents(page) + MAXALIGN(sizeof(ItemPointerData)))
@@ -355,6 +356,9 @@ typedef struct VodkaState
 	bool		canPartialMatch[INDEX_MAX_KEYS];
 	/* Collations to pass to the support functions */
 	Oid			supportCollation[INDEX_MAX_KEYS];
+
+	RelFileNode	entryTreeNode;
+	RelationData entryTree;
 } VodkaState;
 
 
@@ -572,10 +576,11 @@ typedef struct vodkaxlogDeleteListPages
 /* vodkautil.c */
 extern Datum vodkaoptions(PG_FUNCTION_ARGS);
 extern void initVodkaState(VodkaState *state, Relation index);
+extern void freeVodkaState(VodkaState *state);
 extern Buffer VodkaNewBuffer(Relation index);
 extern void VodkaInitBuffer(Buffer b, uint32 f);
 extern void VodkaInitPage(Page page, uint32 f, Size pageSize);
-extern void VodkaInitMetabuffer(VodkaState *state, Buffer b);
+extern void VodkaInitMetabuffer(Relation index, Buffer b);
 extern int vodkaCompareEntries(VodkaState *vodkastate, OffsetNumber attnum,
 				  Datum a, VodkaNullCategory categorya,
 				  Datum b, VodkaNullCategory categoryb);
@@ -704,7 +709,7 @@ extern void VodkaPageDeletePostingItem(Page page, OffsetNumber offset);
 extern void vodkaInsertItemPointers(Relation index, BlockNumber rootBlkno,
 					  ItemPointerData *items, uint32 nitem,
 					  VodkaStatsData *buildStats);
-extern VodkaBtreeStack *vodkaScanBevodkaPostingTree(VodkaBtree btree, Relation index, BlockNumber rootBlkno);
+extern VodkaBtreeStack *vodkaScanBeginPostingTree(VodkaBtree btree, Relation index, BlockNumber rootBlkno);
 extern void vodkaDataFillRoot(VodkaBtree btree, Page root, BlockNumber lblkno, Page lpage, BlockNumber rblkno, Page rpage);
 extern void vodkaPrepareDataScan(VodkaBtree btree, Relation index, BlockNumber rootBlkno);
 
@@ -841,7 +846,7 @@ typedef struct VodkaScanOpaqueData
 
 typedef VodkaScanOpaqueData *VodkaScanOpaque;
 
-extern Datum vodkabevodkascan(PG_FUNCTION_ARGS);
+extern Datum vodkabeginscan(PG_FUNCTION_ARGS);
 extern Datum vodkaendscan(PG_FUNCTION_ARGS);
 extern Datum vodkarescan(PG_FUNCTION_ARGS);
 extern Datum vodkamarkpos(PG_FUNCTION_ARGS);

@@ -17,6 +17,7 @@
 #include "access/vodka_private.h"
 #include "access/heapam_xlog.h"
 #include "catalog/index.h"
+#include "catalog/storage.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
 #include "storage/smgr.h"
@@ -292,7 +293,7 @@ vodkaBuildCallback(Relation index, HeapTuple htup, Datum *values,
 		uint32		nlist;
 		OffsetNumber attnum;
 
-		vodkaBevodkaBAScan(&buildstate->accum);
+		vodkaBeginBAScan(&buildstate->accum);
 		while ((list = vodkaGetBAEntry(&buildstate->accum,
 								  &attnum, &key, &category, &nlist)) != NULL)
 		{
@@ -326,14 +327,11 @@ vodkabuild(PG_FUNCTION_ARGS)
 	uint32		nlist;
 	MemoryContext oldCtx;
 	OffsetNumber attnum;
+	IndexBuildResult *stats;
 
 	if (RelationGetNumberOfBlocks(index) != 0)
 		elog(ERROR, "index \"%s\" already contains data",
 			 RelationGetRelationName(index));
-
-	initVodkaState(&buildstate.vodkastate, index);
-	buildstate.indtuples = 0;
-	memset(&buildstate.buildStats, 0, sizeof(VodkaStatsData));
 
 	/* initialize the meta page */
 	MetaBuffer = VodkaNewBuffer(index);
@@ -342,7 +340,7 @@ vodkabuild(PG_FUNCTION_ARGS)
 	RootBuffer = VodkaNewBuffer(index);
 
 	START_CRIT_SECTION();
-	VodkaInitMetabuffer(&buildstate.vodkastate, MetaBuffer);
+	VodkaInitMetabuffer(index, MetaBuffer);
 	MarkBufferDirty(MetaBuffer);
 	VodkaInitBuffer(RootBuffer, VODKA_LEAF);
 	MarkBufferDirty(RootBuffer);
@@ -370,6 +368,21 @@ vodkabuild(PG_FUNCTION_ARGS)
 	UnlockReleaseBuffer(MetaBuffer);
 	UnlockReleaseBuffer(RootBuffer);
 	END_CRIT_SECTION();
+
+	initVodkaState(&buildstate.vodkastate, index);
+
+	RelationOpenSmgr(&buildstate.vodkastate.entryTree);
+	RelationCreateStorage(buildstate.vodkastate.entryTree.rd_node,
+			buildstate.vodkastate.entryTree.rd_rel->relpersistence);
+
+	stats = (IndexBuildResult *)
+		DatumGetPointer(OidFunctionCall3(buildstate.vodkastate.entryTree.rd_am->ambuild,
+						 PointerGetDatum(NULL),
+						 PointerGetDatum(&buildstate.vodkastate.entryTree),
+						 PointerGetDatum(NULL)));
+
+	buildstate.indtuples = 0;
+	memset(&buildstate.buildStats, 0, sizeof(VodkaStatsData));
 
 	/* count the root as first entry page */
 	buildstate.buildStats.nEntryPages++;
@@ -429,6 +442,8 @@ vodkabuild(PG_FUNCTION_ARGS)
 	result->heap_tuples = reltuples;
 	result->index_tuples = buildstate.indtuples;
 
+	freeVodkaState(&buildstate.vodkastate);
+
 	PG_RETURN_POINTER(result);
 }
 
@@ -442,8 +457,7 @@ vodkabuildempty(PG_FUNCTION_ARGS)
 	Buffer		RootBuffer,
 				MetaBuffer;
 	VodkaState	vodkastate;
-
-	initVodkaState(&vodkastate, index);
+	IndexBuildResult *stats;
 
 	/* An empty VODKA index has two pages. */
 	MetaBuffer =
@@ -455,7 +469,7 @@ vodkabuildempty(PG_FUNCTION_ARGS)
 
 	/* Initialize and xlog metabuffer and root buffer. */
 	START_CRIT_SECTION();
-	VodkaInitMetabuffer(&vodkastate, MetaBuffer);
+	VodkaInitMetabuffer(index, MetaBuffer);
 	MarkBufferDirty(MetaBuffer);
 	log_newpage_buffer(MetaBuffer, false);
 	VodkaInitBuffer(RootBuffer, VODKA_LEAF);
@@ -463,9 +477,23 @@ vodkabuildempty(PG_FUNCTION_ARGS)
 	log_newpage_buffer(RootBuffer, false);
 	END_CRIT_SECTION();
 
+	initVodkaState(&vodkastate, index);
+
 	/* Unlock and release the buffers. */
 	UnlockReleaseBuffer(MetaBuffer);
 	UnlockReleaseBuffer(RootBuffer);
+
+	RelationOpenSmgr(&vodkastate.entryTree);
+	RelationCreateStorage(vodkastate.entryTree.rd_node,
+			vodkastate.entryTree.rd_rel->relpersistence);
+
+	stats = (IndexBuildResult *)
+		DatumGetPointer(OidFunctionCall3(vodkastate.entryTree.rd_am->ambuild,
+						 PointerGetDatum(NULL),
+						 PointerGetDatum(&vodkastate.entryTree),
+						 PointerGetDatum(NULL)));
+
+	freeVodkaState(&vodkastate);
 
 	PG_RETURN_VOID();
 }
@@ -541,6 +569,7 @@ vodkainsert(PG_FUNCTION_ARGS)
 							   ht_ctid);
 	}
 
+	freeVodkaState(&vodkastate);
 	MemoryContextSwitchTo(oldCtx);
 	MemoryContextDelete(insertCtx);
 

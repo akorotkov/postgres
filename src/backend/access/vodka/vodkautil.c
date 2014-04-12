@@ -14,15 +14,87 @@
 
 #include "postgres.h"
 
+#include "access/htup_details.h"
 #include "access/vodka_private.h"
 #include "access/reloptions.h"
 #include "catalog/catalog.h"
 #include "catalog/pg_collation.h"
+#include "catalog/pg_opclass.h"
 #include "catalog/pg_type.h"
+#include "catalog/storage.h"
 #include "miscadmin.h"
 #include "storage/indexfsm.h"
 #include "storage/lmgr.h"
+#include "storage/smgr.h"
+#include "utils/memutils.h"
+#include "utils/syscache.h"
 
+
+static void
+initEntryIndex(VodkaState *state)
+{
+	Relation 			index = state->index;
+	Relation			entryIndex = &state->entryTree;
+	Form_pg_class		relationForm;
+	Form_pg_attribute	attr;
+	HeapTuple			tuple;
+	Form_pg_am			aform;
+	int					nsupport;
+	OpClassCacheEnt	   *opcentry;
+
+	memset(&state->entryTree, 0, sizeof(RelationData));
+	entryIndex->rd_node = state->entryTreeNode;
+	entryIndex->rd_backend = state->index->rd_backend;
+	RelationOpenSmgr(entryIndex);
+	relationForm = (Form_pg_class) palloc(CLASS_TUPLE_SIZE);
+	relationForm->relpersistence = index->rd_rel->relpersistence;
+	entryIndex->rd_rel = relationForm;
+	entryIndex->rd_islocaltemp = index->rd_islocaltemp;
+	entryIndex->rd_createSubid = index->rd_createSubid;
+	entryIndex->rd_rel->relam = SPGIST_AM_OID;
+
+	/* FIXME: use different lock */
+	entryIndex->rd_lockInfo = index->rd_lockInfo;
+
+	entryIndex->rd_indexcxt = index->rd_indexcxt;
+	entryIndex->rd_att = CreateTemplateTupleDesc(1, false);
+	attr = entryIndex->rd_att->attrs[0];
+	memset(attr, 0, sizeof(FormData_pg_attribute));
+	attr->atttypid = TEXTOID;
+	attr->attlen = -1;
+	attr->attnum = 1;
+	attr->attbyval = false;
+	attr->attstorage = 'p';
+	attr->attalign = 'i';
+	entryIndex->rd_indcollation = (Oid *)palloc(sizeof(Oid));
+	entryIndex->rd_indcollation[0] = DEFAULT_COLLATION_OID;
+
+	/*
+	 * Make a copy of the pg_am entry for the index's access method
+	 */
+	tuple = SearchSysCache1(AMOID, ObjectIdGetDatum(entryIndex->rd_rel->relam));
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for access method %u",
+				entryIndex->rd_rel->relam);
+	aform = (Form_pg_am) MemoryContextAlloc(CacheMemoryContext, sizeof *aform);
+	memcpy(aform, GETSTRUCT(tuple), sizeof *aform);
+	ReleaseSysCache(tuple);
+	entryIndex->rd_am = aform;
+
+	nsupport = entryIndex->rd_am->amsupport;
+
+	entryIndex->rd_support = (RegProcedure *)
+		palloc0(nsupport * sizeof(RegProcedure));
+	entryIndex->rd_supportinfo = (FmgrInfo *)
+		palloc0(nsupport * sizeof(FmgrInfo));
+
+	/* look up the info for this opclass, using a cache */
+	opcentry = LookupOpclassInfo(TEXT_SPGIST_OPS_OID,
+			nsupport);
+	memcpy(entryIndex->rd_support,
+		   opcentry->supportProcs,
+		   nsupport * sizeof(RegProcedure));
+}
 
 /*
  * initVodkaState: fill in an empty VodkaState struct to describe the index
@@ -34,8 +106,18 @@ initVodkaState(VodkaState *state, Relation index)
 {
 	TupleDesc	origTupdesc = RelationGetDescr(index);
 	int			i;
+	Buffer		metabuffer;
+	Page		metapage;
+	VodkaMetaPageData *metadata;
 
 	MemSet(state, 0, sizeof(VodkaState));
+
+	metabuffer = ReadBuffer(index, VODKA_METAPAGE_BLKNO);
+	LockBuffer(metabuffer, VODKA_SHARE);
+	metapage = BufferGetPage(metabuffer);
+	metadata = VodkaPageGetMeta(metapage);
+	state->entryTreeNode = metadata->entryTreeNode;
+	UnlockReleaseBuffer(metabuffer);
 
 	state->index = index;
 	state->oneCol = (origTupdesc->natts == 1) ? true : false;
@@ -104,6 +186,13 @@ initVodkaState(VodkaState *state, Relation index)
 		else
 			state->supportCollation[i] = DEFAULT_COLLATION_OID;
 	}
+	initEntryIndex(state);
+}
+
+void
+freeVodkaState(VodkaState *state)
+{
+	RelationCloseSmgr(&state->entryTree);
 }
 
 /*
@@ -254,7 +343,7 @@ VodkaInitBuffer(Buffer b, uint32 f)
 }
 
 void
-VodkaInitMetabuffer(VodkaState *state, Buffer b)
+VodkaInitMetabuffer(Relation index, Buffer b)
 {
 	VodkaMetaPageData *metadata;
 	Page		page = BufferGetPage(b);
@@ -272,12 +361,12 @@ VodkaInitMetabuffer(VodkaState *state, Buffer b)
 	metadata->nDataPages = 0;
 	metadata->nEntries = 0;
 	metadata->vodkaVersion = VODKA_CURRENT_VERSION;
-	metadata->entryTreeNode.dbNode = MyDatabaseId;
-	metadata->entryTreeNode.spcNode = state->index->rd_rel->reltablespace;
+	metadata->entryTreeNode.dbNode = index->rd_node.dbNode;
+	metadata->entryTreeNode.spcNode = index->rd_node.spcNode;
 	metadata->entryTreeNode.relNode = GetNewRelFileNode(
-			state->index->rd_rel->reltablespace,
+			index->rd_node.spcNode,
 			NULL,
-			state->index->rd_rel->relpersistence);
+			index->rd_rel->relpersistence);
 }
 
 /*

@@ -245,7 +245,7 @@ qsortCompareItemPointers(const void *a, const void *b)
 
 /* Prepare to read out the rbtree contents using vodkaGetBAEntry */
 void
-vodkaBevodkaBAScan(BuildAccumulator *accum)
+vodkaBeginBAScan(BuildAccumulator *accum)
 {
 	rb_begin_iterate(accum->tree, LeftRightWalk);
 }

@@ -434,6 +434,8 @@ vodkaendscan(PG_FUNCTION_ARGS)
 	IndexScanDesc scan = (IndexScanDesc) PG_GETARG_POINTER(0);
 	VodkaScanOpaque so = (VodkaScanOpaque) scan->opaque;
 
+	freeVodkaState(&so->vodkastate);
+
 	freeScanKeys(so);
 
 	MemoryContextDelete(so->tempCtx);

@@ -697,6 +697,7 @@ vodkabulkdelete(PG_FUNCTION_ARGS)
 		LockBuffer(buffer, VODKA_EXCLUSIVE);
 	}
 
+	freeVodkaState(&gvs.vodkastate);
 	MemoryContextDelete(gvs.tmpCxt);
 
 	PG_RETURN_POINTER(gvs.result);
@@ -725,6 +726,7 @@ vodkavacuumcleanup(PG_FUNCTION_ARGS)
 		{
 			initVodkaState(&vodkastate, index);
 			vodkaInsertCleanup(&vodkastate, true, stats);
+			freeVodkaState(&vodkastate);
 		}
 		PG_RETURN_POINTER(stats);
 	}
@@ -738,6 +740,7 @@ vodkavacuumcleanup(PG_FUNCTION_ARGS)
 		stats = (IndexBulkDeleteResult *) palloc0(sizeof(IndexBulkDeleteResult));
 		initVodkaState(&vodkastate, index);
 		vodkaInsertCleanup(&vodkastate, true, stats);
+		freeVodkaState(&vodkastate);
 	}
 
 	memset(&idxStat, 0, sizeof(idxStat));

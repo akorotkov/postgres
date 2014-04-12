@@ -2112,6 +2112,9 @@ IndexBuildHeapScan(Relation heapRelation,
 	BlockNumber root_blkno = InvalidBlockNumber;
 	OffsetNumber root_offsets[MaxHeapTuplesPerPage];
 
+	if (heapRelation == NULL)
+		return 0.0;
+
 	/*
 	 * sanity checks
 	 */

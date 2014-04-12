@@ -56,7 +56,7 @@ vodkaRedoCreateIndex(XLogRecPtr lsn, XLogRecord *record)
 	Assert(BufferIsValid(MetaBuffer));
 	page = (Page) BufferGetPage(MetaBuffer);
 
-	VodkaInitMetabuffer(MetaBuffer);
+	VodkaInitMetabuffer(NULL, MetaBuffer);
 
 	PageSetLSN(page, lsn);
 	MarkBufferDirty(MetaBuffer);

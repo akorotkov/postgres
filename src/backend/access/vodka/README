@@ -243,7 +243,7 @@ pages, or uncompressed leaf pages migrated from earlier versions.
 The item pointers are stored in a number of independent compressed posting
 lists (also called segments), instead of one big one, to make random access
 to a given item pointer faster: to find an item in a compressed list, you
-have to read the list from the bevodkaning, but when the items are split into
+have to read the list from the beginning, but when the items are split into
 multiple lists, you can first skip over to the list containing the item you're
 looking for, and read only that segment. Also, an update only needs to
 re-encode the affected segment.
@@ -326,7 +326,7 @@ The previous paragraph's reasoning only applies to searches, and only to
 posting trees. To protect from inserters following a downlink to a deleted
 page, vacuum simply locks out all concurrent insertions to the posting tree,
 by holding a super-exclusive lock on the posting tree root. Inserters hold a
-pin on the root page, but searches do not, so while new searches cannot bevodka
+pin on the root page, but searches do not, so while new searches cannot begin
 while root page is locked, any already-in-progress scans can continue
 concurrently with vacuum. In the entry tree, we never delete pages.
 

@@ -71,7 +71,7 @@ scanPostingTree(Relation index, VodkaScanEntry scanEntry,
 	Page		page;
 
 	/* Descend to the leftmost leaf page */
-	stack = vodkaScanBevodkaPostingTree(&btree, index, rootPostingTree);
+	stack = vodkaScanBeginPostingTree(&btree, index, rootPostingTree);
 	buffer = stack->buffer;
 	IncrBufferRefCount(buffer); /* prevent unpin in freeVodkaBtreeStack */
 
@@ -287,7 +287,7 @@ collectMatchBitmap(VodkaBtreeData *btree, VodkaBtreeStack *stack,
 }
 
 /*
- * Start* functions setup bevodkaning state of searches: finds correct buffer and pins it.
+ * Start* functions setup beginning state of searches: finds correct buffer and pins it.
  */
 static void
 startScanEntry(VodkaState *vodkastate, VodkaScanEntry entry)
@@ -309,7 +309,7 @@ restartScanEntry:
 	entry->predictNumberResult = 0;
 
 	/*
-	 * we should find entry, and bevodka scan of posting tree or just store
+	 * we should find entry, and begin scan of posting tree or just store
 	 * posting list in memory
 	 */
 	vodkaPrepareEntryScan(&btreeEntry, entry->attnum,
@@ -379,7 +379,7 @@ restartScanEntry:
 			LockBuffer(stackEntry->buffer, VODKA_UNLOCK);
 			needUnlock = FALSE;
 
-			stack = vodkaScanBevodkaPostingTree(&entry->btree, vodkastate->index,
+			stack = vodkaScanBeginPostingTree(&entry->btree, vodkastate->index,
 											rootPostingTree);
 			entry->buffer = stack->buffer;
 
@@ -759,7 +759,7 @@ entryGetItem(VodkaState *vodkastate, VodkaScanEntry entry,
 				}
 
 				/*
-				 * Reset counter to the bevodkaning of entry->matchResult. Note:
+				 * Reset counter to the beginning of entry->matchResult. Note:
 				 * entry->offset is still greater than matchResult->ntuples if
 				 * matchResult is lossy.  So, on next call we will get next
 				 * result from TIDBitmap.

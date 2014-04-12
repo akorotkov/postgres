@@ -830,7 +830,7 @@ vodkaInsertCleanup(VodkaState *vodkastate,
 			 * significant amount of time - so, run it without locking pending
 			 * list.
 			 */
-			vodkaBevodkaBAScan(&accum);
+			vodkaBeginBAScan(&accum);
 			while ((list = vodkaGetBAEntry(&accum,
 								  &attnum, &key, &category, &nlist)) != NULL)
 			{
@@ -867,7 +867,7 @@ vodkaInsertCleanup(VodkaState *vodkastate,
 				vodkaInitBA(&accum);
 				processPendingPage(&accum, &datums, page, maxoff + 1);
 
-				vodkaBevodkaBAScan(&accum);
+				vodkaBeginBAScan(&accum);
 				while ((list = vodkaGetBAEntry(&accum,
 								  &attnum, &key, &category, &nlist)) != NULL)
 					vodkaEntryInsert(vodkastate, attnum, key, category,

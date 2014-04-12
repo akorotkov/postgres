@@ -227,6 +227,7 @@ DATA(insert (	783		range_ops			PGNSP PGUID 3919  3831 t 0 ));
 DATA(insert (	4000	range_ops			PGNSP PGUID 3474  3831 t 0 ));
 DATA(insert (	4000	quad_point_ops		PGNSP PGUID 4015  600 t 0 ));
 DATA(insert (	4000	kd_point_ops		PGNSP PGUID 4016  600 f 0 ));
-DATA(insert (	4000	text_ops			PGNSP PGUID 4017  25 t 0 ));
+DATA(insert OID = 3999 ( 4000	text_ops	PGNSP PGUID 4017  25 t 0 ));
+#define TEXT_SPGIST_OPS_OID 3999
 
 #endif   /* PG_OPCLASS_H */

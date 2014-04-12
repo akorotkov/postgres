@@ -14,6 +14,7 @@
 #ifndef REL_H
 #define REL_H
 
+#include "access/skey.h"
 #include "access/tupdesc.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_class.h"
@@ -496,5 +497,24 @@ typedef struct StdRdOptions
 /* routines in utils/cache/relcache.c */
 extern void RelationIncrementReferenceCount(Relation rel);
 extern void RelationDecrementReferenceCount(Relation rel);
+
+/*
+ * Special cache for opclass-related information
+ *
+ * Note: only default support procs get cached, ie, those with
+ * lefttype = righttype = opcintype.
+ */
+typedef struct opclasscacheent
+{
+	Oid			opclassoid;		/* lookup key: OID of opclass */
+	bool		valid;			/* set TRUE after successful fill-in */
+	StrategyNumber numSupport;	/* max # of support procs (from pg_am) */
+	Oid			opcfamily;		/* OID of opclass's family */
+	Oid			opcintype;		/* OID of opclass's declared input type */
+	RegProcedure *supportProcs; /* OIDs of support procedures */
+} OpClassCacheEnt;
+
+OpClassCacheEnt *LookupOpclassInfo(Oid operatorClassOid,
+				  StrategyNumber numSupport);
 
 #endif   /* REL_H */

@@ -349,7 +349,7 @@ vodkaPostingListDecodeAllSegmentsToTbm(VodkaPostingList *ptr, int len,
  * Returns the number of items in the result.
  * Caller is responsible that there is enough space at *dst.
  *
- * It's OK if 'dst' overlaps with the *bevodkaning* of one of the arguments.
+ * It's OK if 'dst' overlaps with the *beginning* of one of the arguments.
  */
 int
 vodkaMergeItemPointers(ItemPointerData *dst,

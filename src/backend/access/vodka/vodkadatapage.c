@@ -590,7 +590,7 @@ dataPlaceToPageLeaf(VodkaBtree btree, Buffer buf, VodkaBtreeStack *stack,
 		 * We already divided the segments between the left and the right
 		 * page. The left page was filled as full as possible, and the rest
 		 * overflowed to the right page. When building a new index, that's
-		 * good, because the table is scanned from bevodkaning to end and there
+		 * good, because the table is scanned from beginning to end and there
 		 * won't be any more insertions to the left page during the build.
 		 * This packs the index as tight as possible. But otherwise, split
 		 * 50/50, by moving segments from the left page to the right page
@@ -1092,7 +1092,7 @@ dataSplitPageInternal(VodkaBtree btree, Buffer origbuf,
 
 	/*
 	 * When creating a new index, fit as many tuples as possible on the left
-	 * page, on the assumption that the table is scanned from bevodkaning to
+	 * page, on the assumption that the table is scanned from beginning to
 	 * end. This packs the index as tight as possible.
 	 */
 	if (btree->isBuild && VodkaPageRightMost(oldpage))
@@ -1639,7 +1639,7 @@ vodkaInsertItemPointers(Relation index, BlockNumber rootBlkno,
  * Starts a new scan on a posting tree.
  */
 VodkaBtreeStack *
-vodkaScanBevodkaPostingTree(VodkaBtree btree, Relation index, BlockNumber rootBlkno)
+vodkaScanBeginPostingTree(VodkaBtree btree, Relation index, BlockNumber rootBlkno)
 {
 	VodkaBtreeStack *stack;
 
