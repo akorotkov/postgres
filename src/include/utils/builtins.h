@@ -1184,6 +1184,7 @@ extern Datum vodkaarrayextract(PG_FUNCTION_ARGS);
 extern Datum vodkaarrayextract_2args(PG_FUNCTION_ARGS);
 extern Datum vodkaqueryarrayextract(PG_FUNCTION_ARGS);
 extern Datum vodkaarrayconsistent(PG_FUNCTION_ARGS);
+extern Datum vodkaarraytriconsistent(PG_FUNCTION_ARGS);
 
 /* access/transam/twophase.c */
 extern Datum pg_prepared_xact(PG_FUNCTION_ARGS);

@@ -145,15 +145,158 @@ vodkaRedoInsertEntry(Buffer buffer, bool isLeaf, BlockNumber rightblkno, void *r
 static void
 vodkaRedoRecompress(Page page, vodkaxlogRecompressDataLeaf *data)
 {
-	Pointer		segment;
+	int			actionno;
+	int			segno;
+	VodkaPostingList *oldseg;
+	Pointer		segmentend;
+	char	   *walbuf;
+	int			totalsize;
 
-	/* Copy the new data to the right place */
-	segment = ((Pointer) VodkaDataLeafPageGetPostingList(page))
-		+ data->unmodifiedsize;
-	memcpy(segment, data->newdata, data->length - data->unmodifiedsize);
-	VodkaDataLeafPageSetPostingListSize(page, data->length);
-	VodkaPageSetCompressed(page);
-	VodkaPageGetOpaque(page)->maxoff = InvalidOffsetNumber;
+	/*
+	 * If the page is in pre-9.4 format, convert to new format first.
+	 */
+	if (!VodkaPageIsCompressed(page))
+	{
+		ItemPointer uncompressed = (ItemPointer) VodkaDataPageGetData(page);
+		int			nuncompressed = VodkaPageGetOpaque(page)->maxoff;
+		int			npacked;
+		VodkaPostingList *plist;
+
+		plist = vodkaCompressPostingList(uncompressed, nuncompressed,
+									   BLCKSZ, &npacked);
+		Assert(npacked == nuncompressed);
+
+		totalsize = SizeOfVodkaPostingList(plist);
+
+		memcpy(VodkaDataLeafPageGetPostingList(page), plist, totalsize);
+		VodkaDataLeafPageSetPostingListSize(page, totalsize);
+		VodkaPageSetCompressed(page);
+		VodkaPageGetOpaque(page)->maxoff = InvalidOffsetNumber;
+	}
+
+	oldseg = VodkaDataLeafPageGetPostingList(page);
+	segmentend = (Pointer) oldseg + VodkaDataLeafPageGetPostingListSize(page);
+	segno = 0;
+
+	walbuf = ((char *) data) + sizeof(vodkaxlogRecompressDataLeaf);
+	for (actionno = 0; actionno < data->nactions; actionno++)
+	{
+		uint8		a_segno = *((uint8 *) (walbuf++));
+		uint8		a_action = *((uint8 *) (walbuf++));
+		VodkaPostingList *newseg = NULL;
+		int			newsegsize = 0;
+		ItemPointerData *items = NULL;
+		uint16		nitems = 0;
+		ItemPointerData *olditems;
+		int			nolditems;
+		ItemPointerData *newitems;
+		int			nnewitems;
+		int			segsize;
+		Pointer		segptr;
+		int			szleft;
+
+		/* Extract all the information we need from the WAL record */
+		if (a_action == VODKA_SEGMENT_INSERT ||
+			a_action == VODKA_SEGMENT_REPLACE)
+		{
+			newseg = (VodkaPostingList *) walbuf;
+			newsegsize = SizeOfVodkaPostingList(newseg);
+			walbuf += SHORTALIGN(newsegsize);
+		}
+
+		if (a_action == VODKA_SEGMENT_ADDITEMS)
+		{
+			memcpy(&nitems, walbuf, sizeof(uint16));
+			walbuf += sizeof(uint16);
+			items = (ItemPointerData *) walbuf;
+			walbuf += nitems * sizeof(ItemPointerData);
+		}
+
+		/* Skip to the segment that this action concerns */
+		Assert(segno <= a_segno);
+		while (segno < a_segno)
+		{
+			oldseg = VodkaNextPostingListSegment(oldseg);
+			segno++;
+		}
+
+		/*
+		 * ADDITEMS action is handled like REPLACE, but the new segment to
+		 * replace the old one is reconstructed using the old segment from
+		 * disk and the new items from the WAL record.
+		 */
+		if (a_action == VODKA_SEGMENT_ADDITEMS)
+		{
+			int			npacked;
+
+			olditems = vodkaPostingListDecode(oldseg, &nolditems);
+
+			newitems = vodkaMergeItemPointers(items, nitems,
+											olditems, nolditems,
+											&nnewitems);
+			Assert(nnewitems == nolditems + nitems);
+
+			newseg = vodkaCompressPostingList(newitems, nnewitems,
+											BLCKSZ, &npacked);
+			Assert(npacked == nnewitems);
+
+			newsegsize = SizeOfVodkaPostingList(newseg);
+			a_action = VODKA_SEGMENT_REPLACE;
+		}
+
+		segptr = (Pointer) oldseg;
+		if (segptr != segmentend)
+			segsize = SizeOfVodkaPostingList(oldseg);
+		else
+		{
+			/*
+			 * Positioned after the last existing segment. Only INSERTs
+			 * expected here.
+			 */
+			Assert(a_action == VODKA_SEGMENT_INSERT);
+			segsize = 0;
+		}
+		szleft = segmentend - segptr;
+
+		switch (a_action)
+		{
+			case VODKA_SEGMENT_DELETE:
+				memmove(segptr, segptr + segsize, szleft - segsize);
+				segmentend -= segsize;
+
+				segno++;
+				break;
+
+			case VODKA_SEGMENT_INSERT:
+				/* make room for the new segment */
+				memmove(segptr + newsegsize, segptr, szleft);
+				/* copy the new segment in place */
+				memcpy(segptr, newseg, newsegsize);
+				segmentend += newsegsize;
+				segptr += newsegsize;
+				break;
+
+			case VODKA_SEGMENT_REPLACE:
+				/* shift the segments that follow */
+				memmove(segptr + newsegsize,
+						segptr + segsize,
+						szleft - segsize);
+				/* copy the replacement segment in place */
+				memcpy(segptr, newseg, newsegsize);
+				segmentend -= segsize;
+				segmentend += newsegsize;
+				segptr += newsegsize;
+				segno++;
+				break;
+
+			default:
+				elog(ERROR, "unexpected VODKA leaf action: %u", a_action);
+		}
+		oldseg = (VodkaPostingList *) segptr;
+	}
+
+	totalsize = segmentend - (Pointer) VodkaDataLeafPageGetPostingList(page);
+	VodkaDataLeafPageSetPostingListSize(page, totalsize);
 }
 
 static void
@@ -318,7 +461,9 @@ vodkaRedoSplit(XLogRecPtr lsn, XLogRecord *record)
 				rbuffer;
 	Page		lpage,
 				rpage;
-	uint32		flags = 0;
+	uint32		flags;
+	uint32		lflags,
+				rflags;
 	char	   *payload;
 	bool		isLeaf = (data->flags & VODKA_INSERT_ISLEAF) != 0;
 	bool		isData = (data->flags & VODKA_INSERT_ISDATA) != 0;
@@ -338,6 +483,7 @@ vodkaRedoSplit(XLogRecPtr lsn, XLogRecord *record)
 			vodkaRedoClearIncompleteSplit(lsn, data->node, data->leftChildBlkno);
 	}
 
+	flags = 0;
 	if (isLeaf)
 		flags |= VODKA_LEAF;
 	if (isData)
@@ -345,15 +491,19 @@ vodkaRedoSplit(XLogRecPtr lsn, XLogRecord *record)
 	if (isLeaf && isData)
 		flags |= VODKA_COMPRESSED;
 
+	lflags = rflags = flags;
+	if (!isRoot)
+		lflags |= VODKA_INCOMPLETE_SPLIT;
+
 	lbuffer = XLogReadBuffer(data->node, data->lblkno, true);
 	Assert(BufferIsValid(lbuffer));
 	lpage = (Page) BufferGetPage(lbuffer);
-	VodkaInitBuffer(lbuffer, flags);
+	VodkaInitBuffer(lbuffer, lflags);
 
 	rbuffer = XLogReadBuffer(data->node, data->rblkno, true);
 	Assert(BufferIsValid(rbuffer));
 	rpage = (Page) BufferGetPage(rbuffer);
-	VodkaInitBuffer(rbuffer, flags);
+	VodkaInitBuffer(rbuffer, rflags);
 
 	VodkaPageGetOpaque(lpage)->rightlink = BufferGetBlockNumber(rbuffer);
 	VodkaPageGetOpaque(rpage)->rightlink = isRoot ? InvalidBlockNumber : data->rrlink;
@@ -421,12 +571,8 @@ vodkaRedoVacuumPage(XLogRecPtr lsn, XLogRecord *record)
 	Assert(xlrec->hole_offset < BLCKSZ);
 	Assert(xlrec->hole_length < BLCKSZ);
 
-	/* If we have a full-page image, restore it and we're done */
-	if (record->xl_info & XLR_BKP_BLOCK(0))
-	{
-		(void) RestoreBackupBlock(lsn, record, 0, false, false);
-		return;
-	}
+	/* Backup blocks are not used, we'll re-initialize the page always. */
+	Assert(!(record->xl_info & XLR_BKP_BLOCK_MASK));
 
 	buffer = XLogReadBuffer(xlrec->node, xlrec->blkno, true);
 	if (!BufferIsValid(buffer))
@@ -564,17 +710,19 @@ vodkaRedoUpdateMetapage(XLogRecPtr lsn, XLogRecord *record)
 	Page		metapage;
 	Buffer		buffer;
 
+	/*
+	 * Restore the metapage. This is essentially the same as a full-page image,
+	 * so restore the metapage unconditionally without looking at the LSN, to
+	 * avoid torn page hazards.
+	 */
 	metabuffer = XLogReadBuffer(data->node, VODKA_METAPAGE_BLKNO, false);
 	if (!BufferIsValid(metabuffer))
 		return;					/* assume index was deleted, nothing to do */
 	metapage = BufferGetPage(metabuffer);
 
-	if (lsn > PageGetLSN(metapage))
-	{
-		memcpy(VodkaPageGetMeta(metapage), &data->metadata, sizeof(VodkaMetaPageData));
-		PageSetLSN(metapage, lsn);
-		MarkBufferDirty(metabuffer);
-	}
+	memcpy(VodkaPageGetMeta(metapage), &data->metadata, sizeof(VodkaMetaPageData));
+	PageSetLSN(metapage, lsn);
+	MarkBufferDirty(metabuffer);
 
 	if (data->ntuples > 0)
 	{
@@ -724,12 +872,9 @@ vodkaRedoDeleteListPages(XLogRecPtr lsn, XLogRecord *record)
 		return;					/* assume index was deleted, nothing to do */
 	metapage = BufferGetPage(metabuffer);
 
-	if (lsn > PageGetLSN(metapage))
-	{
-		memcpy(VodkaPageGetMeta(metapage), &data->metadata, sizeof(VodkaMetaPageData));
-		PageSetLSN(metapage, lsn);
-		MarkBufferDirty(metabuffer);
-	}
+	memcpy(VodkaPageGetMeta(metapage), &data->metadata, sizeof(VodkaMetaPageData));
+	PageSetLSN(metapage, lsn);
+	MarkBufferDirty(metabuffer);
 
 	/*
 	 * In normal operation, shiftList() takes exclusive lock on all the

@@ -351,6 +351,7 @@ typedef struct VodkaState
 	FmgrInfo	extractValueFn[INDEX_MAX_KEYS];
 	FmgrInfo	extractQueryFn[INDEX_MAX_KEYS];
 	FmgrInfo	consistentFn[INDEX_MAX_KEYS];
+	FmgrInfo	triConsistentFn[INDEX_MAX_KEYS];
 	FmgrInfo	comparePartialFn[INDEX_MAX_KEYS];		/* optional method */
 	/* canPartialMatch[i] is true if comparePartialFn[i] is valid */
 	bool		canPartialMatch[INDEX_MAX_KEYS];
@@ -430,12 +431,35 @@ typedef struct
 
 typedef struct
 {
-	uint16		length;
-	uint16		unmodifiedsize;
+      uint16          nactions;
 
-	/* compressed segments, variable length */
-	char		newdata[1];
+      /* Variable number of 'actions' follow */
 } vodkaxlogRecompressDataLeaf;
+
+/*
+ * Note: this struct is currently not used in code, and only acts as
+ * documentation. The WAL record format is as specified here, but the code
+ * uses straight access through a Pointer and memcpy to read/write these.
+ */
+typedef struct
+{
+      uint8           segno;          /* segment this action applies to */
+      char            type;           /* action type (see below) */
+
+      /*
+       * Action-specific data follows. For INSERT and REPLACE actions that is a
+       * GinPostingList struct. For ADDITEMS, a uint16 for the number of items
+       * added, followed by the items themselves as ItemPointers. DELETE actions
+       * have no further data.
+       */
+} vodkaxlogSegmentAction;
+
+/* Action types */
+#define VODKA_SEGMENT_UNMODIFIED        0       /* no action (not used in WAL records) */
+#define VODKA_SEGMENT_DELETE            1       /* a whole segment is removed */
+#define VODKA_SEGMENT_INSERT            2       /* a whole segment is added */
+#define VODKA_SEGMENT_REPLACE           3       /* a segment is replaced */
+#define VODKA_SEGMENT_ADDITEMS  4       /* items are added to existing segment */
 
 typedef struct
 {
@@ -772,8 +796,9 @@ typedef struct VodkaScanKeyData
 	/* array of check flags, reported to consistentFn */
 	bool	   *entryRes;
 	bool		(*boolConsistentFn) (VodkaScanKey key);
-	bool		(*triConsistentFn) (VodkaScanKey key);
+	VodkaTernaryValue (*triConsistentFn) (VodkaScanKey key);
 	FmgrInfo   *consistentFmgrInfo;
+	FmgrInfo   *triConsistentFmgrInfo;
 	Oid			collation;
 
 	/* other data needed for calling consistentFn */
@@ -860,17 +885,6 @@ extern void vodkaNewScanKey(IndexScanDesc scan);
 extern Datum vodkagetbitmap(PG_FUNCTION_ARGS);
 
 /* vodkalogic.c */
-
-enum
-{
-	VODKA_FALSE = 0,			/* item is present / matches */
-	VODKA_TRUE = 1,			/* item is not present / does not match */
-	VODKA_MAYBE = 2			/* don't know if item is present / don't know if
-							 * matches */
-} VodkaLogicValueEnum;
-
-typedef char VodkaLogicValue;
-
 extern void vodkaInitConsistentFunction(VodkaState *vodkastate, VodkaScanKey key);
 
 /* vodkavacuum.c */
@@ -938,9 +952,9 @@ extern int vodkaPostingListDecodeAllSegmentsToTbm(VodkaPostingList *ptr, int tot
 
 extern ItemPointer vodkaPostingListDecodeAllSegments(VodkaPostingList *ptr, int len, int *ndecoded);
 extern ItemPointer vodkaPostingListDecode(VodkaPostingList *ptr, int *ndecoded);
-extern int vodkaMergeItemPointers(ItemPointerData *dst,
-					 ItemPointerData *a, uint32 na,
-					 ItemPointerData *b, uint32 nb);
+extern ItemPointer vodkaMergeItemPointers(ItemPointerData *a, uint32 na,
+					 ItemPointerData *b, uint32 nb,
+					 int *nmerged);
 
 /*
  * Mervodkag the results of several vodka scans compares item pointers a lot,

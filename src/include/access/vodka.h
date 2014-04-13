@@ -23,7 +23,8 @@
 #define VODKA_EXTRACTQUERY_PROC		   3
 #define VODKA_CONSISTENT_PROC		   4
 #define VODKA_COMPARE_PARTIAL_PROC	   5
-#define VODKANProcs					   5
+#define VODKA_TRICONSISTENT_PROC	   6
+#define VODKANProcs					   6
 
 /*
  * searchMode settings for extractQueryFn.
@@ -45,6 +46,23 @@ typedef struct VodkaStatsData
 	int64		nEntries;
 	int32		vodkaVersion;
 } VodkaStatsData;
+
+/*
+ * A ternary value used by tri-consistent functions.
+ *
+ * For convenience, this is compatible with booleans. A boolean can be
+ * safely cast to a VodkaTernaryValue.
+ */
+typedef char VodkaTernaryValue;
+
+#define VODKA_FALSE             0       /* item is not present / does not match */
+#define VODKA_TRUE              1       /* item is present / matches */
+#define VODKA_MAYBE             2       /* don't know if item is present / don't know if
+
+                                                       * matches */
+#define DatumGetVodkaTernaryValue(X) ((VodkaTernaryValue)(X))
+#define VodkaTernaryValueGetDatum(X) ((Datum)(X))
+#define PG_RETURN_VODKA_TERNARY_VALUE(x) return VodkaTernaryValueGetDatum(x)
 
 /* GUC parameter */
 extern PGDLLIMPORT int VodkaFuzzySearchLimit;

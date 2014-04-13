@@ -22,17 +22,17 @@
 #include "utils/rel.h"
 
 /*
- * Size of the posting lists stored on leaf pages, in bytes. The code can
- * deal with any size, but random access is more efficient when a number of
- * smaller lists are stored, rather than one big list.
+ * Min, Max and Target size of posting lists stored on leaf pages, in bytes.
+ *
+ * The code can deal with any size, but random access is more efficient when
+ * a number of smaller lists are stored, rather than one big list. If a
+ * posting list would become larger than Max size as a result of insertions,
+ * it is split into two. If a posting list would be smaller than minimum
+ * size, it is merged with the next posting list.
  */
-#define VodkaPostingListSegmentMaxSize 256
-
-/*
- * Existing posting lists smaller than this are recompressed, when inserting
- * new items to page.
- */
-#define VodkaPostingListSegmentMinSize 192
+#define VodkaPostingListSegmentMaxSize 384
+#define VodkaPostingListSegmentTargetSize 256
+#define VodkaPostingListSegmentMinSize 128
 
 /*
  * At least this many items fit in a VodkaPostingListSegmentMaxSize-bytes
@@ -55,25 +55,43 @@ typedef struct
 	dlist_node *lastleft;		/* last segment on left page */
 	int			lsize;			/* total size on left page */
 	int			rsize;			/* total size on right page */
+
+	bool		oldformat;		/* page is in pre-9.4 format on disk */
 } disassembledLeaf;
 
 typedef struct
 {
 	dlist_node	node;		/* linked list pointers */
 
+	/*-------------
+	 * 'action' indicates the status of this in-memory segment, compared to
+	 * what's on disk. It is one of the VODKA_SEGMENT_* action codes:
+	 *
+	 * UNMODIFIED	no changes
+	 * DELETE		the segment is to be removed. 'seg' and 'items' are
+	 *				ignored
+	 * INSERT		this is a completely new segment
+	 * REPLACE		this replaces an existing segment with new content
+	 * ADDITEMS		like REPLACE, but no items have been removed, and we track
+	 *				in detail what items have been added to this segment, in
+	 *				'modifieditems'
+	 *-------------
+	 */
+	char		action;
+
+	ItemPointerData *modifieditems;
+	int			nmodifieditems;
+
 	/*
-	 * The following fields represent the items in this segment.
-	 * If 'items' is not NULL, it contains a palloc'd array of the items
-	 * in this segment. If 'seg' is not NULL, it contains the items in an
-	 * already-compressed format. It can point to an on-disk page (!modified),
-	 * or a palloc'd segment in memory. If both are set, they must represent
-	 * the same items.
+	 * The following fields represent the items in this segment. If 'items'
+	 * is not NULL, it contains a palloc'd array of the itemsin this segment.
+	 * If 'seg' is not NULL, it contains the items in an already-compressed
+	 * format. It can point to an on-disk page (!modified), or a palloc'd
+	 * segment in memory. If both are set, they must represent the same items.
 	 */
 	VodkaPostingList *seg;
 	ItemPointer items;
 	int			nitems;			/* # of items in 'items', if items != NULL */
-
-	bool		modified;		/* is this segment on page already? */
 } leafSegmentInfo;
 
 static ItemPointer dataLeafPageGetUncompressed(Page page, int *nitems);
@@ -84,12 +102,12 @@ static void dataSplitPageInternal(VodkaBtree btree, Buffer origbuf,
 
 static disassembledLeaf *disassembleLeaf(Page page);
 static bool leafRepackItems(disassembledLeaf *leaf, ItemPointer remaining);
-static bool addItemsToLeaf(disassembledLeaf *leaf, ItemPointer newItems, int nNewItems);
+static bool addItemsToLeaf(disassembledLeaf *leaf, ItemPointer newItems,
+			   int nNewItems);
 
-
-static void dataPlaceToPageLeafRecompress(Buffer buf,
-							  disassembledLeaf *leaf,
-							  XLogRecData **prdata);
+static XLogRecData *constructLeafRecompressWALData(Buffer buf,
+							   disassembledLeaf *leaf);
+static void dataPlaceToPageLeafRecompress(Buffer buf, disassembledLeaf *leaf);
 static void dataPlaceToPageLeafSplit(Buffer buf,
 						 disassembledLeaf *leaf,
 						 ItemPointerData lbound, ItemPointerData rbound,
@@ -563,15 +581,21 @@ dataPlaceToPageLeaf(VodkaBtree btree, Buffer buf, VodkaBtreeStack *stack,
 	if (!needsplit)
 	{
 		/*
-		 * Great, all the items fit on a single page. Write the segments to
-		 * the page, and WAL-log appropriately.
+		 * Great, all the items fit on a single page. Construct a WAL record
+		 * describing the changes we made, and write the segments back to the
+		 * page.
 		 *
 		 * Once we start modifying the page, there's no turning back. The
 		 * caller is responsible for calling END_CRIT_SECTION() after writing
 		 * the WAL record.
 		 */
+		MemoryContextSwitchTo(oldCxt);
+		if (RelationNeedsWAL(btree->index))
+			*prdata = constructLeafRecompressWALData(buf, leaf);
+		else
+			*prdata = NULL;
 		START_CRIT_SECTION();
-		dataPlaceToPageLeafRecompress(buf, leaf, prdata);
+		dataPlaceToPageLeafRecompress(buf, leaf);
 
 		if (append)
 			elog(DEBUG2, "appended %d new items to block %u; %d bytes (%d to go)",
@@ -619,8 +643,6 @@ dataPlaceToPageLeaf(VodkaBtree btree, Buffer buf, VodkaBtreeStack *stack,
 						break;
 				}
 
-				 /* don't consider segments moved to right as unmodified */
-				lastleftinfo->modified = true;
 				leaf->lsize -= segsize;
 				leaf->rsize += segsize;
 				leaf->lastleft = dlist_prev_node(&leaf->segments, leaf->lastleft);
@@ -716,14 +738,15 @@ vodkaVacuumPostingTreeLeaf(Relation indexrel, Buffer buffer, VodkaVacuumState *g
 				/* Removing an item never increases the size of the segment */
 				if (npacked != ncleaned)
 					elog(ERROR, "could not fit vacuumed posting list");
+				sevodkafo->action = VODKA_SEGMENT_REPLACE;
 			}
 			else
 			{
 				sevodkafo->seg = NULL;
 				sevodkafo->items = NULL;
+				sevodkafo->action = VODKA_SEGMENT_DELETE;
 			}
 			sevodkafo->nitems = ncleaned;
-			sevodkafo->modified = true;
 
 			removedsomething = true;
 		}
@@ -733,11 +756,11 @@ vodkaVacuumPostingTreeLeaf(Relation indexrel, Buffer buffer, VodkaVacuumState *g
 	 * If we removed any items, reconstruct the page from the pieces.
 	 *
 	 * We don't try to re-encode the segments here, even though some of them
-	 * might be really small, now that we've removed some items from them.
-	 * It seems like a waste of effort, as there isn't really any benefit from
-	 * larger segments per se; larger segments only help you to pack more
-	 * items in the same space. We might as well delay doing that until the
-	 * next insertion, which will need to re-encode at least part of the page
+	 * might be really small now that we've removed some items from them. It
+	 * seems like a waste of effort, as there isn't really any benefit from
+	 * larger segments per se; larger segments only help to pack more items
+	 * in the same space. We might as well delay doing that until the next
+	 * insertion, which will need to re-encode at least part of the page
 	 * anyway.
 	 *
 	 * Also note if the page was in uncompressed, pre-9.4 format before, it
@@ -748,10 +771,35 @@ vodkaVacuumPostingTreeLeaf(Relation indexrel, Buffer buffer, VodkaVacuumState *g
 	 */
 	if (removedsomething)
 	{
-		XLogRecData *payloadrdata;
+		XLogRecData *payloadrdata = NULL;
+		bool		modified;
 
+		/*
+		 * Make sure we have a palloc'd copy of all segments, after the first
+		 * segment that is modified. (dataPlaceToPageLeafRecompress requires
+		 * this).
+		 */
+		modified = false;
+		dlist_foreach(iter, &leaf->segments)
+		{
+			leafSegmentInfo *sevodkafo = dlist_container(leafSegmentInfo, node,
+													   iter.cur);
+			if (sevodkafo->action != VODKA_SEGMENT_UNMODIFIED)
+				modified = true;
+			if (modified && sevodkafo->action != VODKA_SEGMENT_DELETE)
+			{
+				int			segsize = SizeOfVodkaPostingList(sevodkafo->seg);
+				VodkaPostingList *tmp = (VodkaPostingList *) palloc(segsize);
+
+				memcpy(tmp, sevodkafo->seg, segsize);
+				sevodkafo->seg = tmp;
+			}
+		}
+
+		if (RelationNeedsWAL(indexrel))
+			payloadrdata = constructLeafRecompressWALData(buffer, leaf);
 		START_CRIT_SECTION();
-		dataPlaceToPageLeafRecompress(buffer, leaf, &payloadrdata);
+		dataPlaceToPageLeafRecompress(buffer, leaf);
 
 		MarkBufferDirty(buffer);
 
@@ -778,96 +826,169 @@ vodkaVacuumPostingTreeLeaf(Relation indexrel, Buffer buffer, VodkaVacuumState *g
 }
 
 /*
+ * Construct a vodkaxlogRecompressDataLeaf record representing the changes
+ * in *leaf.
+ */
+static XLogRecData *
+constructLeafRecompressWALData(Buffer buf, disassembledLeaf *leaf)
+{
+	int			nmodified = 0;
+	char	   *walbufbegin;
+	char	   *walbufend;
+	XLogRecData *rdata;
+	dlist_iter	iter;
+	int			segno;
+	vodkaxlogRecompressDataLeaf *recompress_xlog;
+
+	/* Count the modified segments */
+	dlist_foreach(iter, &leaf->segments)
+	{
+		leafSegmentInfo *sevodkafo = dlist_container(leafSegmentInfo, node,
+												   iter.cur);
+
+		if (sevodkafo->action != VODKA_SEGMENT_UNMODIFIED)
+			nmodified++;
+	}
+
+	walbufbegin = palloc(
+		sizeof(vodkaxlogRecompressDataLeaf) +
+		BLCKSZ + 			/* max size needed to hold the segment data */
+		nmodified * 2 +		/* (segno + action) per action */
+		sizeof(XLogRecData));
+	walbufend = walbufbegin;
+
+	recompress_xlog = (vodkaxlogRecompressDataLeaf *) walbufend;
+	walbufend += sizeof(vodkaxlogRecompressDataLeaf);
+
+	recompress_xlog->nactions = nmodified;
+
+	segno = 0;
+	dlist_foreach(iter, &leaf->segments)
+	{
+		leafSegmentInfo *sevodkafo = dlist_container(leafSegmentInfo, node,
+												   iter.cur);
+		int			segsize = 0;
+		int			datalen;
+		uint8		action = sevodkafo->action;
+
+		if (action == VODKA_SEGMENT_UNMODIFIED)
+		{
+			segno++;
+			continue;
+		}
+
+		if (action != VODKA_SEGMENT_DELETE)
+			segsize = SizeOfVodkaPostingList(sevodkafo->seg);
+
+		/*
+		 * If storing the uncompressed list of added item pointers would take
+		 * more space than storing the compressed segment as is, do that
+		 * instead.
+		 */
+		if (action == VODKA_SEGMENT_ADDITEMS &&
+			sevodkafo->nmodifieditems * sizeof(ItemPointerData) > segsize)
+		{
+			action = VODKA_SEGMENT_REPLACE;
+		}
+
+		*((uint8 *) (walbufend++)) = segno;
+		*(walbufend++) = action;
+
+		switch (action)
+		{
+			case VODKA_SEGMENT_DELETE:
+				datalen = 0;
+				break;
+
+			case VODKA_SEGMENT_ADDITEMS:
+				datalen = sevodkafo->nmodifieditems * sizeof(ItemPointerData);
+				memcpy(walbufend, &sevodkafo->nmodifieditems, sizeof(uint16));
+				memcpy(walbufend + sizeof(uint16), sevodkafo->modifieditems, datalen);
+				datalen += sizeof(uint16);
+				break;
+
+			case VODKA_SEGMENT_INSERT:
+			case VODKA_SEGMENT_REPLACE:
+				datalen = SHORTALIGN(segsize);
+				memcpy(walbufend, sevodkafo->seg, segsize);
+				break;
+
+			default:
+				elog(ERROR, "unexpected VODKA leaf action %d", action);
+		}
+		walbufend += datalen;
+
+		if (action != VODKA_SEGMENT_INSERT)
+			segno++;
+	}
+
+	rdata = (XLogRecData *) MAXALIGN(walbufend);
+	rdata->buffer = buf;
+	rdata->buffer_std = TRUE;
+	rdata->data = walbufbegin;
+	rdata->len = walbufend - walbufbegin;
+	rdata->next = NULL;
+
+	return rdata;
+}
+
+/*
  * Assemble a disassembled posting tree leaf page back to a buffer.
  *
  * *prdata is filled with WAL information about this operation. The caller
  * is responsible for inserting to the WAL, along with any other information
  * about the operation that triggered this recompression.
  *
- * NOTE: The segment pointers can point directly to the same buffer, with
- * the limitation that any earlier segment must not overlap with an orivodkaal,
- * later segment. In other words, some segments may point the orivodkaal buffer
- * as long as you don't make any segments larger. Currently, leafRepackItems
- * satisies this rule because it rewrites all segments after the first
- * modified one, and vacuum can only make segments shorter.
+ * NOTE: The segment pointers must not point directly to the same buffer,
+ * except for segments that have not been modified and whose preceding
+ * segments have not been modified either.
  */
 static void
-dataPlaceToPageLeafRecompress(Buffer buf, disassembledLeaf *leaf,
-							  XLogRecData **prdata)
+dataPlaceToPageLeafRecompress(Buffer buf, disassembledLeaf *leaf)
 {
 	Page		page = BufferGetPage(buf);
 	char	   *ptr;
 	int			newsize;
-	int			unmodifiedsize;
 	bool		modified = false;
 	dlist_iter	iter;
+	int			segsize;
+
 	/*
-	 * these must be static so they can be returned to caller (no pallocs
-	 * since we're in a critical section!)
+	 * If the page was in pre-9.4 format before, convert the header, and
+	 * force all segments to be copied to the page whether they were modified
+	 * or not.
 	 */
-	static vodkaxlogRecompressDataLeaf recompress_xlog;
-	static XLogRecData rdata[2];
+	if (!VodkaPageIsCompressed(page))
+	{
+		Assert(leaf->oldformat);
+		VodkaPageSetCompressed(page);
+		VodkaPageGetOpaque(page)->maxoff = InvalidOffsetNumber;
+		modified = true;
+	}
 
 	ptr = (char *) VodkaDataLeafPageGetPostingList(page);
 	newsize = 0;
-	unmodifiedsize = 0;
-	modified = false;
 	dlist_foreach(iter, &leaf->segments)
 	{
 		leafSegmentInfo *sevodkafo = dlist_container(leafSegmentInfo, node, iter.cur);
-		int			segsize;
 
-		if (sevodkafo->modified)
+		if (sevodkafo->action != VODKA_SEGMENT_UNMODIFIED)
 			modified = true;
 
-		/*
-		 * Nothing to do with empty segments, except keep track if they've been
-		 * modified
-		 */
-		if (sevodkafo->seg == NULL)
+		if (sevodkafo->action != VODKA_SEGMENT_DELETE)
 		{
-			Assert(sevodkafo->items == NULL);
-			continue;
-		}
+			segsize = SizeOfVodkaPostingList(sevodkafo->seg);
 
-		segsize = SizeOfVodkaPostingList(sevodkafo->seg);
+			if (modified)
+				memcpy(ptr, sevodkafo->seg, segsize);
 
-		if (!modified)
-			unmodifiedsize += segsize;
-		else
-		{
-			/*
-			 * Use memmove rather than memcpy, in case the segment points
-			 * to the same buffer
-			 */
-			memmove(ptr, sevodkafo->seg, segsize);
+			ptr += segsize;
+			newsize += segsize;
 		}
-		ptr += segsize;
-		newsize += segsize;
 	}
+
 	Assert(newsize <= VodkaDataLeafMaxContentSize);
 	VodkaDataLeafPageSetPostingListSize(page, newsize);
-
-	/* Reset these in case the page was in pre-9.4 format before */
-	VodkaPageSetCompressed(page);
-	VodkaPageGetOpaque(page)->maxoff = InvalidOffsetNumber;
-
-	/* Put WAL data */
-	recompress_xlog.length = (uint16) newsize;
-	recompress_xlog.unmodifiedsize = unmodifiedsize;
-
-	rdata[0].buffer = InvalidBuffer;
-	rdata[0].data = (char *) &recompress_xlog;
-	rdata[0].len = offsetof(vodkaxlogRecompressDataLeaf, newdata);
-	rdata[0].next = &rdata[1];
-
-	rdata[1].buffer = buf;
-	rdata[1].buffer_std = TRUE;
-	rdata[1].data = ((char *) VodkaDataLeafPageGetPostingList(page)) + unmodifiedsize;
-	rdata[1].len = newsize - unmodifiedsize;
-	rdata[1].next = NULL;
-
-	*prdata = rdata;
 }
 
 /*
@@ -912,11 +1033,14 @@ dataPlaceToPageLeafSplit(Buffer buf, disassembledLeaf *leaf,
 		 node = dlist_next_node(&leaf->segments, node))
 	{
 		sevodkafo = dlist_container(leafSegmentInfo, node, node);
-		segsize = SizeOfVodkaPostingList(sevodkafo->seg);
 
-		memcpy(ptr, sevodkafo->seg, segsize);
-		ptr += segsize;
-		lsize += segsize;
+		if (sevodkafo->action != VODKA_SEGMENT_DELETE)
+		{
+			segsize = SizeOfVodkaPostingList(sevodkafo->seg);
+			memcpy(ptr, sevodkafo->seg, segsize);
+			ptr += segsize;
+			lsize += segsize;
+		}
 	}
 	Assert(lsize == leaf->lsize);
 	VodkaDataLeafPageSetPostingListSize(lpage, lsize);
@@ -930,11 +1054,14 @@ dataPlaceToPageLeafSplit(Buffer buf, disassembledLeaf *leaf,
 		 node = dlist_next_node(&leaf->segments, node))
 	{
 		sevodkafo = dlist_container(leafSegmentInfo, node, node);
-		segsize = SizeOfVodkaPostingList(sevodkafo->seg);
 
-		memcpy(ptr, sevodkafo->seg, segsize);
-		ptr += segsize;
-		rsize += segsize;
+		if (sevodkafo->action != VODKA_SEGMENT_DELETE)
+		{
+			segsize = SizeOfVodkaPostingList(sevodkafo->seg);
+			memcpy(ptr, sevodkafo->seg, segsize);
+			ptr += segsize;
+			rsize += segsize;
+		}
 
 		if (!dlist_has_next(&leaf->segments, node))
 			break;
@@ -1195,14 +1322,15 @@ disassembleLeaf(Page page)
 		{
 			leafSegmentInfo *sevodkafo = palloc(sizeof(leafSegmentInfo));
 
+			sevodkafo->action = VODKA_SEGMENT_UNMODIFIED;
 			sevodkafo->seg = seg;
 			sevodkafo->items = NULL;
 			sevodkafo->nitems = 0;
-			sevodkafo->modified = false;
 			dlist_push_tail(&leaf->segments, &sevodkafo->node);
 
 			seg = VodkaNextPostingListSegment(seg);
 		}
+		leaf->oldformat = false;
 	}
 	else
 	{
@@ -1218,14 +1346,15 @@ disassembleLeaf(Page page)
 
 		sevodkafo = palloc(sizeof(leafSegmentInfo));
 
+		sevodkafo->action = VODKA_SEGMENT_REPLACE;
 		sevodkafo->seg = NULL;
 		sevodkafo->items = palloc(nuncompressed * sizeof(ItemPointerData));
 		memcpy(sevodkafo->items, uncompressed, nuncompressed * sizeof(ItemPointerData));
 		sevodkafo->nitems = nuncompressed;
-		/* make sure we rewrite this to disk */
-		sevodkafo->modified = true;
 
 		dlist_push_tail(&leaf->segments, &sevodkafo->node);
+
+		leaf->oldformat = true;
 	}
 
 	return leaf;
@@ -1247,6 +1376,7 @@ addItemsToLeaf(disassembledLeaf *leaf, ItemPointer newItems, int nNewItems)
 	ItemPointer nextnew = newItems;
 	int			newleft = nNewItems;
 	bool		modified = false;
+	leafSegmentInfo *newseg;
 
 	/*
 	 * If the page is completely empty, just construct one new segment to
@@ -1254,14 +1384,12 @@ addItemsToLeaf(disassembledLeaf *leaf, ItemPointer newItems, int nNewItems)
 	 */
 	if (dlist_is_empty(&leaf->segments))
 	{
-		/* create a new segment for the new entries */
-		leafSegmentInfo *sevodkafo = palloc(sizeof(leafSegmentInfo));
-
-		sevodkafo->seg = NULL;
-		sevodkafo->items = newItems;
-		sevodkafo->nitems = nNewItems;
-		sevodkafo->modified = true;
-		dlist_push_tail(&leaf->segments, &sevodkafo->node);
+		newseg = palloc(sizeof(leafSegmentInfo));
+		newseg->seg = NULL;
+		newseg->items = newItems;
+		newseg->nitems = nNewItems;
+		newseg->action = VODKA_SEGMENT_INSERT;
+		dlist_push_tail(&leaf->segments, &newseg->node);
 		return true;
 	}
 
@@ -1303,16 +1431,51 @@ addItemsToLeaf(disassembledLeaf *leaf, ItemPointer newItems, int nNewItems)
 		if (!cur->items)
 			cur->items = vodkaPostingListDecode(cur->seg, &cur->nitems);
 
-		tmpitems = palloc((cur->nitems + nthis) * sizeof(ItemPointerData));
-		ntmpitems = vodkaMergeItemPointers(tmpitems,
-										 cur->items, cur->nitems,
-										 nextnew, nthis);
+		/*
+		 * Fast path for the important special case that we're appending to
+		 * the end of the page: don't let the last segment on the page grow
+		 * larger than the target, create a new segment before that happens.
+		 */
+		if (!dlist_has_next(&leaf->segments, iter.cur) &&
+			vodkaCompareItemPointers(&cur->items[cur->nitems - 1], &nextnew[0]) < 0 &&
+			cur->seg != NULL &&
+			SizeOfVodkaPostingList(cur->seg) >= VodkaPostingListSegmentTargetSize)
+		{
+			newseg = palloc(sizeof(leafSegmentInfo));
+			newseg->seg = NULL;
+			newseg->items = nextnew;
+			newseg->nitems = nthis;
+			newseg->action = VODKA_SEGMENT_INSERT;
+			dlist_push_tail(&leaf->segments, &newseg->node);
+			modified = true;
+			break;
+		}
+
+		tmpitems = vodkaMergeItemPointers(cur->items, cur->nitems,
+										nextnew, nthis,
+										&ntmpitems);
 		if (ntmpitems != cur->nitems)
 		{
+			/*
+			 * If there are no duplicates, track the added items so that we
+			 * can emit a compact ADDITEMS WAL record later on. (it doesn't
+			 * seem worth re-checking which items were duplicates, if there
+			 * were any)
+			 */
+			if (ntmpitems == nthis + cur->nitems &&
+				cur->action == VODKA_SEGMENT_UNMODIFIED)
+			{
+				cur->action = VODKA_SEGMENT_ADDITEMS;
+				cur->modifieditems = nextnew;
+				cur->nmodifieditems = nthis;
+			}
+			else
+				cur->action = VODKA_SEGMENT_REPLACE;
+
 			cur->items = tmpitems;
 			cur->nitems = ntmpitems;
 			cur->seg = NULL;
-			modified = cur->modified = true;
+			modified = true;
 		}
 
 		nextnew += nthis;
@@ -1332,133 +1495,160 @@ addItemsToLeaf(disassembledLeaf *leaf, ItemPointer newItems, int nNewItems)
  * If all items fit, *remaining is set to invalid.
  *
  * Returns true if the page has to be split.
- *
- * XXX: Actually, this re-encodes all segments after the first one that was
- * modified, to make sure the new segments are all more or less of equal
- * length. That's unnecessarily aggressive; if we've only added a single item
- * to one segment, for example, we could re-encode just that single segment,
- * as long as it's still smaller than, say, 2x the normal segment size.
  */
 static bool
 leafRepackItems(disassembledLeaf *leaf, ItemPointer remaining)
 {
-	dlist_iter	iter;
-	ItemPointer allitems;
-	int			nallitems;
 	int			pgused = 0;
-	bool		needsplit;
-	int			totalpacked;
-	dlist_mutable_iter miter;
-	dlist_head	recode_list;
-	int			nrecode;
-	bool		recoding;
+	bool		needsplit = false;
+	dlist_iter	iter;
+	int			segsize;
+	leafSegmentInfo *nextseg;
+	int			npacked;
+	bool		modified;
+	dlist_node *cur_node;
+	dlist_node *next_node;
 
 	ItemPointerSetInvalid(remaining);
 
 	/*
-	 * Find the first segment that needs to be re-coded. Move all segments
-	 * that need recoding to separate list, and count the total number of
-	 * items in them. Also, add up the number of bytes in unmodified segments
-	 * (pgused).
+	 * cannot use dlist_foreach_modify here because we insert adjacent items
+	 * while iterating.
 	 */
-	dlist_init(&recode_list);
-	recoding = false;
-	nrecode = 0;
-	pgused = 0;
-	dlist_foreach_modify(miter, &leaf->segments)
+	for (cur_node = dlist_head_node(&leaf->segments);
+		 cur_node != NULL;
+		 cur_node = next_node)
 	{
-		leafSegmentInfo *sevodkafo = dlist_container(leafSegmentInfo, node, miter.cur);
+		leafSegmentInfo *sevodkafo = dlist_container(leafSegmentInfo, node,
+												   cur_node);
 
-		/* If the segment was modified, re-encode it */
-		if (sevodkafo->modified || sevodkafo->seg == NULL)
-			recoding = true;
-		/*
-		 * Also re-encode abnormally small or large segments. (Vacuum can
-		 * leave behind small segments, and conversion from pre-9.4 format
-		 * can leave behind large segments).
-		 */
-		else if (SizeOfVodkaPostingList(sevodkafo->seg) < VodkaPostingListSegmentMinSize)
-			recoding = true;
-		else if (SizeOfVodkaPostingList(sevodkafo->seg) > VodkaPostingListSegmentMaxSize)
-			recoding = true;
-
-		if (recoding)
-		{
-			if (!sevodkafo->items)
-				sevodkafo->items = vodkaPostingListDecode(sevodkafo->seg,
-													  &sevodkafo->nitems);
-			nrecode += sevodkafo->nitems;
-
-			dlist_delete(miter.cur);
-			dlist_push_tail(&recode_list, &sevodkafo->node);
-		}
+		if (dlist_has_next(&leaf->segments, cur_node))
+			next_node = dlist_next_node(&leaf->segments, cur_node);
 		else
-			pgused += SizeOfVodkaPostingList(sevodkafo->seg);
-	}
+			next_node = NULL;
 
-	if (nrecode == 0)
-		return false; /* nothing to do */
+		/* Compress the posting list, if necessary */
+		if (sevodkafo->action != VODKA_SEGMENT_DELETE)
+		{
+			if (sevodkafo->seg == NULL)
+			{
+				if (sevodkafo->nitems > VodkaPostingListSegmentMaxSize)
+					npacked = 0; /* no chance that it would fit. */
+				else
+				{
+					sevodkafo->seg = vodkaCompressPostingList(sevodkafo->items,
+														  sevodkafo->nitems,
+												   VodkaPostingListSegmentMaxSize,
+														  &npacked);
+				}
+				if (npacked != sevodkafo->nitems)
+				{
+					/*
+					 * Too large. Compress again to the target size, and create
+					 * a new segment to represent the remaining items. The new
+					 * segment is inserted after this one, so it will be
+					 * processed in the next iteration of this loop.
+					 */
+					if (sevodkafo->seg)
+						pfree(sevodkafo->seg);
+					sevodkafo->seg = vodkaCompressPostingList(sevodkafo->items,
+														  sevodkafo->nitems,
+											   VodkaPostingListSegmentTargetSize,
+														  &npacked);
+					if (sevodkafo->action != VODKA_SEGMENT_INSERT)
+						sevodkafo->action = VODKA_SEGMENT_REPLACE;
 
-	/*
-	 * Construct one big array of the items that need to be re-encoded.
-	 */
-	allitems = palloc(nrecode * sizeof(ItemPointerData));
-	nallitems = 0;
-	dlist_foreach(iter, &recode_list)
-	{
-		leafSegmentInfo *sevodkafo = dlist_container(leafSegmentInfo, node, iter.cur);
-		memcpy(&allitems[nallitems], sevodkafo->items, sevodkafo->nitems * sizeof(ItemPointerData));
-		nallitems += sevodkafo->nitems;
-	}
-	Assert(nallitems == nrecode);
+					nextseg = palloc(sizeof(leafSegmentInfo));
+					nextseg->action = VODKA_SEGMENT_INSERT;
+					nextseg->seg = NULL;
+					nextseg->items = &sevodkafo->items[npacked];
+					nextseg->nitems = sevodkafo->nitems - npacked;
+					next_node = &nextseg->node;
+					dlist_insert_after(cur_node, next_node);
+				}
+			}
 
-	/*
-	 * Start packing the items into segments. Stop when we have consumed
-	 * enough space to fill both pages, or we run out of items.
-	 */
-	totalpacked = 0;
-	needsplit = false;
-	while (totalpacked < nallitems)
-	{
-		leafSegmentInfo *sevodkafo;
-		int			npacked;
-		VodkaPostingList *seg;
-		int			segsize;
+			/*
+			 * If the segment is very small, merge it with the next segment.
+			 */
+			if (SizeOfVodkaPostingList(sevodkafo->seg) < VodkaPostingListSegmentMinSize && next_node)
+			{
+				int		nmerged;
 
-		seg = vodkaCompressPostingList(&allitems[totalpacked],
-									 nallitems - totalpacked,
-									 VodkaPostingListSegmentMaxSize,
-									 &npacked);
-		segsize = SizeOfVodkaPostingList(seg);
+				nextseg = dlist_container(leafSegmentInfo, node, next_node);
+
+				if (sevodkafo->items == NULL)
+					sevodkafo->items = vodkaPostingListDecode(sevodkafo->seg,
+														  &sevodkafo->nitems);
+				if (nextseg->items == NULL)
+					nextseg->items = vodkaPostingListDecode(nextseg->seg,
+														  &nextseg->nitems);
+				nextseg->items =
+					vodkaMergeItemPointers(sevodkafo->items, sevodkafo->nitems,
+										 nextseg->items, nextseg->nitems,
+										 &nmerged);
+				Assert(nmerged == sevodkafo->nitems + nextseg->nitems);
+				nextseg->nitems = nmerged;
+				nextseg->seg = NULL;
+
+				nextseg->action = VODKA_SEGMENT_REPLACE;
+				nextseg->modifieditems = NULL;
+				nextseg->nmodifieditems = 0;
+
+				if (sevodkafo->action == VODKA_SEGMENT_INSERT)
+				{
+					dlist_delete(cur_node);
+					continue;
+				}
+				else
+				{
+					sevodkafo->action = VODKA_SEGMENT_DELETE;
+					sevodkafo->seg = NULL;
+				}
+			}
+
+			sevodkafo->items = NULL;
+			sevodkafo->nitems = 0;
+		}
+
+		if (sevodkafo->action == VODKA_SEGMENT_DELETE)
+			continue;
+
+		/*
+		 * OK, we now have a compressed version of this segment ready for
+		 * copying to the page. Did we exceed the size that fits on one page?
+		 */
+		segsize = SizeOfVodkaPostingList(sevodkafo->seg);
 		if (pgused + segsize > VodkaDataLeafMaxContentSize)
 		{
 			if (!needsplit)
 			{
 				/* switch to right page */
 				Assert(pgused > 0);
-				leaf->lastleft = dlist_tail_node(&leaf->segments);
+				leaf->lastleft = dlist_prev_node(&leaf->segments, cur_node);
 				needsplit = true;
 				leaf->lsize = pgused;
 				pgused = 0;
 			}
 			else
 			{
-				/* filled both pages */
-				*remaining = allitems[totalpacked];
+				/*
+				 * Filled both pages. The last segment we constructed did not
+				 * fit.
+				 */
+				*remaining = sevodkafo->seg->first;
+
+				/*
+				 * remove all segments that did not fit from the list.
+				 */
+				while (dlist_has_next(&leaf->segments, cur_node))
+					dlist_delete(dlist_next_node(&leaf->segments, cur_node));
+				dlist_delete(cur_node);
 				break;
 			}
 		}
 
-		sevodkafo = palloc(sizeof(leafSegmentInfo));
-		sevodkafo->seg = seg;
-		sevodkafo->items = &allitems[totalpacked];
-		sevodkafo->nitems = npacked;
-		sevodkafo->modified = true;
-
-		dlist_push_tail(&leaf->segments, &sevodkafo->node);
-
 		pgused += segsize;
-		totalpacked += npacked;
 	}
 
 	if (!needsplit)
@@ -1471,6 +1661,32 @@ leafRepackItems(disassembledLeaf *leaf, ItemPointer remaining)
 
 	Assert(leaf->lsize <= VodkaDataLeafMaxContentSize);
 	Assert(leaf->rsize <= VodkaDataLeafMaxContentSize);
+
+	/*
+	 * Make a palloc'd copy of every segment after the first modified one,
+	 * because as we start copying items to the orivodkaal page, we might
+	 * overwrite an existing segment.
+	 */
+	modified = false;
+	dlist_foreach(iter, &leaf->segments)
+	{
+		leafSegmentInfo *sevodkafo = dlist_container(leafSegmentInfo, node,
+												   iter.cur);
+
+		if (!modified && sevodkafo->action != VODKA_SEGMENT_UNMODIFIED)
+		{
+			modified = true;
+		}
+		else if (modified && sevodkafo->action == VODKA_SEGMENT_UNMODIFIED)
+		{
+			VodkaPostingList *tmp;
+
+			segsize = SizeOfVodkaPostingList(sevodkafo->seg);
+			tmp = palloc(segsize);
+			memcpy(tmp, sevodkafo->seg, segsize);
+			sevodkafo->seg = tmp;
+		}
+	}
 
 	return needsplit;
 }
@@ -1542,8 +1758,6 @@ vodkaCreatePostingTree(Relation index, ItemPointerData *items, uint32 nitems,
 	PageRestoreTempPage(tmppage, page);
 	MarkBufferDirty(buffer);
 
-	elog(DEBUG2, "created VODKA posting tree with %d items", nrootitems);
-
 	if (RelationNeedsWAL(index))
 	{
 		XLogRecPtr	recptr;
@@ -1575,6 +1789,8 @@ vodkaCreatePostingTree(Relation index, ItemPointerData *items, uint32 nitems,
 	/* During index build, count the newly-added data page */
 	if (buildStats)
 		buildStats->nDataPages++;
+
+	elog(DEBUG2, "created VODKA posting tree with %d items", nrootitems);
 
 	/*
 	 * Add any remaining TIDs to the newly-created posting tree.

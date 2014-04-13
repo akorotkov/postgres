@@ -72,12 +72,9 @@ addItemPointersToLeafTuple(VodkaState *vodkastate,
 	/* merge the old and new posting lists */
 	oldItems = vodkaReadTuple(vodkastate, attnum, old, &oldNPosting);
 
-	newNPosting = oldNPosting + nitem;
-	newItems = (ItemPointerData *) palloc(sizeof(ItemPointerData) * newNPosting);
-
-	newNPosting = vodkaMergeItemPointers(newItems,
-									   items, nitem,
-									   oldItems, oldNPosting);
+	newItems = vodkaMergeItemPointers(items, nitem,
+									oldItems, oldNPosting,
+									&newNPosting);
 
 	/* Compress the posting list, and try to a build tuple with room for it */
 	res = NULL;

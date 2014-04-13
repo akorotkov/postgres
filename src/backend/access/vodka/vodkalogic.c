@@ -3,18 +3,25 @@
  * vodkalogic.c
  *	  routines for performing binary- and ternary-logic consistent checks.
  *
- * A VODKA operator class provides a consistent function which checks if a
- * tuple matches a qual, when the given set of keys are present in the tuple.
- * The consistent function is passed a TRUE/FALSE argument for every key,
- * indicating if that key is present, and it returns TRUE or FALSE. However,
- * a VODKA scan can apply various optimizations, if it can determine that an
- * item matches or doesn't match, even if it doesn't know if some of the keys
- * are present or not. Hence, it's useful to have a ternary-logic consistent
- * function, where where each key can be TRUE (present), FALSE (not present),
- * or MAYBE (don't know if present). This file provides such a ternary-logic
- * consistent function,  implemented by calling the regular boolean consistent
- * function many times, with all the MAYBE arguments set to all combinations
- * of TRUE and FALSE.
+ * A VODKA operator class can provide a boolean or ternary consistent
+ * function, or both.  This file provides both boolean and ternary
+ * interfaces to the rest of the VODKA code, even if only one of them is
+ * implemented by the opclass.
+ *
+ * Providing a boolean interface when the opclass implements only the
+ * ternary function is straightforward - just call the ternary function
+ * with the check-array as is, and map the VODKA_TRUE, VODKA_FALSE, VODKA_MAYBE
+ * return codes to TRUE, FALSE and TRUE+recheck, respectively.  Providing
+ * a ternary interface when the opclass only implements a boolean function
+ * is implemented by calling the boolean function many times, with all the
+ * MAYBE arguments set to all combinations of TRUE and FALSE (up to a
+ * certain number of MAYBE arguments).
+ *
+ * (A boolean function is enough to determine if an item matches, but a
+ * VODKA scan can apply various optimizations if it can determine that an
+ * item matches or doesn't match, even if it doesn't know if some of the
+ * keys are present or not.  That's what the ternary consistent function
+ * is used for.)
  *
  *
  * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
@@ -43,7 +50,7 @@
 #define	MAX_MAYBE_ENTRIES	4
 
 /*
- * A dummy consistent function for an EVERYTHING key. Just claim it matches.
+ * Dummy consistent functions for an EVERYTHING key.  Just claim it matches.
  */
 static bool
 trueConsistentFn(VodkaScanKey key)
@@ -51,17 +58,17 @@ trueConsistentFn(VodkaScanKey key)
 	key->recheckCurItem = false;
 	return true;
 }
-static VodkaLogicValue
+static VodkaTernaryValue
 trueTriConsistentFn(VodkaScanKey key)
 {
-	return VODKA_MAYBE;
+	return VODKA_TRUE;
 }
 
 /*
  * A helper function for calling a regular, binary logic, consistent function.
  */
 static bool
-normalBoolConsistentFn(VodkaScanKey key)
+directBoolConsistentFn(VodkaScanKey key)
 {
 	/*
 	 * Initialize recheckCurItem in case the consistentFn doesn't know it
@@ -82,6 +89,55 @@ normalBoolConsistentFn(VodkaScanKey key)
 }
 
 /*
+ * A helper function for calling a native ternary logic consistent function.
+ */
+static VodkaTernaryValue
+directTriConsistentFn(VodkaScanKey key)
+{
+	return DatumGetVodkaTernaryValue(FunctionCall7Coll(
+									   key->triConsistentFmgrInfo,
+									   key->collation,
+									   PointerGetDatum(key->entryRes),
+									   UInt16GetDatum(key->strategy),
+									   key->query,
+									   UInt32GetDatum(key->nuserentries),
+									   PointerGetDatum(key->extra_data),
+									   PointerGetDatum(key->queryValues),
+									 PointerGetDatum(key->queryCategories)));
+}
+
+/*
+ * This function implements a binary logic consistency check, using a ternary
+ * logic consistent function provided by the opclass. VODKA_MAYBE return value
+ * is interpreted as true with recheck flag.
+ */
+static bool
+shimBoolConsistentFn(VodkaScanKey key)
+{
+	VodkaTernaryValue result;
+	result = DatumGetVodkaTernaryValue(FunctionCall7Coll(
+										 key->triConsistentFmgrInfo,
+										 key->collation,
+										 PointerGetDatum(key->entryRes),
+										 UInt16GetDatum(key->strategy),
+										 key->query,
+										 UInt32GetDatum(key->nuserentries),
+										 PointerGetDatum(key->extra_data),
+										 PointerGetDatum(key->queryValues),
+									 PointerGetDatum(key->queryCategories)));
+	if (result == VODKA_MAYBE)
+	{
+		key->recheckCurItem = true;
+		return true;
+	}
+	else
+	{
+		key->recheckCurItem = false;
+		return result;
+	}
+}
+
+/*
  * This function implements a tri-state consistency check, using a boolean
  * consistent function provided by the opclass.
  *
@@ -93,7 +149,7 @@ normalBoolConsistentFn(VodkaScanKey key)
  *
  * NB: This function modifies the key->entryRes array!
  */
-static VodkaLogicValue
+static VodkaTernaryValue
 shimTriConsistentFn(VodkaScanKey key)
 {
 	int			nmaybe;
@@ -101,7 +157,7 @@ shimTriConsistentFn(VodkaScanKey key)
 	int			i;
 	bool		boolResult;
 	bool		recheck = false;
-	VodkaLogicValue curResult;
+	VodkaTernaryValue curResult;
 
 	/*
 	 * Count how many MAYBE inputs there are, and store their indexes in
@@ -124,12 +180,12 @@ shimTriConsistentFn(VodkaScanKey key)
 	 * function as is.
 	 */
 	if (nmaybe == 0)
-		return normalBoolConsistentFn(key);
+		return directBoolConsistentFn(key);
 
 	/* First call consistent function with all the maybe-inputs set FALSE */
 	for (i = 0; i < nmaybe; i++)
 		key->entryRes[maybeEntries[i]] = VODKA_FALSE;
-	curResult = normalBoolConsistentFn(key);
+	curResult = directBoolConsistentFn(key);
 
 	for (;;)
 	{
@@ -147,7 +203,7 @@ shimTriConsistentFn(VodkaScanKey key)
 		if (i == nmaybe)
 			break;
 
-		boolResult = normalBoolConsistentFn(key);
+		boolResult = directBoolConsistentFn(key);
 		recheck |= key->recheckCurItem;
 
 		if (curResult != boolResult)
@@ -175,8 +231,17 @@ vodkaInitConsistentFunction(VodkaState *vodkastate, VodkaScanKey key)
 	else
 	{
 		key->consistentFmgrInfo = &vodkastate->consistentFn[key->attnum - 1];
+		key->triConsistentFmgrInfo = &vodkastate->triConsistentFn[key->attnum - 1];
 		key->collation = vodkastate->supportCollation[key->attnum - 1];
-		key->boolConsistentFn = normalBoolConsistentFn;
-		key->triConsistentFn = shimTriConsistentFn;
+
+		if (OidIsValid(vodkastate->consistentFn[key->attnum - 1].fn_oid))
+			key->boolConsistentFn = directBoolConsistentFn;
+		else
+			key->boolConsistentFn = shimBoolConsistentFn;
+
+		if (OidIsValid(vodkastate->triConsistentFn[key->attnum - 1].fn_oid))
+			key->triConsistentFn =  directTriConsistentFn;
+		else
+			key->triConsistentFn =  shimTriConsistentFn;
 	}
 }

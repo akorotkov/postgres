@@ -43,7 +43,6 @@ vodkaarrayextract(PG_FUNCTION_ARGS)
 	bool	   *nulls;
 	int			nelems;
 
-
 	get_typlenbyvalalign(ARR_ELEMTYPE(array),
 						 &elmlen, &elmbyval, &elmalign);
 
@@ -218,4 +217,88 @@ vodkaarrayconsistent(PG_FUNCTION_ARGS)
 	}
 
 	PG_RETURN_BOOL(res);
+}
+
+/*
+ * triconsistent support function
+ */
+Datum
+vodkaarraytriconsistent(PG_FUNCTION_ARGS)
+{
+	VodkaTernaryValue *check = (VodkaTernaryValue *) PG_GETARG_POINTER(0);
+	StrategyNumber strategy = PG_GETARG_UINT16(1);
+
+	/* ArrayType  *query = PG_GETARG_ARRAYTYPE_P(2); */
+	int32		nkeys = PG_GETARG_INT32(3);
+
+	/* Pointer	   *extra_data = (Pointer *) PG_GETARG_POINTER(4); */
+	/* Datum	   *queryKeys = (Datum *) PG_GETARG_POINTER(5); */
+	bool	   *nullFlags = (bool *) PG_GETARG_POINTER(6);
+	VodkaTernaryValue res;
+	int32		i;
+
+	switch (strategy)
+	{
+		case VodkaOverlapStrategy:
+			/* must have a match for at least one non-null element */
+			res = VODKA_FALSE;
+			for (i = 0; i < nkeys; i++)
+			{
+				if (!nullFlags[i])
+				{
+					if (check[i] == VODKA_TRUE)
+					{
+						res = VODKA_TRUE;
+						break;
+					}
+					else if (check[i] == VODKA_MAYBE && res == VODKA_FALSE)
+					{
+						res = VODKA_MAYBE;
+					}
+				}
+			}
+			break;
+		case VodkaContainsStrategy:
+			/* must have all elements in check[] true, and no nulls */
+			res = VODKA_TRUE;
+			for (i = 0; i < nkeys; i++)
+			{
+				if (check[i] == VODKA_FALSE || nullFlags[i])
+				{
+					res = VODKA_FALSE;
+					break;
+				}
+				if (check[i] == VODKA_MAYBE)
+				{
+					res = VODKA_MAYBE;
+				}
+			}
+			break;
+		case VodkaContainedStrategy:
+			/* can't do anything else useful here */
+			res = VODKA_MAYBE;
+			break;
+		case VodkaEqualStrategy:
+			/*
+			 * Must have all elements in check[] true; no discrimination
+			 * against nulls here.	This is because array_contain_compare and
+			 * array_eq handle nulls differently ...
+			 */
+			res = VODKA_MAYBE;
+			for (i = 0; i < nkeys; i++)
+			{
+				if (check[i] == VODKA_FALSE)
+				{
+					res = VODKA_FALSE;
+					break;
+				}
+			}
+			break;
+		default:
+			elog(ERROR, "vodkaarrayconsistent: unknown strategy number: %d",
+				 strategy);
+			res = false;
+	}
+
+	PG_RETURN_VODKA_TERNARY_VALUE(res);
 }
