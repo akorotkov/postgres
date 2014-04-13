@@ -14,6 +14,7 @@
 
 #include "postgres.h"
 
+#include "access/relscan.h"
 #include "access/vodka_private.h"
 #include "access/heapam_xlog.h"
 #include "catalog/index.h"
@@ -38,6 +39,7 @@ typedef struct
 } VodkaBuildState;
 
 
+#ifdef NOT_USED
 /*
  * Adds array of item pointers to tuple's posting list, or
  * creates posting tree and tuple pointing to tree in case
@@ -118,7 +120,9 @@ addItemPointersToLeafTuple(VodkaState *vodkastate,
 
 	return res;
 }
+#endif
 
+#ifdef NOT_USED
 /*
  * Build a fresh leaf tuple, either posting-list or posting-tree format
  * depending on whether the given items list will fit.
@@ -169,6 +173,7 @@ buildFreshLeafTuple(VodkaState *vodkastate,
 
 	return res;
 }
+#endif
 
 /*
  * Insert one or more heap TIDs associated with the given key value.
@@ -183,20 +188,25 @@ vodkaEntryInsert(VodkaState *vodkastate,
 			   ItemPointerData *items, uint32 nitem,
 			   VodkaStatsData *buildStats)
 {
+#ifdef NOT_USED
 	VodkaBtreeData btree;
 	VodkaBtreeEntryInsertData insertdata;
 	VodkaBtreeStack *stack;
 	IndexTuple	itup;
 	Page		page;
+#endif
 	bool		isnull, found;
 	ItemPointerData	iptr;
+	IndexScanDesc	equalScan;
+	BlockNumber postingRoot;
 
-	insertdata.isDelete = FALSE;
+	/*insertdata.isDelete = FALSE;*/
 
 	/* During index build, count the to-be-inserted entry */
 	if (buildStats)
 		buildStats->nEntries++;
 
+#ifdef NOT_USED
 	vodkaPrepareEntryScan(&btree, attnum, key, category, vodkastate);
 
 	stack = vodkaFindLeafPage(&btree, false);
@@ -239,23 +249,37 @@ vodkaEntryInsert(VodkaState *vodkastate,
 	/* Insert the new or modified leaf tuple */
 	insertdata.entry = itup;
 	vodkaInsertValue(&btree, stack, &insertdata, buildStats);
+#endif
 
 	vodkastate->entryEqualScan = prepareEntryIndexScan(vodkastate,
 			TextEqualOperator, key);
 
+	equalScan = vodkastate->entryEqualScan;
+
 	found =	DatumGetBool(OidFunctionCall2(vodkastate->entryTree.rd_am->amgettuple,
-						 PointerGetDatum(vodkastate->entryEqualScan),
+						 PointerGetDatum(equalScan),
 						 Int32GetDatum(ForwardScanDirection)));
+
+	if (found)
+		postingRoot = ItemPointerGetBlockNumber(&equalScan->xs_ctup.t_self);
 
 	OidFunctionCall1(vodkastate->entryTree.rd_am->amendscan,
 						 PointerGetDatum(vodkastate->entryEqualScan));
 
-	if (!found)
+	if (found)
 	{
+		vodkaInsertItemPointers(vodkastate->index, postingRoot,
+							  items, nitem,
+							  buildStats);
+	}
+	else
+	{
+		postingRoot = vodkaCreatePostingTree(vodkastate->index, items, nitem,
+										buildStats);
+
 		isnull = (category != VODKA_CAT_NORM_KEY);
 
-		iptr.ip_blkid.bi_lo = 0;
-		iptr.ip_blkid.bi_hi = 0;
+		ItemPointerSetBlockNumber(&iptr, postingRoot);
 		iptr.ip_posid = 1;
 
 		OidFunctionCall4(vodkastate->entryTree.rd_am->aminsert,
@@ -265,7 +289,7 @@ vodkaEntryInsert(VodkaState *vodkastate,
 						 PointerGetDatum(&iptr));
 	}
 
-	pfree(itup);
+	/*pfree(itup);*/
 }
 
 /*
@@ -576,7 +600,7 @@ vodkainsert(PG_FUNCTION_ARGS)
 
 	initVodkaState(&vodkastate, index);
 
-	if (VodkaGetUseFastUpdate(index))
+	/*if (VodkaGetUseFastUpdate(index))
 	{
 		VodkaTupleCollector collector;
 
@@ -591,12 +615,12 @@ vodkainsert(PG_FUNCTION_ARGS)
 		vodkaHeapTupleFastInsert(&vodkastate, &collector);
 	}
 	else
-	{
+	{*/
 		for (i = 0; i < vodkastate.origTupdesc->natts; i++)
 			vodkaHeapTupleInsert(&vodkastate, (OffsetNumber) (i + 1),
 							   values[i], isnull[i],
 							   ht_ctid);
-	}
+	/*}*/
 
 	freeVodkaState(&vodkastate);
 	MemoryContextSwitchTo(oldCtx);
