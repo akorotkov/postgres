@@ -1387,7 +1387,19 @@ pgwin32_CommandLine(bool registration)
 						  register_servicename);
 
 	if (pg_config)
-		appendPQExpBuffer(cmdLine, " -D \"%s\"", pg_config);
+	{
+		/* We need the -D path to be absolute */
+		char	   *dataDir;
+
+		if ((dataDir = make_absolute_path(pg_config)) == NULL)
+		{
+			/* make_absolute_path already reported the error */
+			exit(1);
+		}
+		make_native_path(dataDir);
+		appendPQExpBuffer(cmdLine, " -D \"%s\"", dataDir);
+		free(dataDir);
+	}
 
 	if (registration && do_wait)
 		appendPQExpBuffer(cmdLine, " -w");
@@ -2022,9 +2034,11 @@ adjust_data_dir(void)
 	else
 		my_exec_path = pg_strdup(exec_path);
 
-	snprintf(cmd, MAXPGPATH, SYSTEMQUOTE "\"%s\" %s%s -C data_directory" SYSTEMQUOTE,
-			 my_exec_path, pgdata_opt ? pgdata_opt : "", post_opts ?
-			 post_opts : "");
+	/* it's important for -C to be the first option, see main.c */
+	snprintf(cmd, MAXPGPATH, SYSTEMQUOTE "\"%s\" -C data_directory %s%s" SYSTEMQUOTE,
+			 my_exec_path,
+			 pgdata_opt ? pgdata_opt : "",
+			 post_opts ? post_opts : "");
 
 	fd = popen(cmd, "r");
 	if (fd == NULL || fgets(filename, sizeof(filename), fd) == NULL)

@@ -13,7 +13,11 @@
  *-------------------------------------------------------------------------
  */
 
-#include "c.h"
+#ifndef FRONTEND
+#include "postgres.h"
+#else
+#include "postgres_fe.h"
+#endif
 
 #include <ctype.h>
 #include <sys/stat.h>
@@ -222,7 +226,6 @@ canonicalize_path(char *path)
 	int			pending_strips;
 
 #ifdef WIN32
-
 	/*
 	 * The Windows command processor will accept suitably quoted paths with
 	 * forward slashes, but barfs badly with mixed forward and back slashes.
@@ -372,7 +375,6 @@ path_is_relative_and_below_cwd(const char *path)
 	else if (path_contains_parent_reference(path))
 		return false;
 #ifdef WIN32
-
 	/*
 	 * On Win32, a drive letter _not_ followed by a slash, e.g. 'E:abc', is
 	 * relative to the cwd on that drive, or the drive's root directory if
@@ -548,6 +550,114 @@ make_relative_path(char *ret_path, const char *target_path,
 no_match:
 	strlcpy(ret_path, target_path, MAXPGPATH);
 	canonicalize_path(ret_path);
+}
+
+
+/*
+ * make_absolute_path
+ *
+ * If the given pathname isn't already absolute, make it so, interpreting
+ * it relative to the current working directory.
+ *
+ * Also canonicalizes the path.  The result is always a malloc'd copy.
+ *
+ * In backend, failure cases result in ereport(ERROR); in frontend,
+ * we write a complaint on stderr and return NULL.
+ *
+ * Note: interpretation of relative-path arguments during postmaster startup
+ * should happen before doing ChangeToDataDir(), else the user will probably
+ * not like the results.
+ */
+char *
+make_absolute_path(const char *path)
+{
+	char	   *new;
+
+	/* Returning null for null input is convenient for some callers */
+	if (path == NULL)
+		return NULL;
+
+	if (!is_absolute_path(path))
+	{
+		char	   *buf;
+		size_t		buflen;
+
+		buflen = MAXPGPATH;
+		for (;;)
+		{
+			buf = malloc(buflen);
+			if (!buf)
+			{
+#ifndef FRONTEND
+				ereport(ERROR,
+						(errcode(ERRCODE_OUT_OF_MEMORY),
+						 errmsg("out of memory")));
+#else
+				fprintf(stderr, _("out of memory\n"));
+				return NULL;
+#endif
+			}
+
+			if (getcwd(buf, buflen))
+				break;
+			else if (errno == ERANGE)
+			{
+				free(buf);
+				buflen *= 2;
+				continue;
+			}
+			else
+			{
+				int			save_errno = errno;
+
+				free(buf);
+				errno = save_errno;
+#ifndef FRONTEND
+				elog(ERROR, "could not get current working directory: %m");
+#else
+				fprintf(stderr, _("could not get current working directory: %s\n"),
+						strerror(errno));
+				return NULL;
+#endif
+			}
+		}
+
+		new = malloc(strlen(buf) + strlen(path) + 2);
+		if (!new)
+		{
+			free(buf);
+#ifndef FRONTEND
+			ereport(ERROR,
+					(errcode(ERRCODE_OUT_OF_MEMORY),
+					 errmsg("out of memory")));
+#else
+			fprintf(stderr, _("out of memory\n"));
+			return NULL;
+#endif
+		}
+		sprintf(new, "%s/%s", buf, path);
+		free(buf);
+	}
+	else
+	{
+		new = strdup(path);
+		if (!new)
+		{
+#ifndef FRONTEND
+			ereport(ERROR,
+					(errcode(ERRCODE_OUT_OF_MEMORY),
+					 errmsg("out of memory")));
+#else
+			fprintf(stderr, _("out of memory\n"));
+			return NULL;
+#endif
+		}
+	}
+
+	/* Make sure punctuation is canonical, too */
+	canonicalize_path(new);
+
+	return new;
 }
 
 

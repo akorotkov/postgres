@@ -78,6 +78,7 @@ DATA(insert OID = 1971 (	405		float_ops		PGNSP PGUID ));
 DATA(insert OID = 1974 (	403		network_ops		PGNSP PGUID ));
 #define NETWORK_BTREE_FAM_OID 1974
 DATA(insert OID = 1975 (	405		network_ops		PGNSP PGUID ));
+DATA(insert OID = 3550 (	783		network_ops		PGNSP PGUID ));
 DATA(insert OID = 1976 (	403		integer_ops		PGNSP PGUID ));
 #define INTEGER_BTREE_FAM_OID 1976
 DATA(insert OID = 1977 (	405		integer_ops		PGNSP PGUID ));
@@ -147,6 +148,11 @@ DATA(insert OID = 3474 (	4000	range_ops		PGNSP PGUID ));
 DATA(insert OID = 4015 (	4000	quad_point_ops	PGNSP PGUID ));
 DATA(insert OID = 4016 (	4000	kd_point_ops	PGNSP PGUID ));
 DATA(insert OID = 4017 (	4000	text_ops		PGNSP PGUID ));
+DATA(insert OID = 4033 (	403		jsonb_ops		PGNSP PGUID ));
+DATA(insert OID = 4034 (	405		jsonb_ops		PGNSP PGUID ));
+DATA(insert OID = 4035 (	783		jsonb_ops		PGNSP PGUID ));
+DATA(insert OID = 4036 (	2742	jsonb_ops		PGNSP PGUID ));
+DATA(insert OID = 4037 (	2742	jsonb_hash_ops	PGNSP PGUID ));
 #define TEXT_SPGIST_FAM_OID 4017
 
 #endif   /* PG_OPFAMILY_H */

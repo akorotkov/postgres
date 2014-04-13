@@ -640,7 +640,11 @@ include 'filename'
        </para>
 
        <para>
-        This parameter is irrelevant on Windows, which does not have
+        This parameter is irrelevant on systems, notably Solaris as of Solaris
+        10, that ignore socket permissions entirely.  There, one can achieve a
+        similar effect by pointing <varname>unix_socket_directories</> to a
+        directory having search permission limited to the desired audience.
+        This parameter is also irrelevant on Windows, which does not have
         Unix-domain sockets.
        </para>
       </listitem>
@@ -1027,20 +1031,6 @@ include 'filename'
        <para>
         Sets the location of the Kerberos server key file. See
         <xref linkend="gssapi-auth">
-        for details. This parameter can only be set in the
-        <filename>postgresql.conf</> file or on the server command line.
-       </para>
-      </listitem>
-     </varlistentry>
-
-     <varlistentry id="guc-krb-srvname" xreflabel="krb_srvname">
-      <term><varname>krb_srvname</varname> (<type>string</type>)</term>
-      <indexterm>
-       <primary><varname>krb_srvname</> configuration parameter</primary>
-      </indexterm>
-      <listitem>
-       <para>
-        Sets the Kerberos service name. See <xref linkend="gssapi-auth">
         for details. This parameter can only be set in the
         <filename>postgresql.conf</> file or on the server command line.
        </para>

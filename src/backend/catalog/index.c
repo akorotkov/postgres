@@ -2298,7 +2298,9 @@ IndexBuildHeapScan(Relation heapRelation,
 							 * Must drop the lock on the buffer before we wait
 							 */
 							LockBuffer(scan->rs_cbuf, BUFFER_LOCK_UNLOCK);
-							XactLockTableWait(xwait);
+							XactLockTableWait(xwait, heapRelation,
+											  &heapTuple->t_data->t_ctid,
+											  XLTW_InsertIndexUnique);
 							goto recheck;
 						}
 					}
@@ -2344,7 +2346,9 @@ IndexBuildHeapScan(Relation heapRelation,
 							 * Must drop the lock on the buffer before we wait
 							 */
 							LockBuffer(scan->rs_cbuf, BUFFER_LOCK_UNLOCK);
-							XactLockTableWait(xwait);
+							XactLockTableWait(xwait, heapRelation,
+											  &heapTuple->t_data->t_ctid,
+											  XLTW_InsertIndexUnique);
 							goto recheck;
 						}
 
@@ -2441,7 +2445,10 @@ IndexBuildHeapScan(Relation heapRelation,
 			rootTuple = *heapTuple;
 			offnum = ItemPointerGetOffsetNumber(&heapTuple->t_self);
 
-			Assert(OffsetNumberIsValid(root_offsets[offnum - 1]));
+			if (!OffsetNumberIsValid(root_offsets[offnum - 1]))
+				elog(ERROR, "failed to find parent tuple for heap-only tuple at (%u,%u) in table \"%s\"",
+					 ItemPointerGetBlockNumber(&heapTuple->t_self),
+					 offnum, RelationGetRelationName(heapRelation));
 
 			ItemPointerSetOffsetNumber(&rootTuple.t_self,
 									   root_offsets[offnum - 1]);
@@ -2859,7 +2866,11 @@ validate_index_heapscan(Relation heapRelation,
 		if (HeapTupleIsHeapOnly(heapTuple))
 		{
 			root_offnum = root_offsets[root_offnum - 1];
-			Assert(OffsetNumberIsValid(root_offnum));
+			if (!OffsetNumberIsValid(root_offnum))
+				elog(ERROR, "failed to find parent tuple for heap-only tuple at (%u,%u) in table \"%s\"",
+					 ItemPointerGetBlockNumber(heapcursor),
+					 ItemPointerGetOffsetNumber(heapcursor),
+					 RelationGetRelationName(heapRelation));
 			ItemPointerSetOffsetNumber(&rootTuple, root_offnum);
 		}
 

@@ -3,18 +3,25 @@
  * ginlogic.c
  *	  routines for performing binary- and ternary-logic consistent checks.
  *
- * A GIN operator class provides a consistent function which checks if a
- * tuple matches a qual, when the given set of keys are present in the tuple.
- * The consistent function is passed a TRUE/FALSE argument for every key,
- * indicating if that key is present, and it returns TRUE or FALSE. However,
- * a GIN scan can apply various optimizations, if it can determine that an
- * item matches or doesn't match, even if it doesn't know if some of the keys
- * are present or not. Hence, it's useful to have a ternary-logic consistent
- * function, where where each key can be TRUE (present), FALSE (not present),
- * or MAYBE (don't know if present). This file provides such a ternary-logic
- * consistent function,  implemented by calling the regular boolean consistent
- * function many times, with all the MAYBE arguments set to all combinations
- * of TRUE and FALSE.
+ * A GIN operator class can provide a boolean or ternary consistent
+ * function, or both.  This file provides both boolean and ternary
+ * interfaces to the rest of the GIN code, even if only one of them is
+ * implemented by the opclass.
+ *
+ * Providing a boolean interface when the opclass implements only the
+ * ternary function is straightforward - just call the ternary function
+ * with the check-array as is, and map the GIN_TRUE, GIN_FALSE, GIN_MAYBE
+ * return codes to TRUE, FALSE and TRUE+recheck, respectively.  Providing
+ * a ternary interface when the opclass only implements a boolean function
+ * is implemented by calling the boolean function many times, with all the
+ * MAYBE arguments set to all combinations of TRUE and FALSE (up to a
+ * certain number of MAYBE arguments).
+ *
+ * (A boolean function is enough to determine if an item matches, but a
+ * GIN scan can apply various optimizations if it can determine that an
+ * item matches or doesn't match, even if it doesn't know if some of the
+ * keys are present or not.  That's what the ternary consistent function
+ * is used for.)
  *
  *
  * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
@@ -43,7 +50,7 @@
 #define	MAX_MAYBE_ENTRIES	4
 
 /*
- * A dummy consistent function for an EVERYTHING key. Just claim it matches.
+ * Dummy consistent functions for an EVERYTHING key.  Just claim it matches.
  */
 static bool
 trueConsistentFn(GinScanKey key)
@@ -51,10 +58,10 @@ trueConsistentFn(GinScanKey key)
 	key->recheckCurItem = false;
 	return true;
 }
-static GinLogicValue
+static GinTernaryValue
 trueTriConsistentFn(GinScanKey key)
 {
-	return GIN_MAYBE;
+	return GIN_TRUE;
 }
 
 /*
@@ -84,17 +91,18 @@ directBoolConsistentFn(GinScanKey key)
 /*
  * A helper function for calling a native ternary logic consistent function.
  */
-static GinLogicValue
+static GinTernaryValue
 directTriConsistentFn(GinScanKey key)
 {
-	return DatumGetGinLogicValue(FunctionCall7Coll(key->triConsistentFmgrInfo,
-										  key->collation,
-										  PointerGetDatum(key->entryRes),
-										  UInt16GetDatum(key->strategy),
-										  key->query,
-										  UInt32GetDatum(key->nuserentries),
-										  PointerGetDatum(key->extra_data),
-										  PointerGetDatum(key->queryValues),
+	return DatumGetGinTernaryValue(FunctionCall7Coll(
+									   key->triConsistentFmgrInfo,
+									   key->collation,
+									   PointerGetDatum(key->entryRes),
+									   UInt16GetDatum(key->strategy),
+									   key->query,
+									   UInt32GetDatum(key->nuserentries),
+									   PointerGetDatum(key->extra_data),
+									   PointerGetDatum(key->queryValues),
 									 PointerGetDatum(key->queryCategories)));
 }
 
@@ -106,15 +114,16 @@ directTriConsistentFn(GinScanKey key)
 static bool
 shimBoolConsistentFn(GinScanKey key)
 {
-	GinLogicValue result;
-	result = DatumGetGinLogicValue(FunctionCall7Coll(key->triConsistentFmgrInfo,
-										  key->collation,
-										  PointerGetDatum(key->entryRes),
-										  UInt16GetDatum(key->strategy),
-										  key->query,
-										  UInt32GetDatum(key->nuserentries),
-										  PointerGetDatum(key->extra_data),
-										  PointerGetDatum(key->queryValues),
+	GinTernaryValue result;
+	result = DatumGetGinTernaryValue(FunctionCall7Coll(
+										 key->triConsistentFmgrInfo,
+										 key->collation,
+										 PointerGetDatum(key->entryRes),
+										 UInt16GetDatum(key->strategy),
+										 key->query,
+										 UInt32GetDatum(key->nuserentries),
+										 PointerGetDatum(key->extra_data),
+										 PointerGetDatum(key->queryValues),
 									 PointerGetDatum(key->queryCategories)));
 	if (result == GIN_MAYBE)
 	{
@@ -140,7 +149,7 @@ shimBoolConsistentFn(GinScanKey key)
  *
  * NB: This function modifies the key->entryRes array!
  */
-static GinLogicValue
+static GinTernaryValue
 shimTriConsistentFn(GinScanKey key)
 {
 	int			nmaybe;
@@ -148,7 +157,7 @@ shimTriConsistentFn(GinScanKey key)
 	int			i;
 	bool		boolResult;
 	bool		recheck = false;
-	GinLogicValue curResult;
+	GinTernaryValue curResult;
 
 	/*
 	 * Count how many MAYBE inputs there are, and store their indexes in

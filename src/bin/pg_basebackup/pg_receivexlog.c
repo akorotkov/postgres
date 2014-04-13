@@ -74,7 +74,7 @@ usage(void)
 	printf(_("  -U, --username=NAME    connect as specified database user\n"));
 	printf(_("  -w, --no-password      never prompt for password\n"));
 	printf(_("  -W, --password         force password prompt (should happen automatically)\n"));
-	printf(_("      --slot             replication slot to use\n"));
+	printf(_("      --slot=SLOTNAME    replication slot to use\n"));
 	printf(_("\nReport bugs to <pgsql-bugs@postgresql.org>.\n"));
 }
 
@@ -139,7 +139,7 @@ FindStreamingStart(uint32 *tli)
 		disconnect_and_exit(1);
 	}
 
-	while ((dirent = readdir(dir)) != NULL)
+	while (errno = 0, (dirent = readdir(dir)) != NULL)
 	{
 		uint32		tli;
 		XLogSegNo	segno;
@@ -209,7 +209,19 @@ FindStreamingStart(uint32 *tli)
 		}
 	}
 
-	closedir(dir);
+	if (errno)
+	{
+		fprintf(stderr, _("%s: could not read directory \"%s\": %s\n"),
+				progname, basedir, strerror(errno));
+		disconnect_and_exit(1);
+	}
+
+	if (closedir(dir))
+	{
+		fprintf(stderr, _("%s: could not close directory \"%s\": %s\n"),
+				progname, basedir, strerror(errno));
+		disconnect_and_exit(1);
+	}
 
 	if (high_segno > 0)
 	{

@@ -29,7 +29,7 @@
  * As the percentage of transactions modifying the catalog normally is fairly
  * small in comparisons to ones only manipulating user data, we keep track of
  * the committed catalog modifying ones inside (xmin, xmax) instead of keeping
- * track of all running transactions like its done in a normal snapshot. Note
+ * track of all running transactions like it's done in a normal snapshot. Note
  * that we're generally only looking at transactions that have acquired an
  * xid. That is we keep a list of transactions between snapshot->(xmin, xmax)
  * that we consider committed, everything else is considered aborted/in
@@ -55,7 +55,7 @@
  *
  *
  *
- * The snapbuild machinery is starting up in in several stages, as illustrated
+ * The snapbuild machinery is starting up in several stages, as illustrated
  * by the following graph:
  *         +-------------------------+
  *    +----|SNAPBUILD_START          |-------------+
@@ -81,7 +81,7 @@
  *
  * Initially the machinery is in the START stage. When a xl_running_xacts
  * record is read that is sufficiently new (above the safe xmin horizon),
- * there's a state transation. If there were no running xacts when the
+ * there's a state transition. If there were no running xacts when the
  * runnign_xacts record was generated, we'll directly go into CONSISTENT
  * state, otherwise we'll switch to the FULL_SNAPSHOT state. Having a full
  * snapshot means that all transactions that start henceforth can be decoded
@@ -136,7 +136,7 @@
 /*
  * This struct contains the current state of the snapshot building
  * machinery. Besides a forward declaration in the header, it is not exposed
- * to the public, so we can easily change it's contents.
+ * to the public, so we can easily change its contents.
  */
 struct SnapBuild
 {
@@ -412,7 +412,7 @@ SnapBuildSnapDecRefcount(Snapshot snap)
 
 	Assert(snap->active_count);
 
-	/* slightly more likely, so its checked even without casserts */
+	/* slightly more likely, so it's checked even without casserts */
 	if (snap->copied)
 		elog(ERROR, "cannot free a copied snapshot");
 
@@ -451,7 +451,7 @@ SnapBuildBuildSnapshot(SnapBuild *builder, TransactionId xid)
 	 *
 	 * In the 'xip' array we store transactions that have to be treated as
 	 * committed. Since we will only ever look at tuples from transactions
-	 * that have modified the catalog its more efficient to store those few
+	 * that have modified the catalog it's more efficient to store those few
 	 * that exist between xmin and xmax (frequently there are none).
 	 *
 	 * Snapshots that are used in transactions that have modified the catalog
@@ -607,7 +607,7 @@ SnapBuildExportSnapshot(SnapBuild *builder)
 /*
  * Reset a previously SnapBuildExportSnapshot()'ed snapshot if there is
  * any. Aborts the previously started transaction and resets the resource
- * owner back to it's original value.
+ * owner back to its original value.
  */
 void
 SnapBuildClearExportedSnapshot()
@@ -779,7 +779,7 @@ SnapBuildDistributeNewCatalogSnapshot(SnapBuild *builder, XLogRecPtr lsn)
 		/*
 		 * If we don't have a base snapshot yet, there are no changes in this
 		 * transaction which in turn implies we don't yet need a snapshot at
-		 * all. We'll add add a snapshot when the first change gets queued.
+		 * all. We'll add a snapshot when the first change gets queued.
 		 *
 		 * NB: This works correctly even for subtransactions because
 		 * ReorderBufferCommitChild() takes care to pass the parent the base
@@ -1033,7 +1033,7 @@ SnapBuildCommitTxn(SnapBuild *builder, XLogRecPtr lsn, TransactionId xid,
 		SnapBuildAddCommittedTxn(builder, xid);
 	}
 
-	/* if there's any reason to build a historic snapshot, to so now */
+	/* if there's any reason to build a historic snapshot, do so now */
 	if (forced_timetravel || top_needs_timetravel || sub_needs_timetravel)
 	{
 		/*
@@ -1093,7 +1093,7 @@ SnapBuildCommitTxn(SnapBuild *builder, XLogRecPtr lsn, TransactionId xid,
  */
 
 /*
- * Process a running xacts record, and use it's information to first build a
+ * Process a running xacts record, and use its information to first build a
  * historic snapshot and later to release resources that aren't needed
  * anymore.
  */
@@ -1117,7 +1117,7 @@ SnapBuildProcessRunningXacts(SnapBuild *builder, XLogRecPtr lsn, xl_running_xact
 		SnapBuildSerialize(builder, lsn);
 
 	/*
-	 * Update range of interesting xids base don the running xacts
+	 * Update range of interesting xids based on the running xacts
 	 * information. We don't increase ->xmax using it, because once we are in
 	 * a consistent state we can do that ourselves and much more efficiently
 	 * so, because we only need to do it for catalog transactions since we
@@ -1125,7 +1125,7 @@ SnapBuildProcessRunningXacts(SnapBuild *builder, XLogRecPtr lsn, xl_running_xact
 	 *
 	 * NB: Because of that xmax can be lower than xmin, because we only
 	 * increase xmax when a catalog modifying transaction commits. While odd
-	 * looking, its correct and actually more efficient this way since we hit
+	 * looking, it's correct and actually more efficient this way since we hit
 	 * fast paths in tqual.c.
 	 */
 	builder->xmin = running->oldestRunningXid;
@@ -1343,7 +1343,7 @@ SnapBuildFindSnapshot(SnapBuild *builder, XLogRecPtr lsn, xl_running_xacts *runn
 			if (TransactionIdIsCurrentTransactionId(xid))
 				elog(ERROR, "waiting for ourselves");
 
-			XactLockTableWait(xid);
+			XactLockTableWait(xid, NULL, NULL, XLTW_None);
 		}
 
 		/* nothing could have built up so far, so don't perform cleanup */
@@ -1404,8 +1404,8 @@ typedef struct SnapBuildOnDisk
 /*
  * Store/Load a snapshot from disk, depending on the snapshot builder's state.
  *
- * Supposed to be used by external (i.e. not snapbuild.c) code that just reada
- * record that's a potential location for a serialized snapshot.
+ * Supposed to be used by external (i.e. not snapbuild.c) code that just read
+ * a record that's a potential location for a serialized snapshot.
  */
 void
 SnapBuildSerializationPoint(SnapBuild *builder, XLogRecPtr lsn)

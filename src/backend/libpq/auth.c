@@ -21,7 +21,6 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 
-#include "common/username.h"
 #include "libpq/auth.h"
 #include "libpq/crypt.h"
 #include "libpq/ip.h"
@@ -129,7 +128,6 @@ static int	CheckCertAuth(Port *port);
  *----------------------------------------------------------------
  */
 char	   *pg_krb_server_keyfile;
-char	   *pg_krb_srvnam;
 bool		pg_krb_caseins_users;
 
 
@@ -427,15 +425,25 @@ ClientAuthentication(Port *port)
 								   NI_NUMERICHOST);
 
 #define HOSTNAME_LOOKUP_DETAIL(port) \
-				(port->remote_hostname				  \
-				 ? (port->remote_hostname_resolv == +1					\
-					? errdetail_log("Client IP address resolved to \"%s\", forward lookup matches.", port->remote_hostname) \
-					: (port->remote_hostname_resolv == 0				\
-					   ? errdetail_log("Client IP address resolved to \"%s\", forward lookup not checked.", port->remote_hostname) \
-					   : (port->remote_hostname_resolv == -1			\
-						  ? errdetail_log("Client IP address resolved to \"%s\", forward lookup does not match.", port->remote_hostname) \
-						  : 0)))										\
-				 : 0)
+				(port->remote_hostname ? \
+				 (port->remote_hostname_resolv == +1 ? \
+				  errdetail_log("Client IP address resolved to \"%s\", forward lookup matches.", \
+								port->remote_hostname) : \
+				  port->remote_hostname_resolv == 0 ? \
+				  errdetail_log("Client IP address resolved to \"%s\", forward lookup not checked.", \
+								port->remote_hostname) : \
+				  port->remote_hostname_resolv == -1 ? \
+				  errdetail_log("Client IP address resolved to \"%s\", forward lookup does not match.", \
+								port->remote_hostname) : \
+				  port->remote_hostname_resolv == -2 ? \
+				  errdetail_log("Could not translate client host name \"%s\" to IP address: %s.", \
+								port->remote_hostname, \
+								gai_strerror(port->remote_hostname_errcode)) : \
+				  0) \
+				 : (port->remote_hostname_resolv == -2 ? \
+					errdetail_log("Could not resolve client IP address to a host name: %s.", \
+								  gai_strerror(port->remote_hostname_errcode)) : \
+					0))
 
 				if (am_walsender)
 				{
@@ -1561,10 +1569,8 @@ auth_peer(hbaPort *port)
 	char		ident_user[IDENT_USERNAME_MAX + 1];
 	uid_t		uid;
 	gid_t		gid;
-	const char *user_name;
-	char	   *errstr;
+	struct passwd *pw;
 
-	errno = 0;
 	if (getpeereid(port->sock, &uid, &gid) != 0)
 	{
 		/* Provide special error message if getpeereid is a stub */
@@ -1579,15 +1585,17 @@ auth_peer(hbaPort *port)
 		return STATUS_ERROR;
 	}
 
-	user_name = get_user_name(&errstr);
-	if (!user_name)
+	errno = 0;					/* clear errno before call */
+	pw = getpwuid(uid);
+	if (!pw)
 	{
-		ereport(LOG, (errmsg_internal("%s", errstr)));
-		pfree(errstr);
+		ereport(LOG,
+				(errmsg("failed to look up local user id %ld: %s",
+				(long) uid, errno ? strerror(errno) : _("user does not exist"))));
 		return STATUS_ERROR;
 	}
 
-	strlcpy(ident_user, user_name, IDENT_USERNAME_MAX + 1);
+	strlcpy(ident_user, pw->pw_name, IDENT_USERNAME_MAX + 1);
 
 	return check_usermap(port->hba->usermap, port->user_name, ident_user, false);
 }

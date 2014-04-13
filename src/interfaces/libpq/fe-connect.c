@@ -251,7 +251,7 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 	 * to exclude them since none of them are mandatory.
 	 */
 	{"sslmode", "PGSSLMODE", DefaultSSLMode, NULL,
-		"SSL-Mode", "", 8,		/* sizeof("disable") == 8 */
+		"SSL-Mode", "", 12,		/* sizeof("verify-full") == 12 */
 	offsetof(struct pg_conn, sslmode)},
 
 	{"sslcompression", "PGSSLCOMPRESSION", "1", NULL,
@@ -2667,7 +2667,6 @@ makeEmptyPGconn(void)
 	PGconn	   *conn;
 
 #ifdef WIN32
-
 	/*
 	 * Make sure socket support is up and running.
 	 */
@@ -4483,6 +4482,13 @@ conninfo_add_defaults(PQconninfoOption *options, PQExpBuffer errorMessage)
 		if (strcmp(option->keyword, "user") == 0)
 		{
 			option->val = pg_fe_getauthname();
+			if (!option->val)
+			{
+				if (errorMessage)
+					printfPQExpBuffer(errorMessage,
+									  libpq_gettext("out of memory\n"));
+				return false;
+			}
 			continue;
 		}
 	}

@@ -145,15 +145,158 @@ ginRedoInsertEntry(Buffer buffer, bool isLeaf, BlockNumber rightblkno, void *rda
 static void
 ginRedoRecompress(Page page, ginxlogRecompressDataLeaf *data)
 {
-	Pointer		segment;
+	int			actionno;
+	int			segno;
+	GinPostingList *oldseg;
+	Pointer		segmentend;
+	char	   *walbuf;
+	int			totalsize;
 
-	/* Copy the new data to the right place */
-	segment = ((Pointer) GinDataLeafPageGetPostingList(page))
-		+ data->unmodifiedsize;
-	memcpy(segment, data->newdata, data->length - data->unmodifiedsize);
-	GinDataLeafPageSetPostingListSize(page, data->length);
-	GinPageSetCompressed(page);
-	GinPageGetOpaque(page)->maxoff = InvalidOffsetNumber;
+	/*
+	 * If the page is in pre-9.4 format, convert to new format first.
+	 */
+	if (!GinPageIsCompressed(page))
+	{
+		ItemPointer uncompressed = (ItemPointer) GinDataPageGetData(page);
+		int			nuncompressed = GinPageGetOpaque(page)->maxoff;
+		int			npacked;
+		GinPostingList *plist;
+
+		plist = ginCompressPostingList(uncompressed, nuncompressed,
+									   BLCKSZ, &npacked);
+		Assert(npacked == nuncompressed);
+
+		totalsize = SizeOfGinPostingList(plist);
+
+		memcpy(GinDataLeafPageGetPostingList(page), plist, totalsize);
+		GinDataLeafPageSetPostingListSize(page, totalsize);
+		GinPageSetCompressed(page);
+		GinPageGetOpaque(page)->maxoff = InvalidOffsetNumber;
+	}
+
+	oldseg = GinDataLeafPageGetPostingList(page);
+	segmentend = (Pointer) oldseg + GinDataLeafPageGetPostingListSize(page);
+	segno = 0;
+
+	walbuf = ((char *) data) + sizeof(ginxlogRecompressDataLeaf);
+	for (actionno = 0; actionno < data->nactions; actionno++)
+	{
+		uint8		a_segno = *((uint8 *) (walbuf++));
+		uint8		a_action = *((uint8 *) (walbuf++));
+		GinPostingList *newseg = NULL;
+		int			newsegsize = 0;
+		ItemPointerData *items = NULL;
+		uint16		nitems = 0;
+		ItemPointerData *olditems;
+		int			nolditems;
+		ItemPointerData *newitems;
+		int			nnewitems;
+		int			segsize;
+		Pointer		segptr;
+		int			szleft;
+
+		/* Extract all the information we need from the WAL record */
+		if (a_action == GIN_SEGMENT_INSERT ||
+			a_action == GIN_SEGMENT_REPLACE)
+		{
+			newseg = (GinPostingList *) walbuf;
+			newsegsize = SizeOfGinPostingList(newseg);
+			walbuf += SHORTALIGN(newsegsize);
+		}
+
+		if (a_action == GIN_SEGMENT_ADDITEMS)
+		{
+			memcpy(&nitems, walbuf, sizeof(uint16));
+			walbuf += sizeof(uint16);
+			items = (ItemPointerData *) walbuf;
+			walbuf += nitems * sizeof(ItemPointerData);
+		}
+
+		/* Skip to the segment that this action concerns */
+		Assert(segno <= a_segno);
+		while (segno < a_segno)
+		{
+			oldseg = GinNextPostingListSegment(oldseg);
+			segno++;
+		}
+
+		/*
+		 * ADDITEMS action is handled like REPLACE, but the new segment to
+		 * replace the old one is reconstructed using the old segment from
+		 * disk and the new items from the WAL record.
+		 */
+		if (a_action == GIN_SEGMENT_ADDITEMS)
+		{
+			int			npacked;
+
+			olditems = ginPostingListDecode(oldseg, &nolditems);
+
+			newitems = ginMergeItemPointers(items, nitems,
+											olditems, nolditems,
+											&nnewitems);
+			Assert(nnewitems == nolditems + nitems);
+
+			newseg = ginCompressPostingList(newitems, nnewitems,
+											BLCKSZ, &npacked);
+			Assert(npacked == nnewitems);
+
+			newsegsize = SizeOfGinPostingList(newseg);
+			a_action = GIN_SEGMENT_REPLACE;
+		}
+
+		segptr = (Pointer) oldseg;
+		if (segptr != segmentend)
+			segsize = SizeOfGinPostingList(oldseg);
+		else
+		{
+			/*
+			 * Positioned after the last existing segment. Only INSERTs
+			 * expected here.
+			 */
+			Assert(a_action == GIN_SEGMENT_INSERT);
+			segsize = 0;
+		}
+		szleft = segmentend - segptr;
+
+		switch (a_action)
+		{
+			case GIN_SEGMENT_DELETE:
+				memmove(segptr, segptr + segsize, szleft - segsize);
+				segmentend -= segsize;
+
+				segno++;
+				break;
+
+			case GIN_SEGMENT_INSERT:
+				/* make room for the new segment */
+				memmove(segptr + newsegsize, segptr, szleft);
+				/* copy the new segment in place */
+				memcpy(segptr, newseg, newsegsize);
+				segmentend += newsegsize;
+				segptr += newsegsize;
+				break;
+
+			case GIN_SEGMENT_REPLACE:
+				/* shift the segments that follow */
+				memmove(segptr + newsegsize,
+						segptr + segsize,
+						szleft - segsize);
+				/* copy the replacement segment in place */
+				memcpy(segptr, newseg, newsegsize);
+				segmentend -= segsize;
+				segmentend += newsegsize;
+				segptr += newsegsize;
+				segno++;
+				break;
+
+			default:
+				elog(ERROR, "unexpected GIN leaf action: %u", a_action);
+		}
+		oldseg = (GinPostingList *) segptr;
+	}
+
+	totalsize = segmentend - (Pointer) GinDataLeafPageGetPostingList(page);
+	GinDataLeafPageSetPostingListSize(page, totalsize);
 }
 
 static void
@@ -318,7 +461,9 @@ ginRedoSplit(XLogRecPtr lsn, XLogRecord *record)
 				rbuffer;
 	Page		lpage,
 				rpage;
-	uint32		flags = 0;
+	uint32		flags;
+	uint32		lflags,
+				rflags;
 	char	   *payload;
 	bool		isLeaf = (data->flags & GIN_INSERT_ISLEAF) != 0;
 	bool		isData = (data->flags & GIN_INSERT_ISDATA) != 0;
@@ -338,6 +483,7 @@ ginRedoSplit(XLogRecPtr lsn, XLogRecord *record)
 			ginRedoClearIncompleteSplit(lsn, data->node, data->leftChildBlkno);
 	}
 
+	flags = 0;
 	if (isLeaf)
 		flags |= GIN_LEAF;
 	if (isData)
@@ -345,15 +491,19 @@ ginRedoSplit(XLogRecPtr lsn, XLogRecord *record)
 	if (isLeaf && isData)
 		flags |= GIN_COMPRESSED;
 
+	lflags = rflags = flags;
+	if (!isRoot)
+		lflags |= GIN_INCOMPLETE_SPLIT;
+
 	lbuffer = XLogReadBuffer(data->node, data->lblkno, true);
 	Assert(BufferIsValid(lbuffer));
 	lpage = (Page) BufferGetPage(lbuffer);
-	GinInitBuffer(lbuffer, flags);
+	GinInitBuffer(lbuffer, lflags);
 
 	rbuffer = XLogReadBuffer(data->node, data->rblkno, true);
 	Assert(BufferIsValid(rbuffer));
 	rpage = (Page) BufferGetPage(rbuffer);
-	GinInitBuffer(rbuffer, flags);
+	GinInitBuffer(rbuffer, rflags);
 
 	GinPageGetOpaque(lpage)->rightlink = BufferGetBlockNumber(rbuffer);
 	GinPageGetOpaque(rpage)->rightlink = isRoot ? InvalidBlockNumber : data->rrlink;
@@ -421,12 +571,8 @@ ginRedoVacuumPage(XLogRecPtr lsn, XLogRecord *record)
 	Assert(xlrec->hole_offset < BLCKSZ);
 	Assert(xlrec->hole_length < BLCKSZ);
 
-	/* If we have a full-page image, restore it and we're done */
-	if (record->xl_info & XLR_BKP_BLOCK(0))
-	{
-		(void) RestoreBackupBlock(lsn, record, 0, false, false);
-		return;
-	}
+	/* Backup blocks are not used, we'll re-initialize the page always. */
+	Assert(!(record->xl_info & XLR_BKP_BLOCK_MASK));
 
 	buffer = XLogReadBuffer(xlrec->node, xlrec->blkno, true);
 	if (!BufferIsValid(buffer))

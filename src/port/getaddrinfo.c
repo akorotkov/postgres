@@ -144,7 +144,6 @@ getaddrinfo(const char *node, const char *service,
 	struct addrinfo hints;
 
 #ifdef WIN32
-
 	/*
 	 * If Windows has native IPv6 support, use the native Windows routine.
 	 * Otherwise, fall through and use our own code.
@@ -182,7 +181,7 @@ getaddrinfo(const char *node, const char *service,
 		else if (hints.ai_flags & AI_NUMERICHOST)
 		{
 			if (!inet_aton(node, &sin.sin_addr))
-				return EAI_FAIL;
+				return EAI_NONAME;
 		}
 		else
 		{
@@ -267,7 +266,6 @@ freeaddrinfo(struct addrinfo * res)
 	if (res)
 	{
 #ifdef WIN32
-
 		/*
 		 * If Windows has native IPv6 support, use the native Windows routine.
 		 * Otherwise, fall through and use our own code.
@@ -349,8 +347,8 @@ gai_strerror(int errcode)
 /*
  * Convert an ipv4 address to a hostname.
  *
- * Bugs:	- Only supports NI_NUMERICHOST and NI_NUMERICSERV
- *		  It will never resolv a hostname.
+ * Bugs:	- Only supports NI_NUMERICHOST and NI_NUMERICSERV behavior.
+ *		  It will never resolve a hostname.
  *		- No IPv6 support.
  */
 int
@@ -359,7 +357,6 @@ getnameinfo(const struct sockaddr * sa, int salen,
 			char *service, int servicelen, int flags)
 {
 #ifdef WIN32
-
 	/*
 	 * If Windows has native IPv6 support, use the native Windows routine.
 	 * Otherwise, fall through and use our own code.
@@ -377,6 +374,10 @@ getnameinfo(const struct sockaddr * sa, int salen,
 	if (sa->sa_family == AF_INET6)
 		return EAI_FAMILY;
 #endif
+
+	/* Unsupported flags. */
+	if (flags & NI_NAMEREQD)
+		return EAI_AGAIN;
 
 	if (node)
 	{
@@ -400,7 +401,7 @@ getnameinfo(const struct sockaddr * sa, int salen,
 			ret = snprintf(service, servicelen, "%d",
 						   ntohs(((struct sockaddr_in *) sa)->sin_port));
 		}
-		if (ret == -1 || ret > servicelen)
+		if (ret == -1 || ret >= servicelen)
 			return EAI_MEMORY;
 	}
 

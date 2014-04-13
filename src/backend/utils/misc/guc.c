@@ -85,9 +85,6 @@
 #ifndef PG_KRB_SRVTAB
 #define PG_KRB_SRVTAB ""
 #endif
-#ifndef PG_KRB_SRVNAM
-#define PG_KRB_SRVNAM ""
-#endif
 
 #define CONFIG_FILENAME "postgresql.conf"
 #define HBA_FILENAME	"pg_hba.conf"
@@ -1513,7 +1510,7 @@ static struct config_bool ConfigureNamesBool[] =
 
 	{
 		{"data_checksums", PGC_INTERNAL, PRESET_OPTIONS,
-			gettext_noop("Shows whether data checksums are turned on for this cluster"),
+			gettext_noop("Shows whether data checksums are turned on for this cluster."),
 			NULL,
 			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
 		},
@@ -2123,12 +2120,12 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"xloginsert_slots", PGC_POSTMASTER, WAL_SETTINGS,
-			gettext_noop("Sets the number of slots for concurrent xlog insertions."),
+		{"xloginsert_locks", PGC_POSTMASTER, WAL_SETTINGS,
+			gettext_noop("Sets the number of locks used for concurrent xlog insertions."),
 			NULL,
 			GUC_NOT_IN_SAMPLE
 		},
-		&num_xloginsert_slots,
+		&num_xloginsert_locks,
 		8, 1, 1000,
 		NULL, NULL, NULL
 	},
@@ -2546,6 +2543,7 @@ static struct config_int ConfigureNamesInt[] =
 		{"track_activity_query_size", PGC_POSTMASTER, RESOURCES_MEM,
 			gettext_noop("Sets the size reserved for pg_stat_activity.query, in bytes."),
 			NULL,
+			/* There is no _bytes_ unit, so the user can't supply units for this. */
 		},
 		&pgstat_track_activity_query_size,
 		1024, 100, 102400,
@@ -2799,16 +2797,6 @@ static struct config_string ConfigureNamesString[] =
 		},
 		&pg_krb_server_keyfile,
 		PG_KRB_SRVTAB,
-		NULL, NULL, NULL
-	},
-
-	{
-		{"krb_srvname", PGC_SIGHUP, CONN_AUTH_SECURITY,
-			gettext_noop("Sets the name of the Kerberos service."),
-			NULL
-		},
-		&pg_krb_srvnam,
-		PG_KRB_SRVNAM,
 		NULL, NULL, NULL
 	},
 
@@ -5682,9 +5670,23 @@ set_config_option(const char *name, const char *value,
 				 * ignore it in existing backends.	This is a tad klugy, but
 				 * necessary because we don't re-read the config file during
 				 * backend start.
+				 *
+				 * In EXEC_BACKEND builds, this works differently: we load all
+				 * nondefault settings from the CONFIG_EXEC_PARAMS file during
+				 * backend start.  In that case we must accept PGC_SIGHUP
+				 * settings, so as to have the same value as if we'd forked
+				 * from the postmaster.  We detect this situation by checking
+				 * IsInitProcessingMode, which is a bit ugly, but it doesn't
+				 * seem worth passing down an explicit flag saying we're doing
+				 * read_nondefault_variables().
 				 */
+#ifdef EXEC_BACKEND
+				if (IsUnderPostmaster && !IsInitProcessingMode())
+					return -1;
+#else
 				if (IsUnderPostmaster)
 					return -1;
+#endif
 			}
 			else if (context != PGC_POSTMASTER && context != PGC_BACKEND &&
 					 source != PGC_S_CLIENT)
@@ -8322,6 +8324,12 @@ read_nondefault_variables(void)
 	int			varsourceline;
 	GucSource	varsource;
 	GucContext	varscontext;
+
+	/*
+	 * Assert that PGC_BACKEND case in set_config_option() will do the right
+	 * thing.
+	 */
+	Assert(IsInitProcessingMode());
 
 	/*
 	 * Open file

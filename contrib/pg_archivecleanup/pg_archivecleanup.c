@@ -106,7 +106,7 @@ CleanupPriorWALFiles(void)
 
 	if ((xldir = opendir(archiveLocation)) != NULL)
 	{
-		while ((xlde = readdir(xldir)) != NULL)
+		while (errno = 0, (xlde = readdir(xldir)) != NULL)
 		{
 			strncpy(walfile, xlde->d_name, MAXPGPATH);
 			TrimExtension(walfile, additional_ext);
@@ -164,7 +164,13 @@ CleanupPriorWALFiles(void)
 				}
 			}
 		}
-		closedir(xldir);
+
+		if (errno)
+			fprintf(stderr, "%s: could not read archive location \"%s\": %s\n",
+					progname, archiveLocation, strerror(errno));
+		if (closedir(xldir))
+			fprintf(stderr, "%s: could not close archive location \"%s\": %s\n",
+					progname, archiveLocation, strerror(errno));
 	}
 	else
 		fprintf(stderr, "%s: could not open archive location \"%s\": %s\n",

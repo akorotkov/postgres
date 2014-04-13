@@ -438,7 +438,6 @@ convert_sourcefiles_in(char *source_subdir, char *dest_dir, char *dest_subdir, c
 	snprintf(testtablespace, MAXPGPATH, "%s/testtablespace", outputdir);
 
 #ifdef WIN32
-
 	/*
 	 * On Windows only, clean out the test tablespace dir, or create it if it
 	 * doesn't exist.  On other platforms we expect the Makefile to take care
@@ -1195,7 +1194,6 @@ run_diff(const char *cmd, const char *filename)
 		exit(2);
 	}
 #ifdef WIN32
-
 	/*
 	 * On WIN32, if the 'diff' command cannot be found, system() returns 1,
 	 * but produces nothing to stdout, so we check for that here.
@@ -1855,33 +1853,6 @@ create_role(const char *rolename, const _stringlist * granted_dbs)
 		psql_command("postgres", "GRANT ALL ON DATABASE \"%s\" TO \"%s\"",
 					 granted_dbs->str, rolename);
 	}
-}
-
-static char *
-make_absolute_path(const char *in)
-{
-	char	   *result;
-
-	if (is_absolute_path(in))
-		result = strdup(in);
-	else
-	{
-		static char cwdbuf[MAXPGPATH];
-
-		if (!cwdbuf[0])
-		{
-			if (!getcwd(cwdbuf, sizeof(cwdbuf)))
-			{
-				fprintf(stderr, _("could not get current working directory: %s\n"), strerror(errno));
-				exit(2);
-			}
-		}
-
-		result = psprintf("%s/%s", cwdbuf, in);
-	}
-
-	canonicalize_path(result);
-	return result;
 }
 
 static void

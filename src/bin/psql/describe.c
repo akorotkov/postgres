@@ -2346,13 +2346,21 @@ describeOneTableDetails(const char *schemaname,
 		}
 
 		if ((tableinfo.relkind == 'r' || tableinfo.relkind == 'm') &&
-			tableinfo.relreplident != 'd' && tableinfo.relreplident != 'i')
+			/*
+			 * No need to display default values;  we already display a
+			 * REPLICA IDENTITY marker on indexes.
+			 */
+			tableinfo.relreplident != 'd' && tableinfo.relreplident != 'i' &&
+			strcmp(schemaname, "pg_catalog") != 0)
 		{
 			const char *s = _("Replica Identity");
 
 			printfPQExpBuffer(&buf, "%s: %s",
 							  s,
-							  tableinfo.relreplident == 'n' ? "NOTHING" : "FULL");
+							  tableinfo.relreplident == 'f' ? "FULL" :
+							  tableinfo.relreplident == 'n' ? "NOTHING" :
+							  "???");
+
 			printTableAddFooter(&cont, buf.data);
 		}
 

@@ -727,6 +727,21 @@ decl_varname	: T_WORD
 											  $1.ident, NULL, NULL,
 											  NULL) != NULL)
 							yyerror("duplicate declaration");
+
+						if (plpgsql_curr_compile->extra_warnings & PLPGSQL_XCHECK_SHADOWVAR ||
+							plpgsql_curr_compile->extra_errors & PLPGSQL_XCHECK_SHADOWVAR)
+						{
+							PLpgSQL_nsitem *nsi;
+							nsi = plpgsql_ns_lookup(plpgsql_ns_top(), false,
+													$1.ident, NULL, NULL, NULL);
+							if (nsi != NULL)
+								ereport(plpgsql_curr_compile->extra_errors & PLPGSQL_XCHECK_SHADOWVAR ? ERROR : WARNING,
+										(errcode(ERRCODE_DUPLICATE_ALIAS),
+										 errmsg("variable \"%s\" shadows a previously defined variable",
+												$1.ident),
+										 parser_errposition(@1)));
+						}
+
 					}
 				| unreserved_keyword
 					{
@@ -740,6 +755,21 @@ decl_varname	: T_WORD
 											  $1, NULL, NULL,
 											  NULL) != NULL)
 							yyerror("duplicate declaration");
+
+						if (plpgsql_curr_compile->extra_warnings & PLPGSQL_XCHECK_SHADOWVAR ||
+							plpgsql_curr_compile->extra_errors & PLPGSQL_XCHECK_SHADOWVAR)
+						{
+							PLpgSQL_nsitem *nsi;
+							nsi = plpgsql_ns_lookup(plpgsql_ns_top(), false,
+													$1, NULL, NULL, NULL);
+							if (nsi != NULL)
+								ereport(plpgsql_curr_compile->extra_errors & PLPGSQL_XCHECK_SHADOWVAR ? ERROR : WARNING,
+										(errcode(ERRCODE_DUPLICATE_ALIAS),
+										 errmsg("variable \"%s\" shadows a previously defined variable",
+												$1),
+										 parser_errposition(@1)));
+						}
+
 					}
 				;
 
@@ -3462,7 +3492,7 @@ parse_datatype(const char *string, int location)
 	error_context_stack = &syntax_errcontext;
 
 	/* Let the main parser try to parse it under standard SQL rules */
-	parseTypeString(string, &type_id, &typmod);
+	parseTypeString(string, &type_id, &typmod, false);
 
 	/* Restore former ereport callback */
 	error_context_stack = syntax_errcontext.previous;

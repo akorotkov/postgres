@@ -245,7 +245,7 @@ CustomizableCleanupPriorWALFiles(void)
 		 */
 		if ((xldir = opendir(archiveLocation)) != NULL)
 		{
-			while ((xlde = readdir(xldir)) != NULL)
+			while (errno = 0, (xlde = readdir(xldir)) != NULL)
 			{
 				/*
 				 * We ignore the timeline part of the XLOG segment identifiers
@@ -283,6 +283,10 @@ CustomizableCleanupPriorWALFiles(void)
 					}
 				}
 			}
+
+			if (errno)
+				fprintf(stderr, "%s: could not read archive location \"%s\": %s\n",
+						progname, archiveLocation, strerror(errno));
 			if (debug)
 				fprintf(stderr, "\n");
 		}
@@ -290,7 +294,10 @@ CustomizableCleanupPriorWALFiles(void)
 			fprintf(stderr, "%s: could not open archive location \"%s\": %s\n",
 					progname, archiveLocation, strerror(errno));
 
-		closedir(xldir);
+		if (closedir(xldir))
+			fprintf(stderr, "%s: could not close archive location \"%s\": %s\n",
+					progname, archiveLocation, strerror(errno));
+
 		fflush(stderr);
 	}
 }

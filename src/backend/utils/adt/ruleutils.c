@@ -54,6 +54,7 @@
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
+#include "utils/snapmgr.h"
 #include "utils/syscache.h"
 #include "utils/tqual.h"
 #include "utils/typcache.h"
@@ -401,7 +402,7 @@ static char *get_relation_name(Oid relid);
 static char *generate_relation_name(Oid relid, List *namespaces);
 static char *generate_function_name(Oid funcid, int nargs,
 					   List *argnames, Oid *argtypes,
-					   bool was_variadic, bool *use_variadic_p);
+					   bool has_variadic, bool *use_variadic_p);
 static char *generate_operator_name(Oid operid, Oid arg1, Oid arg2);
 static text *string_to_text(char *str);
 static char *flatten_reloptions(Oid relid);
@@ -1284,6 +1285,9 @@ pg_get_constraintdef_string(Oid constraintId)
 	return pg_get_constraintdef_worker(constraintId, true, 0);
 }
 
+/*
+ * As of 9.4, we now use an MVCC snapshot for this.
+ */
 static char *
 pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
 							int prettyFlags)
@@ -1291,10 +1295,34 @@ pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
 	HeapTuple	tup;
 	Form_pg_constraint conForm;
 	StringInfoData buf;
+	SysScanDesc	scandesc;
+	ScanKeyData scankey[1];
+	Snapshot    snapshot = RegisterSnapshot(GetTransactionSnapshot());
+	Relation	relation = heap_open(ConstraintRelationId, AccessShareLock);
 
-	tup = SearchSysCache1(CONSTROID, ObjectIdGetDatum(constraintId));
+	ScanKeyInit(&scankey[0],
+				ObjectIdAttributeNumber,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(constraintId));
+
+	scandesc = systable_beginscan(relation,
+									ConstraintOidIndexId,
+									true,
+									snapshot,
+									1,
+									scankey);
+
+	/*
+	 * We later use the tuple with SysCacheGetAttr() as if we
+	 * had obtained it via SearchSysCache, which works fine.
+	 */
+	tup = systable_getnext(scandesc);
+
+	UnregisterSnapshot(snapshot);
+
 	if (!HeapTupleIsValid(tup)) /* should not happen */
 		elog(ERROR, "cache lookup failed for constraint %u", constraintId);
+
 	conForm = (Form_pg_constraint) GETSTRUCT(tup);
 
 	initStringInfo(&buf);
@@ -1575,7 +1603,8 @@ pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
 		appendStringInfoString(&buf, " NOT VALID");
 
 	/* Cleanup */
-	ReleaseSysCache(tup);
+	systable_endscan(scandesc);
+	heap_close(relation, AccessShareLock);
 
 	return buf.data;
 }
@@ -8849,16 +8878,16 @@ generate_relation_name(Oid relid, List *namespaces)
  *
  * If we're dealing with a potentially variadic function (in practice, this
  * means a FuncExpr or Aggref, not some other way of calling a function), then
- * was_variadic must specify whether VARIADIC appeared in the original call,
+ * has_variadic must specify whether variadic arguments have been merged,
  * and *use_variadic_p will be set to indicate whether to print VARIADIC in
- * the output.	For non-FuncExpr cases, was_variadic should be FALSE and
+ * the output.	For non-FuncExpr cases, has_variadic should be FALSE and
  * use_variadic_p can be NULL.
  *
  * The result includes all necessary quoting and schema-prefixing.
  */
 static char *
 generate_function_name(Oid funcid, int nargs, List *argnames, Oid *argtypes,
-					   bool was_variadic, bool *use_variadic_p)
+					   bool has_variadic, bool *use_variadic_p)
 {
 	char	   *result;
 	HeapTuple	proctup;
@@ -8884,32 +8913,27 @@ generate_function_name(Oid funcid, int nargs, List *argnames, Oid *argtypes,
 	 * Determine whether VARIADIC should be printed.  We must do this first
 	 * since it affects the lookup rules in func_get_detail().
 	 *
-	 * Currently, we always print VARIADIC if the function is variadic and
-	 * takes a variadic type other than ANY.  (In principle, if VARIADIC
-	 * wasn't originally specified and the array actual argument is
-	 * deconstructable, we could print the array elements separately and not
-	 * print VARIADIC, thus more nearly reproducing the original input.  For
-	 * the moment that seems like too much complication for the benefit.)
-	 * However, if the function takes VARIADIC ANY, then the parser didn't
-	 * fold the arguments together into an array, so we must print VARIADIC if
-	 * and only if it was used originally.
+	 * Currently, we always print VARIADIC if the function has a merged
+	 * variadic-array argument.  Note that this is always the case for
+	 * functions taking a VARIADIC argument type other than VARIADIC ANY.
+	 *
+	 * In principle, if VARIADIC wasn't originally specified and the array
+	 * actual argument is deconstructable, we could print the array elements
+	 * separately and not print VARIADIC, thus more nearly reproducing the
+	 * original input.  For the moment that seems like too much complication
+	 * for the benefit, and anyway we do not know whether VARIADIC was
+	 * originally specified if it's a non-ANY type.
 	 */
 	if (use_variadic_p)
 	{
-		if (OidIsValid(procform->provariadic))
-		{
-			if (procform->provariadic != ANYOID)
-				use_variadic = true;
-			else
-				use_variadic = was_variadic;
-		}
-		else
-			use_variadic = false;
+		/* Parser should not have set funcvariadic unless fn is variadic */
+		Assert(!has_variadic || OidIsValid(procform->provariadic));
+		use_variadic = has_variadic;
 		*use_variadic_p = use_variadic;
 	}
 	else
 	{
-		Assert(!was_variadic);
+		Assert(!has_variadic);
 		use_variadic = false;
 	}
 

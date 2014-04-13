@@ -564,16 +564,6 @@ walkdir(char *path, void (*action) (char *fname, bool isdir))
 			(*action) (subpath, false);
 	}
 
-#ifdef WIN32
-
-	/*
-	 * This fix is in mingw cvs (runtime/mingwex/dirent.c rev 1.4), but not in
-	 * released version
-	 */
-	if (GetLastError() == ERROR_NO_MORE_FILES)
-		errno = 0;
-#endif
-
 	if (errno)
 	{
 		fprintf(stderr, _("%s: could not read directory \"%s\": %s\n"),
@@ -581,7 +571,12 @@ walkdir(char *path, void (*action) (char *fname, bool isdir))
 		exit_nicely();
 	}
 
-	closedir(dir);
+	if (closedir(dir))
+	{
+		fprintf(stderr, _("%s: could not close directory \"%s\": %s\n"),
+				progname, path, strerror(errno));
+		exit_nicely();
+	}
 
 	/*
 	 * It's important to fsync the destination directory itself as individual
@@ -2891,7 +2886,6 @@ void
 get_restricted_token(void)
 {
 #ifdef WIN32
-
 	/*
 	 * Before we execute another program, make sure that we are running with a
 	 * restricted token. If not, re-execute ourselves with one.

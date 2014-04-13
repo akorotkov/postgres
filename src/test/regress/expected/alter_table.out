@@ -1840,28 +1840,31 @@ and relnamespace != (select oid from pg_namespace where nspname = 'pg_catalog')
 and c.relname != 'my_locks'
 group by c.relname;
 create table alterlock (f1 int primary key, f2 text);
+insert into alterlock values (1, 'foo');
+create table alterlock2 (f3 int primary key, f1 int);
+insert into alterlock2 values (1, 1);
 begin; alter table alterlock alter column f2 set statistics 150;
 select * from my_locks order by 1;
-  relname  |    max_lockmode     
------------+---------------------
- alterlock | AccessExclusiveLock
+  relname  |       max_lockmode       
+-----------+--------------------------
+ alterlock | ShareUpdateExclusiveLock
 (1 row)
 
 rollback;
 begin; alter table alterlock cluster on alterlock_pkey;
 select * from my_locks order by 1;
-    relname     |    max_lockmode     
-----------------+---------------------
- alterlock      | AccessExclusiveLock
- alterlock_pkey | AccessExclusiveLock
+    relname     |       max_lockmode       
+----------------+--------------------------
+ alterlock      | ShareUpdateExclusiveLock
+ alterlock_pkey | ShareUpdateExclusiveLock
 (2 rows)
 
 commit;
 begin; alter table alterlock set without cluster;
 select * from my_locks order by 1;
-  relname  |    max_lockmode     
------------+---------------------
- alterlock | AccessExclusiveLock
+  relname  |       max_lockmode       
+-----------+--------------------------
+ alterlock | ShareUpdateExclusiveLock
 (1 row)
 
 commit;
@@ -1903,9 +1906,9 @@ select * from my_locks order by 1;
 commit;
 begin; alter table alterlock alter column f2 set (n_distinct = 1);
 select * from my_locks order by 1;
-  relname  |    max_lockmode     
------------+---------------------
- alterlock | AccessExclusiveLock
+  relname  |       max_lockmode       
+-----------+--------------------------
+ alterlock | ShareUpdateExclusiveLock
 (1 row)
 
 rollback;
@@ -1925,7 +1928,61 @@ select * from my_locks order by 1;
 (1 row)
 
 rollback;
+begin;
+create trigger ttdummy
+	before delete or update on alterlock
+	for each row
+	execute procedure
+	ttdummy (1, 1);
+select * from my_locks order by 1;
+  relname  |    max_lockmode     
+-----------+---------------------
+ alterlock | AccessExclusiveLock
+(1 row)
+
+rollback;
+begin;
+select * from my_locks order by 1;
+ relname | max_lockmode 
+---------+--------------
+(0 rows)
+
+alter table alterlock2 add foreign key (f1) references alterlock (f1);
+select * from my_locks order by 1;
+     relname     |    max_lockmode     
+-----------------+---------------------
+ alterlock       | AccessExclusiveLock
+ alterlock2      | AccessExclusiveLock
+ alterlock2_pkey | AccessShareLock
+ alterlock_pkey  | AccessShareLock
+(4 rows)
+
+rollback;
+begin;
+alter table alterlock2
+add constraint alterlock2nv foreign key (f1) references alterlock (f1) NOT VALID;
+select * from my_locks order by 1;
+  relname   |    max_lockmode     
+------------+---------------------
+ alterlock  | AccessExclusiveLock
+ alterlock2 | AccessExclusiveLock
+(2 rows)
+
+commit;
+begin;
+alter table alterlock2 validate constraint alterlock2nv;
+select * from my_locks order by 1;
+     relname     |       max_lockmode       
+-----------------+--------------------------
+ alterlock       | RowShareLock
+ alterlock2      | ShareUpdateExclusiveLock
+ alterlock2_pkey | AccessShareLock
+ alterlock_pkey  | AccessShareLock
+(4 rows)
+
+rollback;
 -- cleanup
+drop table alterlock2;
 drop table alterlock;
 drop view my_locks;
 drop type lockmodes;
@@ -2319,22 +2376,16 @@ Check constraints:
 DROP TABLE alter2.tt8;
 DROP SCHEMA alter2;
 -- Check that we map relation oids to filenodes and back correctly.
--- Don't display all the mappings so the test output doesn't change
--- all the time, but make sure we actually do test some values.
+-- Only display bad mappings so the test output doesn't change all the
+-- time.
 SELECT
-    SUM((mapped_oid != oid OR mapped_oid IS NULL)::int) incorrectly_mapped,
-    count(*) > 200 have_mappings
-FROM (
-    SELECT
-        oid, reltablespace, relfilenode, relname,
-        pg_filenode_relation(reltablespace, pg_relation_filenode(oid)) mapped_oid
-    FROM pg_class
-    WHERE relkind IN ('r', 'i', 'S', 't', 'm')
-    ) mapped;
- incorrectly_mapped | have_mappings 
---------------------+---------------
-                  0 | t
-(1 row)
+    oid, mapped_oid, reltablespace, relfilenode, relname
+FROM pg_class,
+    pg_filenode_relation(reltablespace, pg_relation_filenode(oid)) AS mapped_oid
+WHERE relkind IN ('r', 'i', 'S', 't', 'm') AND mapped_oid IS DISTINCT FROM oid;
+ oid | mapped_oid | reltablespace | relfilenode | relname 
+-----+------------+---------------+-------------+---------
+(0 rows)
 
 -- Checks on creating and manipulation of user defined relations in
 -- pg_catalog.

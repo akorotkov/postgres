@@ -26,7 +26,7 @@ void		_PG_init(void);
 Datum		test_shm_mq(PG_FUNCTION_ARGS);
 Datum		test_shm_mq_pipelined(PG_FUNCTION_ARGS);
 
-static void verify_message(uint64 origlen, char *origdata, uint64 newlen,
+static void verify_message(Size origlen, char *origdata, Size newlen,
 			   char *newdata);
 
 /*
@@ -50,7 +50,7 @@ test_shm_mq(PG_FUNCTION_ARGS)
 	shm_mq_handle *outqh;
 	shm_mq_handle *inqh;
 	shm_mq_result	res;
-	uint64		len;
+	Size		len;
 	void	   *data;
 
 	/* A negative loopcount is nonsensical. */
@@ -142,7 +142,7 @@ test_shm_mq_pipelined(PG_FUNCTION_ARGS)
 	shm_mq_handle *outqh;
 	shm_mq_handle *inqh;
 	shm_mq_result	res;
-	uint64		len;
+	Size		len;
 	void	   *data;
 
 	/* A negative loopcount is nonsensical. */
@@ -247,19 +247,19 @@ test_shm_mq_pipelined(PG_FUNCTION_ARGS)
  * Verify that two messages are the same.
  */
 static void
-verify_message(uint64 origlen, char *origdata, uint64 newlen, char *newdata)
+verify_message(Size origlen, char *origdata, Size newlen, char *newdata)
 {
-	uint64	i;
+	Size	i;
 
 	if (origlen != newlen)
 		ereport(ERROR,
 				(errmsg("message corrupted"),
-				 errdetail("The original message was " UINT64_FORMAT " bytes but the final message is " UINT64_FORMAT " bytes.",
+				 errdetail("The original message was %zu bytes but the final message is %zu bytes.",
 					 origlen, newlen)));
 
 	for (i = 0; i < origlen; ++i)
 		if (origdata[i] != newdata[i])
 			ereport(ERROR,
 					(errmsg("message corrupted"),
-					 errdetail("The new and original messages differ at byte " UINT64_FORMAT " of " UINT64_FORMAT ".", i, origlen)));
+					 errdetail("The new and original messages differ at byte %zu of %zu.", i, origlen)));
 }
