@@ -18,6 +18,7 @@
 #include "access/heapam_xlog.h"
 #include "catalog/index.h"
 #include "catalog/storage.h"
+#include "catalog/pg_operator.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
 #include "storage/smgr.h"
@@ -187,6 +188,8 @@ vodkaEntryInsert(VodkaState *vodkastate,
 	VodkaBtreeStack *stack;
 	IndexTuple	itup;
 	Page		page;
+	bool		isnull, found;
+	ItemPointerData	iptr;
 
 	insertdata.isDelete = FALSE;
 
@@ -236,6 +239,32 @@ vodkaEntryInsert(VodkaState *vodkastate,
 	/* Insert the new or modified leaf tuple */
 	insertdata.entry = itup;
 	vodkaInsertValue(&btree, stack, &insertdata, buildStats);
+
+	vodkastate->entryEqualScan = prepareEntryIndexScan(vodkastate,
+			TextEqualOperator, key);
+
+	found =	DatumGetBool(OidFunctionCall2(vodkastate->entryTree.rd_am->amgettuple,
+						 PointerGetDatum(vodkastate->entryEqualScan),
+						 Int32GetDatum(ForwardScanDirection)));
+
+	OidFunctionCall1(vodkastate->entryTree.rd_am->amendscan,
+						 PointerGetDatum(vodkastate->entryEqualScan));
+
+	if (!found)
+	{
+		isnull = (category != VODKA_CAT_NORM_KEY);
+
+		iptr.ip_blkid.bi_lo = 0;
+		iptr.ip_blkid.bi_hi = 0;
+		iptr.ip_posid = 1;
+
+		OidFunctionCall4(vodkastate->entryTree.rd_am->aminsert,
+						 PointerGetDatum(&vodkastate->entryTree),
+						 PointerGetDatum(&key),
+						 PointerGetDatum(&isnull),
+						 PointerGetDatum(&iptr));
+	}
+
 	pfree(itup);
 }
 

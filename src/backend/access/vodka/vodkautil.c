@@ -15,11 +15,14 @@
 #include "postgres.h"
 
 #include "access/htup_details.h"
+#include "access/relscan.h"
 #include "access/vodka_private.h"
 #include "access/reloptions.h"
 #include "catalog/catalog.h"
+#include "catalog/pg_amop.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_opclass.h"
+#include "catalog/pg_operator.h"
 #include "catalog/pg_type.h"
 #include "catalog/storage.h"
 #include "miscadmin.h"
@@ -91,9 +94,59 @@ initEntryIndex(VodkaState *state)
 	/* look up the info for this opclass, using a cache */
 	opcentry = LookupOpclassInfo(TEXT_SPGIST_OPS_OID,
 			nsupport);
+	state->entryTreeOpFamily = opcentry->opcfamily;
 	memcpy(entryIndex->rd_support,
 		   opcentry->supportProcs,
 		   nsupport * sizeof(RegProcedure));
+}
+
+IndexScanDesc
+prepareEntryIndexScan(VodkaState *state, Oid operator, Datum value)
+{
+	IndexScanDesc scanDesc;
+	ScanKey key =  (ScanKey)palloc0(sizeof(ScanKeyData));
+	HeapTuple	tp;
+	Form_pg_amop amop_tup;
+	Form_pg_operator operator_tup;
+
+	scanDesc = (IndexScanDesc)DatumGetPointer(OidFunctionCall3(state->entryTree.rd_am->ambeginscan,
+					 PointerGetDatum(&state->entryTree),
+					 Int32GetDatum(1),
+					 Int32GetDatum(0)));
+
+	key->sk_argument = value;
+	key->sk_attno = 1;
+	key->sk_collation = DEFAULT_COLLATION_OID;
+
+	tp = SearchSysCache1(OPEROID,
+						 ObjectIdGetDatum(operator));
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "%u operator doesn't exist",
+				operator);
+	operator_tup = (Form_pg_operator) GETSTRUCT(tp);
+	key->sk_subtype = operator_tup->oprright;
+	fmgr_info(operator_tup->oprcode, &key->sk_func);
+	ReleaseSysCache(tp);
+
+	tp = SearchSysCache3(AMOPOPID,
+						 ObjectIdGetDatum(operator),
+						 CharGetDatum(AMOP_SEARCH),
+						 ObjectIdGetDatum(state->entryTreeOpFamily));
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "%u operator is not in %u opfamily",
+				operator, state->entryTreeOpFamily);
+	amop_tup = (Form_pg_amop) GETSTRUCT(tp);
+	key->sk_strategy = amop_tup->amopstrategy;
+	ReleaseSysCache(tp);
+
+	OidFunctionCall5(state->entryTree.rd_am->amrescan,
+					 PointerGetDatum(scanDesc),
+					 PointerGetDatum(key),
+					 Int32GetDatum(1),
+					 PointerGetDatum(NULL),
+					 Int32GetDatum(0));
+
+	return scanDesc;
 }
 
 /*
