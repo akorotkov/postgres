@@ -132,8 +132,8 @@ DESCR("GIN index access method");
 DATA(insert OID = 4000 (  spgist	0 5 f f f f f t f t f f f 0 spginsert spgbeginscan spggettuple spggetbitmap spgrescan spgendscan spgmarkpos spgrestrpos spgbuild spgbuildempty spgbulkdelete spgvacuumcleanup spgcanreturn spgcostestimate spgoptions ));
 DESCR("SP-GiST index access method");
 #define SPGIST_AM_OID 4000
-DATA(insert OID = 4033 (  vodka		0 5 f f f f t t f f t f f 0 vodkainsert vodkabeginscan - vodkagetbitmap vodkarescan vodkaendscan vodkamarkpos vodkarestrpos vodkabuild vodkabuildempty vodkabulkdelete vodkavacuumcleanup - gincostestimate vodkaoptions ));
+DATA(insert OID = 5033 (  vodka		0 5 f f f f t t f f t f f 0 vodkainsert vodkabeginscan - vodkagetbitmap vodkarescan vodkaendscan vodkamarkpos vodkarestrpos vodkabuild vodkabuildempty vodkabulkdelete vodkavacuumcleanup - gincostestimate vodkaoptions ));
 DESCR("VODKA index access method");
-#define VODKA_AM_OID 4033
+#define VODKA_AM_OID 5033
 
 #endif   /* PG_AM_H */

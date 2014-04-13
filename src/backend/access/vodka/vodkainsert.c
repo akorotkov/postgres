@@ -17,6 +17,7 @@
 #include "access/relscan.h"
 #include "access/vodka_private.h"
 #include "access/heapam_xlog.h"
+#include "catalog/catalog.h"
 #include "catalog/index.h"
 #include "catalog/storage.h"
 #include "catalog/pg_operator.h"
@@ -381,6 +382,7 @@ vodkabuild(PG_FUNCTION_ARGS)
 	MemoryContext oldCtx;
 	OffsetNumber attnum;
 	IndexBuildResult *stats;
+	Oid			relnode;
 
 	if (RelationGetNumberOfBlocks(index) != 0)
 		elog(ERROR, "index \"%s\" already contains data",
@@ -392,8 +394,13 @@ vodkabuild(PG_FUNCTION_ARGS)
 	/* initialize the root page */
 	RootBuffer = VodkaNewBuffer(index);
 
+	relnode = GetNewRelFileNode(
+		index->rd_node.spcNode,
+		NULL,
+		index->rd_rel->relpersistence);
+
 	START_CRIT_SECTION();
-	VodkaInitMetabuffer(index, MetaBuffer);
+	VodkaInitMetabuffer(index, MetaBuffer, relnode);
 	MarkBufferDirty(MetaBuffer);
 	VodkaInitBuffer(RootBuffer, VODKA_LEAF);
 	MarkBufferDirty(RootBuffer);
@@ -511,6 +518,7 @@ vodkabuildempty(PG_FUNCTION_ARGS)
 				MetaBuffer;
 	VodkaState	vodkastate;
 	IndexBuildResult *stats;
+	Oid			relnode;
 
 	/* An empty VODKA index has two pages. */
 	MetaBuffer =
@@ -520,9 +528,14 @@ vodkabuildempty(PG_FUNCTION_ARGS)
 		ReadBufferExtended(index, INIT_FORKNUM, P_NEW, RBM_NORMAL, NULL);
 	LockBuffer(RootBuffer, BUFFER_LOCK_EXCLUSIVE);
 
+	relnode = GetNewRelFileNode(
+		index->rd_node.spcNode,
+		NULL,
+		index->rd_rel->relpersistence);
+
 	/* Initialize and xlog metabuffer and root buffer. */
 	START_CRIT_SECTION();
-	VodkaInitMetabuffer(index, MetaBuffer);
+	VodkaInitMetabuffer(index, MetaBuffer, relnode);
 	MarkBufferDirty(MetaBuffer);
 	log_newpage_buffer(MetaBuffer, false);
 	VodkaInitBuffer(RootBuffer, VODKA_LEAF);

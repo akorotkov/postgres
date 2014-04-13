@@ -396,7 +396,7 @@ VodkaInitBuffer(Buffer b, uint32 f)
 }
 
 void
-VodkaInitMetabuffer(Relation index, Buffer b)
+VodkaInitMetabuffer(Relation index, Buffer b, Oid relNode)
 {
 	VodkaMetaPageData *metadata;
 	Page		page = BufferGetPage(b);
@@ -416,10 +416,7 @@ VodkaInitMetabuffer(Relation index, Buffer b)
 	metadata->vodkaVersion = VODKA_CURRENT_VERSION;
 	metadata->entryTreeNode.dbNode = index->rd_node.dbNode;
 	metadata->entryTreeNode.spcNode = index->rd_node.spcNode;
-	metadata->entryTreeNode.relNode = GetNewRelFileNode(
-			index->rd_node.spcNode,
-			NULL,
-			index->rd_rel->relpersistence);
+	metadata->entryTreeNode.relNode = relNode;
 }
 
 /*

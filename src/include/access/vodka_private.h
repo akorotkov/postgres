@@ -583,7 +583,7 @@ extern void freeVodkaState(VodkaState *state);
 extern Buffer VodkaNewBuffer(Relation index);
 extern void VodkaInitBuffer(Buffer b, uint32 f);
 extern void VodkaInitPage(Page page, uint32 f, Size pageSize);
-extern void VodkaInitMetabuffer(Relation index, Buffer b);
+extern void VodkaInitMetabuffer(Relation index, Buffer b, Oid relnode);
 extern int vodkaCompareEntries(VodkaState *vodkastate, OffsetNumber attnum,
 				  Datum a, VodkaNullCategory categorya,
 				  Datum b, VodkaNullCategory categoryb);

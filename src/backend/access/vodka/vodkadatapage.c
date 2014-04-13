@@ -1490,22 +1490,16 @@ vodkaCreatePostingTree(Relation index, ItemPointerData *items, uint32 nitems,
 {
 	BlockNumber blkno;
 	Buffer		buffer;
+	Page		tmppage;
 	Page		page;
 	Pointer		ptr;
 	int			nrootitems;
 	int			rootsize;
 
-	/*
-	 * Create the root page.
-	 */
-	buffer = VodkaNewBuffer(index);
-	page = BufferGetPage(buffer);
-	blkno = BufferGetBlockNumber(buffer);
-
-	START_CRIT_SECTION();
-
-	VodkaInitPage(page, VODKA_DATA | VODKA_LEAF | VODKA_COMPRESSED, BLCKSZ);
-	VodkaPageGetOpaque(page)->rightlink = InvalidBlockNumber;
+	/* Construct the new root page in memory first. */
+	tmppage = (Page) palloc(BLCKSZ);
+	VodkaInitPage(tmppage, VODKA_DATA | VODKA_LEAF | VODKA_COMPRESSED, BLCKSZ);
+	VodkaPageGetOpaque(tmppage)->rightlink = InvalidBlockNumber;
 
 	/*
 	 * Write as many of the items to the root page as fit. In segments
@@ -1513,7 +1507,7 @@ vodkaCreatePostingTree(Relation index, ItemPointerData *items, uint32 nitems,
 	 */
 	nrootitems = 0;
 	rootsize = 0;
-	ptr = (Pointer) VodkaDataLeafPageGetPostingList(page);
+	ptr = (Pointer) VodkaDataLeafPageGetPostingList(tmppage);
 	while (nrootitems < nitems)
 	{
 		VodkaPostingList *segment;
@@ -1534,7 +1528,18 @@ vodkaCreatePostingTree(Relation index, ItemPointerData *items, uint32 nitems,
 		nrootitems += npacked;
 		pfree(segment);
 	}
-	VodkaDataLeafPageSetPostingListSize(page, rootsize);
+	VodkaDataLeafPageSetPostingListSize(tmppage, rootsize);
+
+	/*
+	 * All set. Get a new physical page, and copy the in-memory page to it.
+	 */
+	buffer = VodkaNewBuffer(index);
+	page = BufferGetPage(buffer);
+	blkno = BufferGetBlockNumber(buffer);
+
+	START_CRIT_SECTION();
+
+	PageRestoreTempPage(tmppage, page);
 	MarkBufferDirty(buffer);
 
 	elog(DEBUG2, "created VODKA posting tree with %d items", nrootitems);
