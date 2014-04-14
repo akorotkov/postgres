@@ -76,7 +76,7 @@ directBoolConsistentFn(VodkaScanKey key)
 	 */
 	key->recheckCurItem = true;
 
-	return DatumGetBool(FunctionCall8Coll(key->consistentFmgrInfo,
+	return DatumGetBool(FunctionCall7Coll(key->consistentFmgrInfo,
 										  key->collation,
 										  PointerGetDatum(key->entryRes),
 										  UInt16GetDatum(key->strategy),
@@ -84,8 +84,7 @@ directBoolConsistentFn(VodkaScanKey key)
 										  UInt32GetDatum(key->nuserentries),
 										  PointerGetDatum(key->extra_data),
 									   PointerGetDatum(&key->recheckCurItem),
-										  PointerGetDatum(key->queryValues),
-									 PointerGetDatum(key->queryCategories)));
+										  PointerGetDatum(key->queryValues)));
 }
 
 /*
@@ -94,7 +93,7 @@ directBoolConsistentFn(VodkaScanKey key)
 static VodkaTernaryValue
 directTriConsistentFn(VodkaScanKey key)
 {
-	return DatumGetVodkaTernaryValue(FunctionCall7Coll(
+	return DatumGetVodkaTernaryValue(FunctionCall6Coll(
 									   key->triConsistentFmgrInfo,
 									   key->collation,
 									   PointerGetDatum(key->entryRes),
@@ -102,8 +101,7 @@ directTriConsistentFn(VodkaScanKey key)
 									   key->query,
 									   UInt32GetDatum(key->nuserentries),
 									   PointerGetDatum(key->extra_data),
-									   PointerGetDatum(key->queryValues),
-									 PointerGetDatum(key->queryCategories)));
+									   PointerGetDatum(key->queryValues)));
 }
 
 /*
@@ -115,7 +113,7 @@ static bool
 shimBoolConsistentFn(VodkaScanKey key)
 {
 	VodkaTernaryValue result;
-	result = DatumGetVodkaTernaryValue(FunctionCall7Coll(
+	result = DatumGetVodkaTernaryValue(FunctionCall6Coll(
 										 key->triConsistentFmgrInfo,
 										 key->collation,
 										 PointerGetDatum(key->entryRes),
@@ -123,8 +121,7 @@ shimBoolConsistentFn(VodkaScanKey key)
 										 key->query,
 										 UInt32GetDatum(key->nuserentries),
 										 PointerGetDatum(key->extra_data),
-										 PointerGetDatum(key->queryValues),
-									 PointerGetDatum(key->queryCategories)));
+										 PointerGetDatum(key->queryValues)));
 	if (result == VODKA_MAYBE)
 	{
 		key->recheckCurItem = true;

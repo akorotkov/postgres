@@ -18,13 +18,35 @@
 /*
  * amproc indexes for inverted indexes.
  */
-#define VODKA_COMPARE_PROC			   1
-#define VODKA_EXTRACTVALUE_PROC		   2
-#define VODKA_EXTRACTQUERY_PROC		   3
-#define VODKA_CONSISTENT_PROC		   4
-#define VODKA_COMPARE_PARTIAL_PROC	   5
+#define VODKA_CONFIG_PROC			   1
+#define VODKA_COMPARE_PROC			   2
+#define VODKA_EXTRACTVALUE_PROC		   3
+#define VODKA_EXTRACTQUERY_PROC		   4
+#define VODKA_CONSISTENT_PROC		   5
 #define VODKA_TRICONSISTENT_PROC	   6
 #define VODKANProcs					   6
+
+/*
+ * Argument structs for vodka_config method
+ */
+typedef struct VodkaConfigIn
+{
+	Oid			attType;		/* Data type to be indexed */
+} VodkaConfigIn;
+
+typedef struct VodkaConfigOut
+{
+	Oid			entryOpclass;
+	Oid			entryEqualOperator;
+} VodkaConfigOut;
+
+typedef struct VodkaKey
+{
+	Datum		value;
+	Pointer		extra;
+	Oid			operator;
+	bool		isnull;
+} VodkaKey;
 
 /*
  * searchMode settings for extractQueryFn.

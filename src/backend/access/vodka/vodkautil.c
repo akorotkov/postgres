@@ -32,9 +32,8 @@
 #include "utils/memutils.h"
 #include "utils/syscache.h"
 
-
 static void
-initEntryIndex(VodkaState *state)
+initEntryIndex(VodkaState *state, VodkaConfigOut *configOut)
 {
 	Relation 			index = state->index;
 	Relation			entryIndex = &state->entryTree;
@@ -42,8 +41,21 @@ initEntryIndex(VodkaState *state)
 	Form_pg_attribute	attr;
 	HeapTuple			tuple;
 	Form_pg_am			aform;
+	Form_pg_opclass		oform;
+	Form_pg_type		tform;
 	int					nsupport;
 	OpClassCacheEnt	   *opcentry;
+	Oid					amid;
+	Oid					typeid;
+
+	tuple = SearchSysCache1(CLAOID, ObjectIdGetDatum(configOut->entryOpclass));
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for operator class %u",
+				configOut->entryOpclass);
+	oform = (Form_pg_opclass)GETSTRUCT(tuple);
+	amid = oform->opcmethod;
+	typeid = oform->opckeytype;
+	ReleaseSysCache(tuple);
 
 	memset(&state->entryTree, 0, sizeof(RelationData));
 	entryIndex->rd_node = state->entryTreeNode;
@@ -54,7 +66,7 @@ initEntryIndex(VodkaState *state)
 	entryIndex->rd_rel = relationForm;
 	entryIndex->rd_islocaltemp = index->rd_islocaltemp;
 	entryIndex->rd_createSubid = index->rd_createSubid;
-	entryIndex->rd_rel->relam = SPGIST_AM_OID;
+	entryIndex->rd_rel->relam = amid;
 
 	/* FIXME: use different lock */
 	entryIndex->rd_lockInfo = index->rd_lockInfo;
@@ -63,12 +75,19 @@ initEntryIndex(VodkaState *state)
 	entryIndex->rd_att = CreateTemplateTupleDesc(1, false);
 	attr = entryIndex->rd_att->attrs[0];
 	memset(attr, 0, sizeof(FormData_pg_attribute));
-	attr->atttypid = TEXTOID;
-	attr->attlen = -1;
+
+	tuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(typeid));
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for type %u", typeid);
+	tform = (Form_pg_type)GETSTRUCT(tuple);
+	attr->atttypid = typeid;
+	attr->attlen = tform->typlen;
 	attr->attnum = 1;
-	attr->attbyval = false;
-	attr->attstorage = 'p';
-	attr->attalign = 'i';
+	attr->attbyval = tform->typbyval;
+	attr->attstorage = tform->typstorage;
+	attr->attalign = tform->typalign;
+	ReleaseSysCache(tuple);
+
 	entryIndex->rd_indcollation = (Oid *)palloc(sizeof(Oid));
 	entryIndex->rd_indcollation[0] = DEFAULT_COLLATION_OID;
 
@@ -79,7 +98,7 @@ initEntryIndex(VodkaState *state)
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for access method %u",
 				entryIndex->rd_rel->relam);
-	aform = (Form_pg_am) MemoryContextAlloc(CacheMemoryContext, sizeof *aform);
+	aform = (Form_pg_am)palloc(sizeof(*aform));
 	memcpy(aform, GETSTRUCT(tuple), sizeof *aform);
 	ReleaseSysCache(tuple);
 	entryIndex->rd_am = aform;
@@ -92,12 +111,13 @@ initEntryIndex(VodkaState *state)
 		palloc0(nsupport * sizeof(FmgrInfo));
 
 	/* look up the info for this opclass, using a cache */
-	opcentry = LookupOpclassInfo(TEXT_SPGIST_OPS_OID,
+	opcentry = LookupOpclassInfo(configOut->entryOpclass,
 			nsupport);
 	state->entryTreeOpFamily = opcentry->opcfamily;
 	memcpy(entryIndex->rd_support,
 		   opcentry->supportProcs,
 		   nsupport * sizeof(RegProcedure));
+	state->entryEqualOperator = configOut->entryEqualOperator;
 }
 
 IndexScanDesc
@@ -162,6 +182,8 @@ initVodkaState(VodkaState *state, Relation index)
 	Buffer		metabuffer;
 	Page		metapage;
 	VodkaMetaPageData *metadata;
+	VodkaConfigIn	configIn;
+	VodkaConfigOut	configOut;
 
 	MemSet(state, 0, sizeof(VodkaState));
 
@@ -194,6 +216,9 @@ initVodkaState(VodkaState *state, Relation index)
 										origTupdesc->attrs[i]->attcollation);
 		}
 
+		fmgr_info_copy(&(state->configFn[i]),
+					   index_getprocinfo(index, i + 1, VODKA_CONFIG_PROC),
+					   CurrentMemoryContext);
 		fmgr_info_copy(&(state->compareFn[i]),
 					   index_getprocinfo(index, i + 1, VODKA_COMPARE_PROC),
 					   CurrentMemoryContext);
@@ -230,21 +255,6 @@ initVodkaState(VodkaState *state, Relation index)
 		}
 
 		/*
-		 * Check opclass capability to do partial match.
-		 */
-		if (index_getprocid(index, i + 1, VODKA_COMPARE_PARTIAL_PROC) != InvalidOid)
-		{
-			fmgr_info_copy(&(state->comparePartialFn[i]),
-				   index_getprocinfo(index, i + 1, VODKA_COMPARE_PARTIAL_PROC),
-						   CurrentMemoryContext);
-			state->canPartialMatch[i] = true;
-		}
-		else
-		{
-			state->canPartialMatch[i] = false;
-		}
-
-		/*
 		 * If the index column has a specified collation, we should honor that
 		 * while doing comparisons.  However, we may have a collatable storage
 		 * type for a noncollatable indexed data type (for instance, hstore
@@ -260,8 +270,12 @@ initVodkaState(VodkaState *state, Relation index)
 			state->supportCollation[i] = index->rd_indcollation[i];
 		else
 			state->supportCollation[i] = DEFAULT_COLLATION_OID;
+
+		FunctionCall2(&state->configFn[i],
+			PointerGetDatum(&configIn),
+			PointerGetDatum(&configOut));
 	}
-	initEntryIndex(state);
+	initEntryIndex(state, &configOut);
 }
 
 void

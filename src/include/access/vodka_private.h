@@ -347,14 +347,12 @@ typedef struct VodkaState
 	/*
 	 * Per-index-column opclass support functions
 	 */
+	FmgrInfo	configFn[INDEX_MAX_KEYS];
 	FmgrInfo	compareFn[INDEX_MAX_KEYS];
 	FmgrInfo	extractValueFn[INDEX_MAX_KEYS];
 	FmgrInfo	extractQueryFn[INDEX_MAX_KEYS];
 	FmgrInfo	consistentFn[INDEX_MAX_KEYS];
 	FmgrInfo	triConsistentFn[INDEX_MAX_KEYS];
-	FmgrInfo	comparePartialFn[INDEX_MAX_KEYS];		/* optional method */
-	/* canPartialMatch[i] is true if comparePartialFn[i] is valid */
-	bool		canPartialMatch[INDEX_MAX_KEYS];
 	/* Collations to pass to the support functions */
 	Oid			supportCollation[INDEX_MAX_KEYS];
 
@@ -362,6 +360,7 @@ typedef struct VodkaState
 	RelationData entryTree;
 	Oid			entryTreeOpFamily;
 	IndexScanDesc	entryEqualScan;
+	Oid			entryEqualOperator;
 } VodkaState;
 
 
@@ -804,8 +803,7 @@ typedef struct VodkaScanKeyData
 	/* other data needed for calling consistentFn */
 	Datum		query;
 	/* NB: these three arrays have only nuserentries elements! */
-	Datum	   *queryValues;
-	VodkaNullCategory *queryCategories;
+	VodkaKey   *queryValues;
 	Pointer    *extra_data;
 	StrategyNumber strategy;
 	int32		searchMode;
@@ -829,7 +827,7 @@ typedef struct VodkaScanEntryData
 	/* query key and other information from extractQueryFn */
 	Datum		queryKey;
 	VodkaNullCategory queryCategory;
-	bool		isPartialMatch;
+	Oid			operator;
 	Pointer		extra_data;
 	StrategyNumber strategy;
 	int32		searchMode;

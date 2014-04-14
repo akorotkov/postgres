@@ -59,9 +59,9 @@ static VodkaScanEntry
 vodkaFillScanEntry(VodkaScanOpaque so, OffsetNumber attnum,
 				 StrategyNumber strategy, int32 searchMode,
 				 Datum queryKey, VodkaNullCategory queryCategory,
-				 bool isPartialMatch, Pointer extra_data)
+				 Oid operator, Pointer extra_data)
 {
-	VodkaState   *vodkastate = &so->vodkastate;
+	/* VodkaState   *vodkastate = &so->vodkastate; */
 	VodkaScanEntry scanEntry;
 	uint32		i;
 
@@ -78,15 +78,17 @@ vodkaFillScanEntry(VodkaScanOpaque so, OffsetNumber attnum,
 			VodkaScanEntry prevEntry = so->entries[i];
 
 			if (prevEntry->extra_data == NULL &&
-				prevEntry->isPartialMatch == isPartialMatch &&
 				prevEntry->strategy == strategy &&
 				prevEntry->searchMode == searchMode &&
 				prevEntry->attnum == attnum &&
-				vodkaCompareEntries(vodkastate, attnum,
+				prevEntry->operator == operator &&
+				prevEntry->queryKey == queryKey
+				/* FIXME: do actual comparison of values */
+				/*vodkaCompareEntries(vodkastate, attnum,
 								  prevEntry->queryKey,
 								  prevEntry->queryCategory,
 								  queryKey,
-								  queryCategory) == 0)
+								  queryCategory) == 0*/)
 			{
 				/* Successful match */
 				return prevEntry;
@@ -98,7 +100,7 @@ vodkaFillScanEntry(VodkaScanOpaque so, OffsetNumber attnum,
 	scanEntry = (VodkaScanEntry) palloc(sizeof(VodkaScanEntryData));
 	scanEntry->queryKey = queryKey;
 	scanEntry->queryCategory = queryCategory;
-	scanEntry->isPartialMatch = isPartialMatch;
+	scanEntry->operator = operator;
 	scanEntry->extra_data = extra_data;
 	scanEntry->strategy = strategy;
 	scanEntry->searchMode = searchMode;
@@ -134,8 +136,7 @@ static void
 vodkaFillScanKey(VodkaScanOpaque so, OffsetNumber attnum,
 			   StrategyNumber strategy, int32 searchMode,
 			   Datum query, uint32 nQueryValues,
-			   Datum *queryValues, VodkaNullCategory *queryCategories,
-			   bool *partial_matches, Pointer *extra_data)
+			   VodkaKey *queryValues)
 {
 	VodkaScanKey	key = &(so->keys[so->nkeys++]);
 	VodkaState   *vodkastate = &so->vodkastate;
@@ -153,8 +154,6 @@ vodkaFillScanKey(VodkaScanOpaque so, OffsetNumber attnum,
 
 	key->query = query;
 	key->queryValues = queryValues;
-	key->queryCategories = queryCategories;
-	key->extra_data = extra_data;
 	key->strategy = strategy;
 	key->searchMode = searchMode;
 	key->attnum = attnum;
@@ -170,18 +169,16 @@ vodkaFillScanKey(VodkaScanOpaque so, OffsetNumber attnum,
 	{
 		Datum		queryKey;
 		VodkaNullCategory queryCategory;
-		bool		isPartialMatch;
 		Pointer		this_extra;
+		Oid			operator;
 
 		if (i < nUserQueryValues)
 		{
 			/* set up normal entry using extractQueryFn's outputs */
-			queryKey = queryValues[i];
-			queryCategory = queryCategories[i];
-			isPartialMatch =
-				(vodkastate->canPartialMatch[attnum - 1] && partial_matches)
-				? partial_matches[i] : false;
-			this_extra = (extra_data) ? extra_data[i] : NULL;
+			queryKey = queryValues[i].value;
+			queryCategory =  queryValues[i].isnull;
+			operator = queryValues[i].operator;
+			this_extra = queryValues[i].extra;
 		}
 		else
 		{
@@ -203,7 +200,7 @@ vodkaFillScanKey(VodkaScanOpaque so, OffsetNumber attnum,
 					queryCategory = 0;	/* keep compiler quiet */
 					break;
 			}
-			isPartialMatch = false;
+			operator = InvalidOid;
 			this_extra = NULL;
 
 			/*
@@ -219,7 +216,7 @@ vodkaFillScanKey(VodkaScanOpaque so, OffsetNumber attnum,
 		key->scanEntry[i] = vodkaFillScanEntry(so, attnum,
 											 strategy, searchMode,
 											 queryKey, queryCategory,
-											 isPartialMatch, this_extra);
+											 operator, this_extra);
 	}
 }
 
@@ -287,12 +284,10 @@ vodkaNewScanKey(IndexScanDesc scan)
 	for (i = 0; i < scan->numberOfKeys; i++)
 	{
 		ScanKey		skey = &scankey[i];
-		Datum	   *queryValues;
+		VodkaKey   *queryValues;
 		int32		nQueryValues = 0;
-		bool	   *partial_matches = NULL;
-		Pointer    *extra_data = NULL;
-		bool	   *nullFlags = NULL;
 		int32		searchMode = VODKA_SEARCH_MODE_DEFAULT;
+		int			j;
 
 		/*
 		 * We assume that VODKA-indexable operators are strict, so a null query
@@ -305,15 +300,12 @@ vodkaNewScanKey(IndexScanDesc scan)
 		}
 
 		/* OK to call the extractQueryFn */
-		queryValues = (Datum *)
-			DatumGetPointer(FunctionCall7Coll(&so->vodkastate.extractQueryFn[skey->sk_attno - 1],
+		queryValues = (VodkaKey *)
+			DatumGetPointer(FunctionCall4Coll(&so->vodkastate.extractQueryFn[skey->sk_attno - 1],
 						   so->vodkastate.supportCollation[skey->sk_attno - 1],
 											  skey->sk_argument,
 											  PointerGetDatum(&nQueryValues),
 										   UInt16GetDatum(skey->sk_strategy),
-										   PointerGetDatum(&partial_matches),
-											  PointerGetDatum(&extra_data),
-											  PointerGetDatum(&nullFlags),
 											  PointerGetDatum(&searchMode)));
 
 		/*
@@ -349,19 +341,12 @@ vodkaNewScanKey(IndexScanDesc scan)
 		 * binary compatibility with the VodkaNullCategory representation. While
 		 * at it, detect whether any null keys are present.
 		 */
-		if (nullFlags == NULL)
-			nullFlags = (bool *) palloc0(nQueryValues * sizeof(bool));
-		else
+		for (j = 0; j < nQueryValues; j++)
 		{
-			int32		j;
-
-			for (j = 0; j < nQueryValues; j++)
+			if (queryValues[j].isnull)
 			{
-				if (nullFlags[j])
-				{
-					nullFlags[j] = true;		/* not any other nonzero value */
-					hasNullQuery = true;
-				}
+				queryValues[j].isnull = true;		/* not any other nonzero value */
+				hasNullQuery = true;
 			}
 		}
 		/* now we can use the nullFlags as category codes */
@@ -369,8 +354,7 @@ vodkaNewScanKey(IndexScanDesc scan)
 		vodkaFillScanKey(so, skey->sk_attno,
 					   skey->sk_strategy, searchMode,
 					   skey->sk_argument, nQueryValues,
-					   queryValues, (VodkaNullCategory *) nullFlags,
-					   partial_matches, extra_data);
+					   queryValues);
 	}
 
 	/*
@@ -383,7 +367,7 @@ vodkaNewScanKey(IndexScanDesc scan)
 		vodkaFillScanKey(so, FirstOffsetNumber,
 					   InvalidStrategy, VODKA_SEARCH_MODE_EVERYTHING,
 					   (Datum) 0, 0,
-					   NULL, NULL, NULL, NULL);
+					   NULL);
 	}
 
 	/*

@@ -250,7 +250,7 @@ vodkaEntryInsert(VodkaState *vodkastate,
 #endif
 
 	vodkastate->entryEqualScan = prepareEntryIndexScan(vodkastate,
-			TextEqualOperator, key);
+			vodkastate->entryEqualOperator, key);
 
 	equalScan = vodkastate->entryEqualScan;
 
@@ -262,7 +262,7 @@ vodkaEntryInsert(VodkaState *vodkastate,
 		postingRoot = ItemPointerGetBlockNumber(&equalScan->xs_ctup.t_self);
 
 	OidFunctionCall1(vodkastate->entryTree.rd_am->amendscan,
-						 PointerGetDatum(vodkastate->entryEqualScan));
+						 PointerGetDatum(equalScan));
 
 	if (found)
 	{

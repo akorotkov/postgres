@@ -33,6 +33,7 @@ typedef struct pendingPosition
 } pendingPosition;
 
 
+#ifdef NOT_USED
 /*
  * Goes to the next page if current offset is outside of bounds
  */
@@ -56,6 +57,7 @@ moveRightIfItNeeded(VodkaBtreeData *btree, VodkaBtreeStack *stack)
 
 	return true;
 }
+#endif
 
 /*
  * Scan all pages of a posting tree and save all its heap ItemPointers
@@ -99,205 +101,15 @@ scanPostingTree(Relation index, VodkaScanEntry scanEntry,
 }
 
 /*
- * Collects TIDs into scanEntry->matchBitmap for all heap tuples that
- * match the search entry.	This supports three different match modes:
- *
- * 1. Partial-match support: scan from current point until the
- *	  comparePartialFn says we're done.
- * 2. SEARCH_MODE_ALL: scan from current point (which should be first
- *	  key for the current attnum) until we hit null items or end of attnum
- * 3. SEARCH_MODE_EVERYTHING: scan from current point (which should be first
- *	  key for the current attnum) until we hit end of attnum
- *
- * Returns true if done, false if it's necessary to restart scan from scratch
- */
-static bool
-collectMatchBitmap(VodkaBtreeData *btree, VodkaBtreeStack *stack,
-				   VodkaScanEntry scanEntry)
-{
-	OffsetNumber attnum;
-	Form_pg_attribute attr;
-
-	/* Initialize empty bitmap result */
-	scanEntry->matchBitmap = tbm_create(work_mem * 1024L);
-
-	/* Null query cannot partial-match anything */
-	if (scanEntry->isPartialMatch &&
-		scanEntry->queryCategory != VODKA_CAT_NORM_KEY)
-		return true;
-
-	/* Locate tupdesc entry for key column (for attbyval/attlen data) */
-	attnum = scanEntry->attnum;
-	attr = btree->vodkastate->origTupdesc->attrs[attnum - 1];
-
-	for (;;)
-	{
-		Page		page;
-		IndexTuple	itup;
-		Datum		idatum;
-		VodkaNullCategory icategory;
-
-		/*
-		 * stack->off points to the interested entry, buffer is already locked
-		 */
-		if (moveRightIfItNeeded(btree, stack) == false)
-			return true;
-
-		page = BufferGetPage(stack->buffer);
-		itup = (IndexTuple) PageGetItem(page, PageGetItemId(page, stack->off));
-
-		/*
-		 * If tuple stores another attribute then stop scan
-		 */
-		if (vodkatuple_get_attrnum(btree->vodkastate, itup) != attnum)
-			return true;
-
-		/* Safe to fetch attribute value */
-		idatum = vodkatuple_get_key(btree->vodkastate, itup, &icategory);
-
-		/*
-		 * Check for appropriate scan stop conditions
-		 */
-		if (scanEntry->isPartialMatch)
-		{
-			int32		cmp;
-
-			/*
-			 * In partial match, stop scan at any null (including
-			 * placeholders); partial matches never match nulls
-			 */
-			if (icategory != VODKA_CAT_NORM_KEY)
-				return true;
-
-			/*----------
-			 * Check of partial match.
-			 * case cmp == 0 => match
-			 * case cmp > 0 => not match and finish scan
-			 * case cmp < 0 => not match and continue scan
-			 *----------
-			 */
-			cmp = DatumGetInt32(FunctionCall4Coll(&btree->vodkastate->comparePartialFn[attnum - 1],
-							   btree->vodkastate->supportCollation[attnum - 1],
-												  scanEntry->queryKey,
-												  idatum,
-										 UInt16GetDatum(scanEntry->strategy),
-									PointerGetDatum(scanEntry->extra_data)));
-
-			if (cmp > 0)
-				return true;
-			else if (cmp < 0)
-			{
-				stack->off++;
-				continue;
-			}
-		}
-		else if (scanEntry->searchMode == VODKA_SEARCH_MODE_ALL)
-		{
-			/*
-			 * In ALL mode, we are not interested in null items, so we can
-			 * stop if we get to a null-item placeholder (which will be the
-			 * last entry for a given attnum).	We do want to include NULL_KEY
-			 * and EMPTY_ITEM entries, though.
-			 */
-			if (icategory == VODKA_CAT_NULL_ITEM)
-				return true;
-		}
-
-		/*
-		 * OK, we want to return the TIDs listed in this entry.
-		 */
-		if (VodkaIsPostingTree(itup))
-		{
-			BlockNumber rootPostingTree = VodkaGetPostingTree(itup);
-
-			/*
-			 * We should unlock current page (but not unpin) during tree scan
-			 * to prevent deadlock with vacuum processes.
-			 *
-			 * We save current entry value (idatum) to be able to re-find our
-			 * tuple after re-locking
-			 */
-			if (icategory == VODKA_CAT_NORM_KEY)
-				idatum = datumCopy(idatum, attr->attbyval, attr->attlen);
-
-			LockBuffer(stack->buffer, VODKA_UNLOCK);
-
-			/* Collect all the TIDs in this entry's posting tree */
-			scanPostingTree(btree->index, scanEntry, rootPostingTree);
-
-			/*
-			 * We lock again the entry page and while it was unlocked insert
-			 * might have occurred, so we need to re-find our position.
-			 */
-			LockBuffer(stack->buffer, VODKA_SHARE);
-			page = BufferGetPage(stack->buffer);
-			if (!VodkaPageIsLeaf(page))
-			{
-				/*
-				 * Root page becomes non-leaf while we unlock it. We will
-				 * start again, this situation doesn't occur often - root can
-				 * became a non-leaf only once per life of index.
-				 */
-				return false;
-			}
-
-			/* Search forward to re-find idatum */
-			for (;;)
-			{
-				Datum		newDatum;
-				VodkaNullCategory newCategory;
-
-				if (moveRightIfItNeeded(btree, stack) == false)
-					elog(ERROR, "lost saved point in index");	/* must not happen !!! */
-
-				page = BufferGetPage(stack->buffer);
-				itup = (IndexTuple) PageGetItem(page, PageGetItemId(page, stack->off));
-
-				if (vodkatuple_get_attrnum(btree->vodkastate, itup) != attnum)
-					elog(ERROR, "lost saved point in index");	/* must not happen !!! */
-				newDatum = vodkatuple_get_key(btree->vodkastate, itup,
-											&newCategory);
-
-				if (vodkaCompareEntries(btree->vodkastate, attnum,
-									  newDatum, newCategory,
-									  idatum, icategory) == 0)
-					break;		/* Found! */
-
-				stack->off++;
-			}
-
-			if (icategory == VODKA_CAT_NORM_KEY && !attr->attbyval)
-				pfree(DatumGetPointer(idatum));
-		}
-		else
-		{
-			ItemPointer ipd;
-			int			nipd;
-
-			ipd = vodkaReadTuple(btree->vodkastate, scanEntry->attnum, itup, &nipd);
-			tbm_add_tuples(scanEntry->matchBitmap, ipd, nipd, false);
-			scanEntry->predictNumberResult += VodkaGetNPosting(itup);
-		}
-
-		/*
-		 * Done with this entry, go to the next
-		 */
-		stack->off++;
-	}
-}
-
-/*
  * Start* functions setup beginning state of searches: finds correct buffer and pins it.
  */
 static void
 startScanEntry(VodkaState *vodkastate, VodkaScanEntry entry)
 {
-	VodkaBtreeData btreeEntry;
-	VodkaBtreeStack *stackEntry;
-	Page		page;
-	bool		needUnlock;
+	IndexScanDesc	scanDesc;
+	bool		found;
+	BlockNumber postingRoot;
 
-restartScanEntry:
 	entry->buffer = InvalidBuffer;
 	ItemPointerSetMin(&entry->curItem);
 	entry->offset = InvalidOffsetNumber;
@@ -307,116 +119,77 @@ restartScanEntry:
 	entry->matchResult = NULL;
 	entry->reduceResult = FALSE;
 	entry->predictNumberResult = 0;
-
-	/*
-	 * we should find entry, and begin scan of posting tree or just store
-	 * posting list in memory
-	 */
-	vodkaPrepareEntryScan(&btreeEntry, entry->attnum,
-						entry->queryKey, entry->queryCategory,
-						vodkastate);
-	stackEntry = vodkaFindLeafPage(&btreeEntry, true);
-	page = BufferGetPage(stackEntry->buffer);
-	needUnlock = TRUE;
-
 	entry->isFinished = TRUE;
 
-	if (entry->isPartialMatch ||
-		entry->queryCategory == VODKA_CAT_EMPTY_QUERY)
+	scanDesc = prepareEntryIndexScan(vodkastate,
+											entry->operator, entry->queryKey);
+
+	found =	DatumGetBool(OidFunctionCall2(vodkastate->entryTree.rd_am->amgettuple,
+						 PointerGetDatum(scanDesc),
+						 Int32GetDatum(ForwardScanDirection)));
+	if  (!found)
 	{
+		OidFunctionCall1(vodkastate->entryTree.rd_am->amendscan, PointerGetDatum(scanDesc));
+		return;
+	}
+
+	postingRoot = ItemPointerGetBlockNumber(&scanDesc->xs_ctup.t_self);
+
+	found =	DatumGetBool(OidFunctionCall2(vodkastate->entryTree.rd_am->amgettuple,
+						 PointerGetDatum(scanDesc),
+						 Int32GetDatum(ForwardScanDirection)));
+	if (!found)
+	{
+		VodkaBtreeStack *stack;
+		Page		page;
+		ItemPointerData minItem;
+
+		OidFunctionCall1(vodkastate->entryTree.rd_am->amendscan, PointerGetDatum(scanDesc));
+
+		stack = vodkaScanBeginPostingTree(&entry->btree, vodkastate->index,
+													postingRoot);
+		entry->buffer = stack->buffer;
+
 		/*
-		 * btreeEntry.findItem locates the first item >= given search key.
-		 * (For VODKA_CAT_EMPTY_QUERY, it will find the leftmost index item
-		 * because of the way the VODKA_CAT_EMPTY_QUERY category code is
-		 * assigned.)  We scan forward from there and collect all TIDs needed
-		 * for the entry type.
+		 * We keep buffer pinned because we need to prevent deletion of
+		 * page during scan. See VODKA's vacuum implementation. RefCount is
+		 * increased to keep buffer pinned after freeVodkaBtreeStack() call.
 		 */
-		btreeEntry.findItem(&btreeEntry, stackEntry);
-		if (collectMatchBitmap(&btreeEntry, stackEntry, entry) == false)
-		{
-			/*
-			 * VODKA tree was seriously restructured, so we will cleanup all
-			 * found data and rescan. See comments near 'return false' in
-			 * collectMatchBitmap()
-			 */
-			if (entry->matchBitmap)
-			{
-				if (entry->matchIterator)
-					tbm_end_iterate(entry->matchIterator);
-				entry->matchIterator = NULL;
-				tbm_free(entry->matchBitmap);
-				entry->matchBitmap = NULL;
-			}
-			LockBuffer(stackEntry->buffer, VODKA_UNLOCK);
-			freeVodkaBtreeStack(stackEntry);
-			goto restartScanEntry;
-		}
+		IncrBufferRefCount(entry->buffer);
+
+		page = BufferGetPage(entry->buffer);
+
+		/*
+		 * Load the first page into memory.
+		 */
+		ItemPointerSetMin(&minItem);
+		entry->list = VodkaDataLeafPageGetItems(page, &entry->nlist, minItem);
+
+		entry->predictNumberResult = stack->predictNumber * entry->nlist;
+
+		LockBuffer(entry->buffer, VODKA_UNLOCK);
+		freeVodkaBtreeStack(stack);
+		entry->isFinished = FALSE;
+		return;
+	}
+
+	entry->matchBitmap = tbm_create(work_mem * 1024L);
+
+	do {
+		postingRoot = ItemPointerGetBlockNumber(&scanDesc->xs_ctup.t_self);
+
+		scanPostingTree(vodkastate->index, entry, postingRoot);
 
 		if (entry->matchBitmap && !tbm_is_empty(entry->matchBitmap))
 		{
 			entry->matchIterator = tbm_begin_iterate(entry->matchBitmap);
 			entry->isFinished = FALSE;
 		}
-	}
-	else if (btreeEntry.findItem(&btreeEntry, stackEntry))
-	{
-		IndexTuple	itup = (IndexTuple) PageGetItem(page, PageGetItemId(page, stackEntry->off));
-
-		if (VodkaIsPostingTree(itup))
-		{
-			BlockNumber rootPostingTree = VodkaGetPostingTree(itup);
-			VodkaBtreeStack *stack;
-			Page		page;
-			ItemPointerData minItem;
-
-			/*
-			 * We should unlock entry page before touching posting tree to
-			 * prevent deadlocks with vacuum processes. Because entry is never
-			 * deleted from page and posting tree is never reduced to the
-			 * posting list, we can unlock page after getting BlockNumber of
-			 * root of posting tree.
-			 */
-			LockBuffer(stackEntry->buffer, VODKA_UNLOCK);
-			needUnlock = FALSE;
-
-			stack = vodkaScanBeginPostingTree(&entry->btree, vodkastate->index,
-											rootPostingTree);
-			entry->buffer = stack->buffer;
-
-			/*
-			 * We keep buffer pinned because we need to prevent deletion of
-			 * page during scan. See VODKA's vacuum implementation. RefCount is
-			 * increased to keep buffer pinned after freeVodkaBtreeStack() call.
-			 */
-			IncrBufferRefCount(entry->buffer);
-
-			page = BufferGetPage(entry->buffer);
-
-			/*
-			 * Load the first page into memory.
-			 */
-			ItemPointerSetMin(&minItem);
-			entry->list = VodkaDataLeafPageGetItems(page, &entry->nlist, minItem);
-
-			entry->predictNumberResult = stack->predictNumber * entry->nlist;
-
-			LockBuffer(entry->buffer, VODKA_UNLOCK);
-			freeVodkaBtreeStack(stack);
-			entry->isFinished = FALSE;
-		}
-		else if (VodkaGetNPosting(itup) > 0)
-		{
-			entry->list = vodkaReadTuple(vodkastate, entry->attnum, itup,
-				&entry->nlist);
-			entry->predictNumberResult = entry->nlist;
-
-			entry->isFinished = FALSE;
-		}
-	}
-
-	if (needUnlock)
-		LockBuffer(stackEntry->buffer, VODKA_UNLOCK);
-	freeVodkaBtreeStack(stackEntry);
+		found =	DatumGetBool(OidFunctionCall2(vodkastate->entryTree.rd_am->amgettuple,
+							 PointerGetDatum(scanDesc),
+							 Int32GetDatum(ForwardScanDirection)));
+	} while (found);
+	OidFunctionCall1(vodkastate->entryTree.rd_am->amendscan, PointerGetDatum(scanDesc));
 }
 
 /*
@@ -1377,6 +1150,7 @@ scanGetCandidate(IndexScanDesc scan, pendingPosition *pos)
 	return true;
 }
 
+#ifdef NOT_USED
 /*
  * Scan pending-list page from current tuple (off) up till the first of:
  * - match is found (then returns true)
@@ -1426,12 +1200,12 @@ matchPartialInPendingList(VodkaState *vodkastate, Page page,
 		 * case cmp < 0 => not match and continue scan
 		 *----------
 		 */
-		cmp = DatumGetInt32(FunctionCall4Coll(&vodkastate->comparePartialFn[entry->attnum - 1],
+		cmp = 0; /*DatumGetInt32(FunctionCall4Coll(&vodkastate->comparePartialFn[entry->attnum - 1],
 							   vodkastate->supportCollation[entry->attnum - 1],
 											  entry->queryKey,
 											  datum[off - 1],
 											  UInt16GetDatum(entry->strategy),
-										PointerGetDatum(entry->extra_data)));
+										PointerGetDatum(entry->extra_data)));*/
 		if (cmp == 0)
 			return true;
 		else if (cmp > 0)
@@ -1442,6 +1216,7 @@ matchPartialInPendingList(VodkaState *vodkastate, Page page,
 
 	return false;
 }
+#endif
 
 /*
  * Set up the entryRes array for each key by looking at
@@ -1580,7 +1355,7 @@ collectMatchesForHeapRow(IndexScanDesc scan, pendingPosition *pos)
 						 *
 						 * See comment above about tuple's ordering.
 						 */
-						if (entry->isPartialMatch)
+						/*if (entry->isPartialMatch)
 							key->entryRes[j] =
 								matchPartialInPendingList(&so->vodkastate,
 														  page,
@@ -1590,7 +1365,7 @@ collectMatchesForHeapRow(IndexScanDesc scan, pendingPosition *pos)
 														  datum,
 														  category,
 														  datumExtracted);
-						else
+						else*/
 							key->entryRes[j] = true;
 
 						/* done with binary search */
@@ -1601,7 +1376,7 @@ collectMatchesForHeapRow(IndexScanDesc scan, pendingPosition *pos)
 					else
 						StopLow = StopMiddle + 1;
 				}
-
+#ifdef NOT_USED
 				if (StopLow >= StopHigh && entry->isPartialMatch)
 				{
 					/*
@@ -1622,7 +1397,7 @@ collectMatchesForHeapRow(IndexScanDesc scan, pendingPosition *pos)
 												  category,
 												  datumExtracted);
 				}
-
+#endif
 				pos->hasMatchKey[i] |= key->entryRes[j];
 			}
 		}
