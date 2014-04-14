@@ -15,15 +15,28 @@
 
 #include "access/vodka.h"
 #include "access/skey.h"
+#include "catalog/pg_operator.h"
+#include "catalog/pg_opclass.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 
 
-#define VodkaOverlapStrategy		1
-#define VodkaContainsStrategy		2
+#define VodkaOverlapStrategy	1
+#define VodkaContainsStrategy	2
 #define VodkaContainedStrategy	3
 #define VodkaEqualStrategy		4
+
+Datum
+vodkaarrayconfig(PG_FUNCTION_ARGS)
+{
+	/* VodkaConfigIn *in = (VodkaConfigIn *)PG_GETARG_POINTER(0); */
+	VodkaConfigOut *out = (VodkaConfigOut *)PG_GETARG_POINTER(1);
+
+	out->entryOpclass = TEXT_SPGIST_OPS_OID;
+	out->entryEqualOperator = TextEqualOperator;
+	PG_RETURN_VOID();
+}
 
 
 /*
@@ -59,20 +72,6 @@ vodkaarrayextract(PG_FUNCTION_ARGS)
 }
 
 /*
- * Formerly, vodkaarrayextract had only two arguments.  Now it has three,
- * but we still need a pg_proc entry with two args to support reloading
- * pre-9.1 contrib/intarray opclass declarations.  This compatibility
- * function should go away eventually.
- */
-Datum
-vodkaarrayextract_2args(PG_FUNCTION_ARGS)
-{
-	if (PG_NARGS() < 3)			/* should not happen */
-		elog(ERROR, "vodkaarrayextract requires three arguments");
-	return vodkaarrayextract(fcinfo);
-}
-
-/*
  * extractQuery support function
  */
 Datum
@@ -82,17 +81,14 @@ vodkaqueryarrayextract(PG_FUNCTION_ARGS)
 	ArrayType  *array = PG_GETARG_ARRAYTYPE_P_COPY(0);
 	int32	   *nkeys = (int32 *) PG_GETARG_POINTER(1);
 	StrategyNumber strategy = PG_GETARG_UINT16(2);
-
-	/* bool   **pmatch = (bool **) PG_GETARG_POINTER(3); */
-	/* Pointer	   *extra_data = (Pointer *) PG_GETARG_POINTER(4); */
-	bool	  **nullFlags = (bool **) PG_GETARG_POINTER(5);
-	int32	   *searchMode = (int32 *) PG_GETARG_POINTER(6);
+	int32	   *searchMode = (int32 *) PG_GETARG_POINTER(3);
 	int16		elmlen;
 	bool		elmbyval;
 	char		elmalign;
 	Datum	   *elems;
 	bool	   *nulls;
-	int			nelems;
+	int			nelems, i;
+	VodkaKey   *keys;
 
 	get_typlenbyvalalign(ARR_ELEMTYPE(array),
 						 &elmlen, &elmbyval, &elmalign);
@@ -101,9 +97,17 @@ vodkaqueryarrayextract(PG_FUNCTION_ARGS)
 					  ARR_ELEMTYPE(array),
 					  elmlen, elmbyval, elmalign,
 					  &elems, &nulls, &nelems);
+	keys = (VodkaKey *)palloc(sizeof(VodkaKey) * nelems);
 
 	*nkeys = nelems;
-	*nullFlags = nulls;
+
+	for (i = 0; i < nelems; i++)
+	{
+		keys[i].value = elems[i];
+		keys[i].isnull = nulls[i];
+		keys[i].extra = NULL;
+		keys[i].operator = TextEqualOperator;
+	}
 
 	switch (strategy)
 	{
@@ -132,7 +136,7 @@ vodkaqueryarrayextract(PG_FUNCTION_ARGS)
 	}
 
 	/* we should not free array, elems[i] points into it */
-	PG_RETURN_POINTER(elems);
+	PG_RETURN_POINTER(keys);
 }
 
 /*

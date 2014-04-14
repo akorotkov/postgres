@@ -54,7 +54,8 @@ initEntryIndex(VodkaState *state, VodkaConfigOut *configOut)
 				configOut->entryOpclass);
 	oform = (Form_pg_opclass)GETSTRUCT(tuple);
 	amid = oform->opcmethod;
-	typeid = oform->opckeytype;
+	typeid = oform->opcintype;
+	state->entryTreeOpFamily = oform->opcfamily;
 	ReleaseSysCache(tuple);
 
 	memset(&state->entryTree, 0, sizeof(RelationData));

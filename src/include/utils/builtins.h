@@ -1180,8 +1180,8 @@ extern Datum ginarrayconsistent(PG_FUNCTION_ARGS);
 extern Datum ginarraytriconsistent(PG_FUNCTION_ARGS);
 
 /* access/vodka/vodkaarrayproc.c */
+extern Datum vodkaarrayconfig(PG_FUNCTION_ARGS);
 extern Datum vodkaarrayextract(PG_FUNCTION_ARGS);
-extern Datum vodkaarrayextract_2args(PG_FUNCTION_ARGS);
 extern Datum vodkaqueryarrayextract(PG_FUNCTION_ARGS);
 extern Datum vodkaarrayconsistent(PG_FUNCTION_ARGS);
 extern Datum vodkaarraytriconsistent(PG_FUNCTION_ARGS);
