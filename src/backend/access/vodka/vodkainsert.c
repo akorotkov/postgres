@@ -23,6 +23,7 @@
 #include "catalog/pg_operator.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
+#include "storage/freespace.h"
 #include "storage/smgr.h"
 #include "storage/indexfsm.h"
 #include "utils/memutils.h"
@@ -173,6 +174,158 @@ buildFreshLeafTuple(VodkaState *vodkastate,
 }
 #endif
 
+static ItemPointerData
+placeNewPostingList(VodkaState *vodkastate, VodkaPostingList *postinglist)
+{
+	OffsetNumber requiredSize = SizeOfVodkaPostingList(postinglist) +
+			RelationGetTargetPageFreeSpace(vodkastate->index, VODKA_DEFAULT_FILLFACTOR);
+	BlockNumber blkno = InvalidBlockNumber;
+	Buffer		buffer;
+	Page		page;
+	OffsetNumber offset, placed;
+	ItemPointerData	result;
+
+	while (true)
+	{
+		blkno =	GetPageWithFreeSpace(vodkastate->index, requiredSize);
+		if (!BlockNumberIsValid(blkno))
+			break;
+		buffer = ReadBuffer(vodkastate->index, blkno);
+		LockBuffer(buffer, VODKA_EXCLUSIVE);
+		page = BufferGetPage(buffer);
+
+		if (VodkaDataLeafPageGetFreeSpace(page) < requiredSize)
+		{
+			UnlockReleaseBuffer(buffer);
+			blkno = InvalidBlockNumber;
+			continue;
+		}
+	}
+
+	if (!BlockNumberIsValid(blkno))
+	{
+		buffer = VodkaNewBuffer(vodkastate->index);
+		page = BufferGetPage(buffer);
+		blkno = BufferGetBlockNumber(buffer);
+		VodkaInitPage(page, VODKA_LEAF | VODKA_COMPRESSED, BLCKSZ);
+		VodkaPageGetOpaque(page)->rightlink = InvalidBlockNumber;
+	}
+
+	offset = PageGetMaxOffsetNumber(page) + 1;
+	placed = PageAddItem(page,
+						 (Item) postinglist,
+						 MAXALIGN(SizeOfVodkaPostingList(postinglist)),
+						 offset, false, false);
+	if (placed != offset)
+		elog(ERROR, "failed to add item to index page in \"%s\"",
+			 RelationGetRelationName(vodkastate->index));
+
+	RecordPageWithFreeSpace(vodkastate->index, blkno, PageGetExactFreeSpace(page));
+
+	MarkBufferDirty(buffer);
+	UnlockReleaseBuffer(buffer);
+
+	ItemPointerSetBlockNumber(&result, blkno);
+	ItemPointerSetOffsetNumber(&result, offset);
+
+	return result;
+}
+
+static void
+replacePostingList(VodkaState *vodkastate, Buffer buffer, Page page,
+		OffsetNumber offset, ItemPointerData *items,
+		uint32 nitem, VodkaStatsData *buildStats)
+{
+	ItemPointerData	newiptr;
+	BlockNumber postingRoot;
+	OffsetNumber placed;
+
+	elog(NOTICE, "create nested posting tree");
+
+	postingRoot = vodkaCreatePostingTree(vodkastate->index, items,
+			nitem, buildStats);
+	ItemPointerSetBlockNumber(&newiptr, postingRoot);
+	newiptr.ip_posid = 0xFFFF;
+	PageIndexTupleDelete(page, offset);
+	placed = PageAddItem(page,
+						 (Item) &newiptr,
+						 MAXALIGN(sizeof(newiptr)),
+						 offset, true, false);
+	if (placed != offset)
+		elog(ERROR, "Can't update posting list");
+
+	RecordPageWithFreeSpace(vodkastate->index, BufferGetBlockNumber(buffer),
+			PageGetExactFreeSpace(page));
+
+	MarkBufferDirty(buffer);
+	UnlockReleaseBuffer(buffer);
+}
+
+static void
+updatePostingList(VodkaState *vodkastate, ItemPointer iptr,
+	ItemPointerData *items, uint32 nitem, VodkaStatsData *buildStats)
+{
+	BlockNumber 	blkno = ItemPointerGetBlockNumber(iptr);
+	Buffer			buffer;
+	Page			page;
+	OffsetNumber	offset = ItemPointerGetOffsetNumber(iptr), placed;
+	VodkaPostingList *postinglist;
+	ItemPointerData	*oldItems, *newItems;
+	int				oldNPosting, newNPosting, nwritten;
+	ItemId			itemid;
+
+	buffer = ReadBuffer(vodkastate->index, blkno);
+	LockBuffer(buffer, VODKA_EXCLUSIVE);
+	page = BufferGetPage(buffer);
+
+	postinglist = (VodkaPostingList *)PageGetItem(page, PageGetItemId(page, offset));
+	itemid = PageGetItemId(page, offset);
+	if (postinglist->first.ip_posid == 0xFFFF)
+	{
+		elog(NOTICE, "update nested posting tree");
+		vodkaInsertItemPointers(vodkastate->index,
+							  ItemPointerGetBlockNumber(&postinglist->first),
+							  items, nitem, buildStats);
+		UnlockReleaseBuffer(buffer);
+		return;
+	}
+
+	oldItems = vodkaPostingListDecode(postinglist, &oldNPosting);
+	newItems = vodkaMergeItemPointers(items, nitem,
+										oldItems, oldNPosting,
+										&newNPosting);
+	postinglist = vodkaCompressPostingList(newItems, newNPosting,
+											VodkaMaxItemSize, &nwritten);
+	if (nwritten < newNPosting)
+	{
+		pfree(postinglist);
+		replacePostingList(vodkastate, buffer, page, offset,
+				newItems, newNPosting, buildStats);
+		return;
+	}
+
+	PageIndexTupleDelete(page, offset);
+	placed = PageAddItem(page,
+						 (Item) postinglist,
+						 MAXALIGN(SizeOfVodkaPostingList(postinglist)),
+						 offset, false, false);
+	if (placed != offset)
+	{
+		pfree(postinglist);
+		replacePostingList(vodkastate, buffer, page, offset,
+				newItems, newNPosting, buildStats);
+		return;
+	}
+
+	elog(NOTICE, "update posting list");
+
+	RecordPageWithFreeSpace(vodkastate->index, BufferGetBlockNumber(buffer),
+			PageGetExactFreeSpace(page));
+
+	MarkBufferDirty(buffer);
+	UnlockReleaseBuffer(buffer);
+}
+
 /*
  * Insert one or more heap TIDs associated with the given key value.
  * This will either add a single key entry, or enlarge a pre-existing entry.
@@ -196,7 +349,6 @@ vodkaEntryInsert(VodkaState *vodkastate,
 	bool		isnull, found;
 	ItemPointerData	iptr;
 	IndexScanDesc	equalScan;
-	BlockNumber postingRoot;
 
 	/*insertdata.isDelete = FALSE;*/
 
@@ -259,27 +411,54 @@ vodkaEntryInsert(VodkaState *vodkastate,
 						 Int32GetDatum(ForwardScanDirection)));
 
 	if (found)
-		postingRoot = ItemPointerGetBlockNumber(&equalScan->xs_ctup.t_self);
+		iptr = equalScan->xs_ctup.t_self;
 
 	OidFunctionCall1(vodkastate->entryTree.rd_am->amendscan,
 						 PointerGetDatum(equalScan));
 
 	if (found)
 	{
-		vodkaInsertItemPointers(vodkastate->index, postingRoot,
-							  items, nitem,
-							  buildStats);
+		if (ItemPointerGetOffsetNumber(&iptr) == 0xFFFF)
+		{
+			elog(NOTICE, "update posting tree");
+			vodkaInsertItemPointers(vodkastate->index,
+								  ItemPointerGetBlockNumber(&iptr),
+								  items, nitem, buildStats);
+		}
+		else
+		{
+			updatePostingList(vodkastate, &iptr, items, nitem, buildStats);
+		}
 	}
 	else
 	{
-		postingRoot = vodkaCreatePostingTree(vodkastate->index, items, nitem,
-										buildStats);
+		VodkaPostingList *compressedList;
+		int	nwritten;
 
-		isnull = (category != VODKA_CAT_NORM_KEY);
+		compressedList = vodkaCompressPostingList(items, nitem,
+												VodkaMaxItemSize, &nwritten);
+		if (nitem == nwritten)
+		{
+			iptr = placeNewPostingList(vodkastate, compressedList);
+			elog(NOTICE, "new posting list (%d,%d)",
+					ItemPointerGetBlockNumber(&iptr),
+					ItemPointerGetOffsetNumber(&iptr));
+		}
+		else
+		{
+			BlockNumber postingRoot;
 
-		ItemPointerSetBlockNumber(&iptr, postingRoot);
-		iptr.ip_posid = 1;
+			elog(NOTICE, "new posting tree");
+			pfree(compressedList);
 
+			postingRoot = vodkaCreatePostingTree(vodkastate->index, items, nitem,
+											buildStats);
+
+			isnull = (category != VODKA_CAT_NORM_KEY);
+
+			ItemPointerSetBlockNumber(&iptr, postingRoot);
+			iptr.ip_posid = 0xFFFF;
+		}
 		OidFunctionCall4(vodkastate->entryTree.rd_am->aminsert,
 						 PointerGetDatum(&vodkastate->entryTree),
 						 PointerGetDatum(&key),

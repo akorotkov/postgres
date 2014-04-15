@@ -105,6 +105,8 @@ typedef struct VodkaMetaPageData
 
 #define VODKA_CURRENT_VERSION		2
 
+#define VODKA_DEFAULT_FILLFACTOR	80
+
 #define VodkaPageGetMeta(p) \
 	((VodkaMetaPageData *) PageGetContents(p))
 
