@@ -194,6 +194,7 @@ initVodkaState(Relation index)
 
 	vodkaGetStats(index, &stats);
 
+	state->postingListLUP = stats.postingListLUP;
 	state->entryTreeNode = stats.entryTreeNode;
 	state->index = index;
 	state->oneCol = (origTupdesc->natts == 1) ? true : false;
@@ -455,6 +456,8 @@ VodkaInitMetabuffer(Relation index, Buffer b, Oid relNode)
 	metadata->entryTreeNode.dbNode = index->rd_node.dbNode;
 	metadata->entryTreeNode.spcNode = index->rd_node.spcNode;
 	metadata->entryTreeNode.relNode = relNode;
+	metadata->postingListLUP.blkno = InvalidBlockNumber;
+	metadata->postingListLUP.freeSpace = 0;
 }
 
 /*
@@ -730,6 +733,7 @@ vodkaGetStats(Relation index, VodkaStatsData *stats)
 	stats->nEntries = metadata->nEntries;
 	stats->vodkaVersion = metadata->vodkaVersion;
 	stats->entryTreeNode = metadata->entryTreeNode;
+	stats->postingListLUP = metadata->postingListLUP;
 
 	UnlockReleaseBuffer(metabuffer);
 }
@@ -757,6 +761,7 @@ vodkaUpdateStats(Relation index, const VodkaStatsData *stats)
 	metadata->nEntryPages = stats->nEntryPages;
 	metadata->nDataPages = stats->nDataPages;
 	metadata->nEntries = stats->nEntries;
+	metadata->postingListLUP = stats->postingListLUP;
 
 	MarkBufferDirty(metabuffer);
 

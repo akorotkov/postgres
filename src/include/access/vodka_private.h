@@ -101,6 +101,7 @@ typedef struct VodkaMetaPageData
 	int32		vodkaVersion;
 
 	RelFileNode	entryTreeNode;
+	VodkaLastUsedPage postingListLUP;
 } VodkaMetaPageData;
 
 #define VODKA_CURRENT_VERSION		2
@@ -363,6 +364,7 @@ typedef struct VodkaState
 	Oid			entryTreeOpFamily;
 	IndexScanDesc	entryEqualScan;
 	Oid			entryEqualOperator;
+	VodkaLastUsedPage postingListLUP;
 } VodkaState;
 
 

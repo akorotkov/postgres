@@ -40,6 +40,17 @@ typedef struct
 	BuildAccumulator accum;
 } VodkaBuildState;
 
+static void
+updatePostingListLUP(VodkaState	*state, BlockNumber blkno, int freespace)
+{
+	if (!BlockNumberIsValid(state->postingListLUP.blkno) ||
+			state->postingListLUP.freeSpace < freespace)
+	{
+		state->postingListLUP.blkno = blkno;
+		state->postingListLUP.freeSpace = freespace;
+	}
+}
+
 
 #ifdef NOT_USED
 /*
@@ -185,11 +196,10 @@ placeNewPostingList(VodkaState *vodkastate, VodkaPostingList *postinglist)
 	OffsetNumber offset, placed;
 	ItemPointerData	result;
 
-	while (true)
+	if (BlockNumberIsValid(vodkastate->postingListLUP.blkno) &&
+			vodkastate->postingListLUP.freeSpace >= requiredSize)
 	{
-		blkno =	GetPageWithFreeSpace(vodkastate->index, requiredSize);
-		if (!BlockNumberIsValid(blkno))
-			break;
+		blkno =	vodkastate->postingListLUP.blkno;
 		buffer = ReadBuffer(vodkastate->index, blkno);
 		LockBuffer(buffer, VODKA_EXCLUSIVE);
 		page = BufferGetPage(buffer);
@@ -198,7 +208,7 @@ placeNewPostingList(VodkaState *vodkastate, VodkaPostingList *postinglist)
 		{
 			UnlockReleaseBuffer(buffer);
 			blkno = InvalidBlockNumber;
-			continue;
+			vodkastate->postingListLUP.freeSpace = VodkaDataLeafPageGetFreeSpace(page);
 		}
 	}
 
@@ -220,7 +230,7 @@ placeNewPostingList(VodkaState *vodkastate, VodkaPostingList *postinglist)
 		elog(ERROR, "failed to add item to index page in \"%s\"",
 			 RelationGetRelationName(vodkastate->index));
 
-	RecordPageWithFreeSpace(vodkastate->index, blkno, PageGetExactFreeSpace(page));
+	updatePostingListLUP(vodkastate, blkno, PageGetExactFreeSpace(page));
 
 	MarkBufferDirty(buffer);
 	UnlockReleaseBuffer(buffer);
@@ -254,7 +264,7 @@ replacePostingList(VodkaState *vodkastate, Buffer buffer, Page page,
 	if (placed != offset)
 		elog(ERROR, "Can't update posting list");
 
-	RecordPageWithFreeSpace(vodkastate->index, BufferGetBlockNumber(buffer),
+	updatePostingListLUP(vodkastate, BufferGetBlockNumber(buffer),
 			PageGetExactFreeSpace(page));
 
 	MarkBufferDirty(buffer);
@@ -319,7 +329,7 @@ updatePostingList(VodkaState *vodkastate, ItemPointer iptr,
 
 	elog(NOTICE, "update posting list");
 
-	RecordPageWithFreeSpace(vodkastate->index, BufferGetBlockNumber(buffer),
+	updatePostingListLUP(vodkastate, BufferGetBlockNumber(buffer),
 			PageGetExactFreeSpace(page));
 
 	MarkBufferDirty(buffer);
@@ -668,6 +678,7 @@ vodkabuild(PG_FUNCTION_ARGS)
 	 * Update metapage stats
 	 */
 	buildstate.buildStats.nTotalPages = RelationGetNumberOfBlocks(index);
+	buildstate.buildStats.postingListLUP = buildstate.vodkastate->postingListLUP;
 	vodkaUpdateStats(index, &buildstate.buildStats);
 
 	/*

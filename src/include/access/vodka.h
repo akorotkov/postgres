@@ -57,6 +57,12 @@ typedef struct VodkaKey
 #define VODKA_SEARCH_MODE_ALL				2
 #define VODKA_SEARCH_MODE_EVERYTHING		3		/* for internal use only */
 
+typedef struct VodkaLastUsedPage
+{
+	BlockNumber blkno;			/* block number, or InvalidBlockNumber */
+	int			freeSpace;		/* page's free space (could be obsolete!) */
+} VodkaLastUsedPage;
+
 /*
  * VodkaStatsData represents stats data for planner use
  */
@@ -69,6 +75,7 @@ typedef struct VodkaStatsData
 	int64		nEntries;
 	int32		vodkaVersion;
 	RelFileNode	entryTreeNode;
+	VodkaLastUsedPage postingListLUP;
 } VodkaStatsData;
 
 /*
