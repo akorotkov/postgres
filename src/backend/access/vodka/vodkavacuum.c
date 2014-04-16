@@ -28,7 +28,7 @@ struct VodkaVacuumState
 	IndexBulkDeleteResult *result;
 	IndexBulkDeleteCallback callback;
 	void	   *callback_state;
-	VodkaState	vodkastate;
+	VodkaState	*vodkastate;
 	BufferAccessStrategy strategy;
 	MemoryContext tmpCxt;
 };
@@ -557,9 +557,9 @@ vodkaVacuumEntryPage(VodkaVacuumState *gvs, Buffer buffer, BlockNumber *roots, u
 					itup = (IndexTuple) PageGetItem(tmppage, PageGetItemId(tmppage, i));
 				}
 
-				attnum = vodkatuple_get_attrnum(&gvs->vodkastate, itup);
-				key = vodkatuple_get_key(&gvs->vodkastate, itup, &category);
-				itup = VodkaFormTuple(&gvs->vodkastate, attnum, key, category,
+				attnum = vodkatuple_get_attrnum(gvs->vodkastate, itup);
+				key = vodkatuple_get_key(gvs->vodkastate, itup, &category);
+				itup = VodkaFormTuple(gvs->vodkastate, attnum, key, category,
 									(char *) plist, plistsize,
 									nitems, true);
 				if (plist)
@@ -601,7 +601,7 @@ vodkabulkdelete(PG_FUNCTION_ARGS)
 	gvs.callback = callback;
 	gvs.callback_state = callback_state;
 	gvs.strategy = info->strategy;
-	initVodkaState(&gvs.vodkastate, index);
+	gvs.vodkastate = initVodkaState(index);
 
 	/* first time through? */
 	if (stats == NULL)
@@ -609,7 +609,7 @@ vodkabulkdelete(PG_FUNCTION_ARGS)
 		/* Yes, so initialize stats to zeroes */
 		stats = (IndexBulkDeleteResult *) palloc0(sizeof(IndexBulkDeleteResult));
 		/* and cleanup any pending inserts */
-		vodkaInsertCleanup(&gvs.vodkastate, true, stats);
+		vodkaInsertCleanup(gvs.vodkastate, true, stats);
 	}
 
 	/* we'll re-count the tuples each time */
@@ -697,7 +697,7 @@ vodkabulkdelete(PG_FUNCTION_ARGS)
 		LockBuffer(buffer, VODKA_EXCLUSIVE);
 	}
 
-	freeVodkaState(&gvs.vodkastate);
+	freeVodkaState(gvs.vodkastate);
 	MemoryContextDelete(gvs.tmpCxt);
 
 	PG_RETURN_POINTER(gvs.result);
@@ -713,7 +713,7 @@ vodkavacuumcleanup(PG_FUNCTION_ARGS)
 	BlockNumber npages,
 				blkno;
 	BlockNumber totFreePages;
-	VodkaState	vodkastate;
+	VodkaState	*vodkastate;
 	VodkaStatsData idxStat;
 
 	/*
@@ -724,9 +724,9 @@ vodkavacuumcleanup(PG_FUNCTION_ARGS)
 	{
 		if (IsAutoVacuumWorkerProcess())
 		{
-			initVodkaState(&vodkastate, index);
-			vodkaInsertCleanup(&vodkastate, true, stats);
-			freeVodkaState(&vodkastate);
+			vodkastate = initVodkaState(index);
+			vodkaInsertCleanup(vodkastate, true, stats);
+			freeVodkaState(vodkastate);
 		}
 		PG_RETURN_POINTER(stats);
 	}
@@ -738,9 +738,9 @@ vodkavacuumcleanup(PG_FUNCTION_ARGS)
 	if (stats == NULL)
 	{
 		stats = (IndexBulkDeleteResult *) palloc0(sizeof(IndexBulkDeleteResult));
-		initVodkaState(&vodkastate, index);
-		vodkaInsertCleanup(&vodkastate, true, stats);
-		freeVodkaState(&vodkastate);
+		vodkastate = initVodkaState(index);
+		vodkaInsertCleanup(vodkastate, true, stats);
+		freeVodkaState(vodkastate);
 	}
 
 	memset(&idxStat, 0, sizeof(idxStat));

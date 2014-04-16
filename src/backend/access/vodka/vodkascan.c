@@ -44,7 +44,7 @@ vodkabeginscan(PG_FUNCTION_ARGS)
 										ALLOCSET_DEFAULT_MINSIZE,
 										ALLOCSET_DEFAULT_INITSIZE,
 										ALLOCSET_DEFAULT_MAXSIZE);
-	initVodkaState(&so->vodkastate, scan->indexRelation);
+	so->vodkastate = initVodkaState(scan->indexRelation);
 
 	scan->opaque = so;
 
@@ -139,7 +139,7 @@ vodkaFillScanKey(VodkaScanOpaque so, OffsetNumber attnum,
 			   VodkaKey *queryValues)
 {
 	VodkaScanKey	key = &(so->keys[so->nkeys++]);
-	VodkaState   *vodkastate = &so->vodkastate;
+	VodkaState   *vodkastate = so->vodkastate;
 	uint32		nUserQueryValues = nQueryValues;
 	uint32		i;
 
@@ -301,8 +301,8 @@ vodkaNewScanKey(IndexScanDesc scan)
 
 		/* OK to call the extractQueryFn */
 		queryValues = (VodkaKey *)
-			DatumGetPointer(FunctionCall4Coll(&so->vodkastate.extractQueryFn[skey->sk_attno - 1],
-						   so->vodkastate.supportCollation[skey->sk_attno - 1],
+			DatumGetPointer(FunctionCall4Coll(&so->vodkastate->extractQueryFn[skey->sk_attno - 1],
+						   so->vodkastate->supportCollation[skey->sk_attno - 1],
 											  skey->sk_argument,
 											  PointerGetDatum(&nQueryValues),
 										   UInt16GetDatum(skey->sk_strategy),
@@ -418,7 +418,7 @@ vodkaendscan(PG_FUNCTION_ARGS)
 	IndexScanDesc scan = (IndexScanDesc) PG_GETARG_POINTER(0);
 	VodkaScanOpaque so = (VodkaScanOpaque) scan->opaque;
 
-	freeVodkaState(&so->vodkastate);
+	freeVodkaState(so->vodkastate);
 
 	freeScanKeys(so);
 

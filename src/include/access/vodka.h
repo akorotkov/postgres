@@ -12,6 +12,7 @@
 
 #include "access/xlog.h"
 #include "storage/block.h"
+#include "storage/relfilenode.h"
 #include "utils/relcache.h"
 
 
@@ -67,6 +68,7 @@ typedef struct VodkaStatsData
 	BlockNumber nDataPages;
 	int64		nEntries;
 	int32		vodkaVersion;
+	RelFileNode	entryTreeNode;
 } VodkaStatsData;
 
 /*

@@ -602,7 +602,7 @@ typedef struct vodkaxlogDeleteListPages
 
 /* vodkautil.c */
 extern Datum vodkaoptions(PG_FUNCTION_ARGS);
-extern void initVodkaState(VodkaState *state, Relation index);
+extern VodkaState *initVodkaState(Relation index);
 extern IndexScanDesc prepareEntryIndexScan(VodkaState *state, Oid operator, Datum value);
 extern void freeVodkaState(VodkaState *state);
 extern Buffer VodkaNewBuffer(Relation index);
@@ -860,7 +860,7 @@ typedef struct VodkaScanEntryData
 typedef struct VodkaScanOpaqueData
 {
 	MemoryContext tempCtx;
-	VodkaState	vodkastate;
+	VodkaState	*vodkastate;
 
 	VodkaScanKey	keys;			/* one per scan qualifier expr */
 	uint32		nkeys;

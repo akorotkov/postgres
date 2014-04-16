@@ -62,7 +62,7 @@ initEntryIndex(VodkaState *state, VodkaConfigOut *configOut)
 	entryIndex->rd_node = state->entryTreeNode;
 	entryIndex->rd_backend = state->index->rd_backend;
 	RelationOpenSmgr(entryIndex);
-	relationForm = (Form_pg_class) palloc(CLASS_TUPLE_SIZE);
+	relationForm = (Form_pg_class)MemoryContextAlloc(index->rd_indexcxt, CLASS_TUPLE_SIZE);
 	relationForm->relpersistence = index->rd_rel->relpersistence;
 	entryIndex->rd_rel = relationForm;
 	entryIndex->rd_islocaltemp = index->rd_islocaltemp;
@@ -89,7 +89,7 @@ initEntryIndex(VodkaState *state, VodkaConfigOut *configOut)
 	attr->attalign = tform->typalign;
 	ReleaseSysCache(tuple);
 
-	entryIndex->rd_indcollation = (Oid *)palloc(sizeof(Oid));
+	entryIndex->rd_indcollation = (Oid *)MemoryContextAlloc(index->rd_indexcxt, sizeof(Oid));
 	entryIndex->rd_indcollation[0] = DEFAULT_COLLATION_OID;
 
 	/*
@@ -99,7 +99,7 @@ initEntryIndex(VodkaState *state, VodkaConfigOut *configOut)
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for access method %u",
 				entryIndex->rd_rel->relam);
-	aform = (Form_pg_am)palloc(sizeof(*aform));
+	aform = (Form_pg_am)MemoryContextAlloc(index->rd_indexcxt, sizeof(*aform));
 	memcpy(aform, GETSTRUCT(tuple), sizeof *aform);
 	ReleaseSysCache(tuple);
 	entryIndex->rd_am = aform;
@@ -107,9 +107,9 @@ initEntryIndex(VodkaState *state, VodkaConfigOut *configOut)
 	nsupport = entryIndex->rd_am->amsupport;
 
 	entryIndex->rd_support = (RegProcedure *)
-		palloc0(nsupport * sizeof(RegProcedure));
+		MemoryContextAllocZero(index->rd_indexcxt, nsupport * sizeof(RegProcedure));
 	entryIndex->rd_supportinfo = (FmgrInfo *)
-		palloc0(nsupport * sizeof(FmgrInfo));
+		MemoryContextAllocZero(index->rd_indexcxt, nsupport * sizeof(FmgrInfo));
 
 	/* look up the info for this opclass, using a cache */
 	opcentry = LookupOpclassInfo(configOut->entryOpclass,
@@ -175,26 +175,26 @@ prepareEntryIndexScan(VodkaState *state, Oid operator, Datum value)
  *
  * Note: assorted subsidiary data is allocated in the CurrentMemoryContext.
  */
-void
-initVodkaState(VodkaState *state, Relation index)
+VodkaState *
+initVodkaState(Relation index)
 {
 	TupleDesc	origTupdesc = RelationGetDescr(index);
 	int			i;
-	Buffer		metabuffer;
-	Page		metapage;
-	VodkaMetaPageData *metadata;
 	VodkaConfigIn	configIn;
 	VodkaConfigOut	configOut;
+	VodkaStatsData	stats;
+	VodkaState	   *state;
 
-	MemSet(state, 0, sizeof(VodkaState));
+	if (index->rd_amcache != NULL)
+	{
+		state = (VodkaState *)index->rd_amcache;
+		return state;
+	}
+	state = MemoryContextAllocZero(index->rd_indexcxt, sizeof(VodkaState));
 
-	metabuffer = ReadBuffer(index, VODKA_METAPAGE_BLKNO);
-	LockBuffer(metabuffer, VODKA_SHARE);
-	metapage = BufferGetPage(metabuffer);
-	metadata = VodkaPageGetMeta(metapage);
-	state->entryTreeNode = metadata->entryTreeNode;
-	UnlockReleaseBuffer(metabuffer);
+	vodkaGetStats(index, &stats);
 
+	state->entryTreeNode = stats.entryTreeNode;
 	state->index = index;
 	state->oneCol = (origTupdesc->natts == 1) ? true : false;
 	state->origTupdesc = origTupdesc;
@@ -277,12 +277,13 @@ initVodkaState(VodkaState *state, Relation index)
 			PointerGetDatum(&configOut));
 	}
 	initEntryIndex(state, &configOut);
+	return state;
 }
 
 void
 freeVodkaState(VodkaState *state)
 {
-	RelationCloseSmgr(&state->entryTree);
+	//RelationCloseSmgr(&state->entryTree);
 }
 
 /*
@@ -728,6 +729,7 @@ vodkaGetStats(Relation index, VodkaStatsData *stats)
 	stats->nDataPages = metadata->nDataPages;
 	stats->nEntries = metadata->nEntries;
 	stats->vodkaVersion = metadata->vodkaVersion;
+	stats->entryTreeNode = metadata->entryTreeNode;
 
 	UnlockReleaseBuffer(metabuffer);
 }

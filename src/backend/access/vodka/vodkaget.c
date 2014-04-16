@@ -298,7 +298,7 @@ static void
 startScan(IndexScanDesc scan)
 {
 	VodkaScanOpaque so = (VodkaScanOpaque) scan->opaque;
-	VodkaState   *vodkastate = &so->vodkastate;
+	VodkaState   *vodkastate = so->vodkastate;
 	uint32		i;
 
 	for (i = 0; i < so->totalentries; i++)
@@ -961,7 +961,7 @@ scanGetItem(IndexScanDesc scan, ItemPointerData advancePast,
 			VodkaScanKey	key = so->keys + i;
 
 			/* Fetch the next item for this key that is > advancePast. */
-			keyGetItem(&so->vodkastate, so->tempCtx, key, advancePast);
+			keyGetItem(so->vodkastate, so->tempCtx, key, advancePast);
 
 			if (key->isFinished)
 				return false;
@@ -1296,7 +1296,7 @@ collectMatchesForHeapRow(IndexScanDesc scan, pendingPosition *pos)
 
 					itup = (IndexTuple) PageGetItem(page, PageGetItemId(page, StopMiddle));
 
-					attrnum = vodkatuple_get_attrnum(&so->vodkastate, itup);
+					attrnum = vodkatuple_get_attrnum(so->vodkastate, itup);
 
 					if (key->attnum < attrnum)
 					{
@@ -1312,7 +1312,7 @@ collectMatchesForHeapRow(IndexScanDesc scan, pendingPosition *pos)
 					if (datumExtracted[StopMiddle - 1] == false)
 					{
 						datum[StopMiddle - 1] =
-							vodkatuple_get_key(&so->vodkastate, itup,
+							vodkatuple_get_key(so->vodkastate, itup,
 											 &category[StopMiddle - 1]);
 						datumExtracted[StopMiddle - 1] = true;
 					}
@@ -1336,7 +1336,7 @@ collectMatchesForHeapRow(IndexScanDesc scan, pendingPosition *pos)
 					}
 					else
 					{
-						res = vodkaCompareEntries(&so->vodkastate,
+						res = vodkaCompareEntries(so->vodkastate,
 												entry->attnum,
 												entry->queryKey,
 												entry->queryCategory,

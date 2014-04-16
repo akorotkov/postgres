@@ -32,7 +32,7 @@
 
 typedef struct
 {
-	VodkaState	vodkastate;
+	VodkaState	*vodkastate;
 	double		indtuples;
 	VodkaStatsData buildStats;
 	MemoryContext tmpCtx;
@@ -509,7 +509,7 @@ vodkaBuildCallback(Relation index, HeapTuple htup, Datum *values,
 
 	oldCtx = MemoryContextSwitchTo(buildstate->tmpCtx);
 
-	for (i = 0; i < buildstate->vodkastate.origTupdesc->natts; i++)
+	for (i = 0; i < buildstate->vodkastate->origTupdesc->natts; i++)
 		vodkaHeapTupleBulkInsert(buildstate, (OffsetNumber) (i + 1),
 							   values[i], isnull[i],
 							   &htup->t_self);
@@ -529,7 +529,7 @@ vodkaBuildCallback(Relation index, HeapTuple htup, Datum *values,
 		{
 			/* there could be many entries, so be willing to abort here */
 			CHECK_FOR_INTERRUPTS();
-			vodkaEntryInsert(&buildstate->vodkastate, attnum, key, category,
+			vodkaEntryInsert(buildstate->vodkastate, attnum, key, category,
 						   list, nlist, &buildstate->buildStats);
 		}
 
@@ -605,16 +605,16 @@ vodkabuild(PG_FUNCTION_ARGS)
 	UnlockReleaseBuffer(RootBuffer);
 	END_CRIT_SECTION();
 
-	initVodkaState(&buildstate.vodkastate, index);
+	buildstate.vodkastate = initVodkaState(index);
 
-	RelationOpenSmgr(&buildstate.vodkastate.entryTree);
-	RelationCreateStorage(buildstate.vodkastate.entryTree.rd_node,
-			buildstate.vodkastate.entryTree.rd_rel->relpersistence);
+	RelationOpenSmgr(&buildstate.vodkastate->entryTree);
+	RelationCreateStorage(buildstate.vodkastate->entryTree.rd_node,
+			buildstate.vodkastate->entryTree.rd_rel->relpersistence);
 
 	stats = (IndexBuildResult *)
-		DatumGetPointer(OidFunctionCall3(buildstate.vodkastate.entryTree.rd_am->ambuild,
+		DatumGetPointer(OidFunctionCall3(buildstate.vodkastate->entryTree.rd_am->ambuild,
 						 PointerGetDatum(NULL),
-						 PointerGetDatum(&buildstate.vodkastate.entryTree),
+						 PointerGetDatum(&buildstate.vodkastate->entryTree),
 						 PointerGetDatum(NULL)));
 
 	buildstate.indtuples = 0;
@@ -639,7 +639,7 @@ vodkabuild(PG_FUNCTION_ARGS)
 											   ALLOCSET_DEFAULT_INITSIZE,
 											   ALLOCSET_DEFAULT_MAXSIZE);
 
-	buildstate.accum.vodkastate = &buildstate.vodkastate;
+	buildstate.accum.vodkastate = buildstate.vodkastate;
 	vodkaInitBA(&buildstate.accum);
 
 	/*
@@ -657,7 +657,7 @@ vodkabuild(PG_FUNCTION_ARGS)
 	{
 		/* there could be many entries, so be willing to abort here */
 		CHECK_FOR_INTERRUPTS();
-		vodkaEntryInsert(&buildstate.vodkastate, attnum, key, category,
+		vodkaEntryInsert(buildstate.vodkastate, attnum, key, category,
 					   list, nlist, &buildstate.buildStats);
 	}
 	MemoryContextSwitchTo(oldCtx);
@@ -678,7 +678,7 @@ vodkabuild(PG_FUNCTION_ARGS)
 	result->heap_tuples = reltuples;
 	result->index_tuples = buildstate.indtuples;
 
-	freeVodkaState(&buildstate.vodkastate);
+	freeVodkaState(buildstate.vodkastate);
 
 	PG_RETURN_POINTER(result);
 }
@@ -692,7 +692,7 @@ vodkabuildempty(PG_FUNCTION_ARGS)
 	Relation	index = (Relation) PG_GETARG_POINTER(0);
 	Buffer		RootBuffer,
 				MetaBuffer;
-	VodkaState	vodkastate;
+	VodkaState	*vodkastate;
 	IndexBuildResult *stats;
 	Oid			relnode;
 
@@ -719,23 +719,23 @@ vodkabuildempty(PG_FUNCTION_ARGS)
 	log_newpage_buffer(RootBuffer, false);
 	END_CRIT_SECTION();
 
-	initVodkaState(&vodkastate, index);
+	vodkastate = initVodkaState(index);
 
 	/* Unlock and release the buffers. */
 	UnlockReleaseBuffer(MetaBuffer);
 	UnlockReleaseBuffer(RootBuffer);
 
-	RelationOpenSmgr(&vodkastate.entryTree);
-	RelationCreateStorage(vodkastate.entryTree.rd_node,
-			vodkastate.entryTree.rd_rel->relpersistence);
+	RelationOpenSmgr(&vodkastate->entryTree);
+	RelationCreateStorage(vodkastate->entryTree.rd_node,
+			vodkastate->entryTree.rd_rel->relpersistence);
 
 	stats = (IndexBuildResult *)
-		DatumGetPointer(OidFunctionCall3(vodkastate.entryTree.rd_am->ambuild,
+		DatumGetPointer(OidFunctionCall3(vodkastate->entryTree.rd_am->ambuild,
 						 PointerGetDatum(NULL),
-						 PointerGetDatum(&vodkastate.entryTree),
+						 PointerGetDatum(&vodkastate->entryTree),
 						 PointerGetDatum(NULL)));
 
-	freeVodkaState(&vodkastate);
+	freeVodkaState(vodkastate);
 
 	PG_RETURN_VOID();
 }
@@ -774,7 +774,7 @@ vodkainsert(PG_FUNCTION_ARGS)
 	Relation	heapRel = (Relation) PG_GETARG_POINTER(4);
 	IndexUniqueCheck checkUnique = (IndexUniqueCheck) PG_GETARG_INT32(5);
 #endif
-	VodkaState	vodkastate;
+	VodkaState	*vodkastate;
 	MemoryContext oldCtx;
 	MemoryContext insertCtx;
 	int			i;
@@ -787,7 +787,7 @@ vodkainsert(PG_FUNCTION_ARGS)
 
 	oldCtx = MemoryContextSwitchTo(insertCtx);
 
-	initVodkaState(&vodkastate, index);
+	vodkastate = initVodkaState(index);
 
 	/*if (VodkaGetUseFastUpdate(index))
 	{
@@ -805,13 +805,13 @@ vodkainsert(PG_FUNCTION_ARGS)
 	}
 	else
 	{*/
-		for (i = 0; i < vodkastate.origTupdesc->natts; i++)
-			vodkaHeapTupleInsert(&vodkastate, (OffsetNumber) (i + 1),
+		for (i = 0; i < vodkastate->origTupdesc->natts; i++)
+			vodkaHeapTupleInsert(vodkastate, (OffsetNumber) (i + 1),
 							   values[i], isnull[i],
 							   ht_ctid);
 	/*}*/
 
-	freeVodkaState(&vodkastate);
+	freeVodkaState(vodkastate);
 	MemoryContextSwitchTo(oldCtx);
 	MemoryContextDelete(insertCtx);
 
