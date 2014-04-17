@@ -76,13 +76,12 @@ directBoolConsistentFn(VodkaScanKey key)
 	 */
 	key->recheckCurItem = true;
 
-	return DatumGetBool(FunctionCall7Coll(key->consistentFmgrInfo,
+	return DatumGetBool(FunctionCall6Coll(key->consistentFmgrInfo,
 										  key->collation,
 										  PointerGetDatum(key->entryRes),
 										  UInt16GetDatum(key->strategy),
 										  key->query,
 										  UInt32GetDatum(key->nuserentries),
-										  PointerGetDatum(key->extra_data),
 									   PointerGetDatum(&key->recheckCurItem),
 										  PointerGetDatum(key->queryValues)));
 }
@@ -93,14 +92,13 @@ directBoolConsistentFn(VodkaScanKey key)
 static VodkaTernaryValue
 directTriConsistentFn(VodkaScanKey key)
 {
-	return DatumGetVodkaTernaryValue(FunctionCall6Coll(
+	return DatumGetVodkaTernaryValue(FunctionCall5Coll(
 									   key->triConsistentFmgrInfo,
 									   key->collation,
 									   PointerGetDatum(key->entryRes),
 									   UInt16GetDatum(key->strategy),
 									   key->query,
 									   UInt32GetDatum(key->nuserentries),
-									   PointerGetDatum(key->extra_data),
 									   PointerGetDatum(key->queryValues)));
 }
 
@@ -113,14 +111,13 @@ static bool
 shimBoolConsistentFn(VodkaScanKey key)
 {
 	VodkaTernaryValue result;
-	result = DatumGetVodkaTernaryValue(FunctionCall6Coll(
+	result = DatumGetVodkaTernaryValue(FunctionCall5Coll(
 										 key->triConsistentFmgrInfo,
 										 key->collation,
 										 PointerGetDatum(key->entryRes),
 										 UInt16GetDatum(key->strategy),
 										 key->query,
 										 UInt32GetDatum(key->nuserentries),
-										 PointerGetDatum(key->extra_data),
 										 PointerGetDatum(key->queryValues)));
 	if (result == VODKA_MAYBE)
 	{

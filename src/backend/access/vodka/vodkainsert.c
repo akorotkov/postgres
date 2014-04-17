@@ -282,14 +282,12 @@ updatePostingList(VodkaState *vodkastate, ItemPointer iptr,
 	VodkaPostingList *postinglist;
 	ItemPointerData	*oldItems, *newItems;
 	int				oldNPosting, newNPosting, nwritten;
-	ItemId			itemid;
 
 	buffer = ReadBuffer(vodkastate->index, blkno);
 	LockBuffer(buffer, VODKA_EXCLUSIVE);
 	page = BufferGetPage(buffer);
 
 	postinglist = (VodkaPostingList *)PageGetItem(page, PageGetItemId(page, offset));
-	itemid = PageGetItemId(page, offset);
 	if (postinglist->first.ip_posid == 0xFFFF)
 	{
 		elog(NOTICE, "update nested posting tree");

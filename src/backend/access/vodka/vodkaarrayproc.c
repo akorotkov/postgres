@@ -150,12 +150,8 @@ vodkaarrayconsistent(PG_FUNCTION_ARGS)
 
 	/* ArrayType  *query = PG_GETARG_ARRAYTYPE_P(2); */
 	int32		nkeys = PG_GETARG_INT32(3);
-
-	/* Pointer	   *extra_data = (Pointer *) PG_GETARG_POINTER(4); */
-	bool	   *recheck = (bool *) PG_GETARG_POINTER(5);
-
-	/* Datum	   *queryKeys = (Datum *) PG_GETARG_POINTER(6); */
-	bool	   *nullFlags = (bool *) PG_GETARG_POINTER(7);
+	bool	   *recheck = (bool *) PG_GETARG_POINTER(4);
+	VodkaKey   *queryKeys = (VodkaKey *) PG_GETARG_POINTER(5);
 	bool		res;
 	int32		i;
 
@@ -168,7 +164,7 @@ vodkaarrayconsistent(PG_FUNCTION_ARGS)
 			res = false;
 			for (i = 0; i < nkeys; i++)
 			{
-				if (check[i] && !nullFlags[i])
+				if (check[i] && !queryKeys[i].isnull)
 				{
 					res = true;
 					break;
@@ -182,7 +178,7 @@ vodkaarrayconsistent(PG_FUNCTION_ARGS)
 			res = true;
 			for (i = 0; i < nkeys; i++)
 			{
-				if (!check[i] || nullFlags[i])
+				if (!check[i] || queryKeys[i].isnull)
 				{
 					res = false;
 					break;
@@ -236,8 +232,7 @@ vodkaarraytriconsistent(PG_FUNCTION_ARGS)
 	int32		nkeys = PG_GETARG_INT32(3);
 
 	/* Pointer	   *extra_data = (Pointer *) PG_GETARG_POINTER(4); */
-	/* Datum	   *queryKeys = (Datum *) PG_GETARG_POINTER(5); */
-	bool	   *nullFlags = (bool *) PG_GETARG_POINTER(6);
+	VodkaKey   *queryKeys = (VodkaKey *) PG_GETARG_POINTER(4);
 	VodkaTernaryValue res;
 	int32		i;
 
@@ -248,7 +243,7 @@ vodkaarraytriconsistent(PG_FUNCTION_ARGS)
 			res = VODKA_FALSE;
 			for (i = 0; i < nkeys; i++)
 			{
-				if (!nullFlags[i])
+				if (!queryKeys[i].isnull)
 				{
 					if (check[i] == VODKA_TRUE)
 					{
@@ -267,7 +262,7 @@ vodkaarraytriconsistent(PG_FUNCTION_ARGS)
 			res = VODKA_TRUE;
 			for (i = 0; i < nkeys; i++)
 			{
-				if (check[i] == VODKA_FALSE || nullFlags[i])
+				if (check[i] == VODKA_FALSE || queryKeys[i].isnull)
 				{
 					res = VODKA_FALSE;
 					break;

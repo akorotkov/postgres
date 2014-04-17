@@ -100,6 +100,46 @@ scanPostingTree(Relation index, VodkaScanEntry scanEntry,
 	UnlockReleaseBuffer(buffer);
 }
 
+static void
+readPostingList(VodkaState *vodkastate, VodkaScanEntry entry,
+		ItemPointer iptr, BlockNumber *blkno)
+{
+	Buffer	buffer;
+	Page	page;
+	VodkaPostingList *postinglist;
+
+	buffer = ReadBuffer(vodkastate->index, ItemPointerGetBlockNumber(iptr));
+	LockBuffer(buffer, VODKA_EXCLUSIVE);
+	page = BufferGetPage(buffer);
+
+	postinglist = (VodkaPostingList *)PageGetItem(page,
+			PageGetItemId(page, ItemPointerGetOffsetNumber(iptr)));
+	if (postinglist->first.ip_posid == 0xFFFF)
+	{
+		*blkno = ItemPointerGetBlockNumber(&postinglist->first);
+	}
+	else
+	{
+		ItemPointerData *items;
+		int nitems;
+
+		items = vodkaPostingListDecode(postinglist, &nitems);
+
+		if (entry->matchBitmap)
+		{
+			tbm_add_tuples(entry->matchBitmap, items, nitems, false);
+		}
+		else
+		{
+			Assert(entry->list == NULL);
+			entry->list = items;
+			entry->nlist = nitems;
+		}
+	}
+
+	UnlockReleaseBuffer(buffer);
+}
+
 /*
  * Start* functions setup beginning state of searches: finds correct buffer and pins it.
  */
@@ -108,7 +148,7 @@ startScanEntry(VodkaState *vodkastate, VodkaScanEntry entry)
 {
 	IndexScanDesc	scanDesc;
 	bool		found;
-	BlockNumber postingRoot;
+	BlockNumber postingRoot = InvalidBlockNumber;
 
 	entry->buffer = InvalidBuffer;
 	ItemPointerSetMin(&entry->curItem);
@@ -133,7 +173,14 @@ startScanEntry(VodkaState *vodkastate, VodkaScanEntry entry)
 		return;
 	}
 
-	postingRoot = ItemPointerGetBlockNumber(&scanDesc->xs_ctup.t_self);
+	if (scanDesc->xs_ctup.t_self.ip_posid == 0xFFFF)
+	{
+		postingRoot = ItemPointerGetBlockNumber(&scanDesc->xs_ctup.t_self);
+	}
+	else
+	{
+		readPostingList(vodkastate, entry, &scanDesc->xs_ctup.t_self, &postingRoot);
+	}
 
 	found =	DatumGetBool(OidFunctionCall2(vodkastate->entryTree.rd_am->amgettuple,
 						 PointerGetDatum(scanDesc),
@@ -146,50 +193,78 @@ startScanEntry(VodkaState *vodkastate, VodkaScanEntry entry)
 
 		OidFunctionCall1(vodkastate->entryTree.rd_am->amendscan, PointerGetDatum(scanDesc));
 
-		stack = vodkaScanBeginPostingTree(&entry->btree, vodkastate->index,
-													postingRoot);
-		entry->buffer = stack->buffer;
+		if (BlockNumberIsValid(postingRoot))
+		{
+			stack = vodkaScanBeginPostingTree(&entry->btree, vodkastate->index,
+														postingRoot);
+			entry->buffer = stack->buffer;
 
-		/*
-		 * We keep buffer pinned because we need to prevent deletion of
-		 * page during scan. See VODKA's vacuum implementation. RefCount is
-		 * increased to keep buffer pinned after freeVodkaBtreeStack() call.
-		 */
-		IncrBufferRefCount(entry->buffer);
+			/*
+			 * We keep buffer pinned because we need to prevent deletion of
+			 * page during scan. See VODKA's vacuum implementation. RefCount is
+			 * increased to keep buffer pinned after freeVodkaBtreeStack() call.
+			 */
+			IncrBufferRefCount(entry->buffer);
 
-		page = BufferGetPage(entry->buffer);
+			page = BufferGetPage(entry->buffer);
 
-		/*
-		 * Load the first page into memory.
-		 */
-		ItemPointerSetMin(&minItem);
-		entry->list = VodkaDataLeafPageGetItems(page, &entry->nlist, minItem);
+			/*
+			 * Load the first page into memory.
+			 */
+			ItemPointerSetMin(&minItem);
+			entry->list = VodkaDataLeafPageGetItems(page, &entry->nlist, minItem);
 
-		entry->predictNumberResult = stack->predictNumber * entry->nlist;
+			entry->predictNumberResult = stack->predictNumber * entry->nlist;
 
-		LockBuffer(entry->buffer, VODKA_UNLOCK);
-		freeVodkaBtreeStack(stack);
+			LockBuffer(entry->buffer, VODKA_UNLOCK);
+			freeVodkaBtreeStack(stack);
+		}
 		entry->isFinished = FALSE;
 		return;
+	}
+	else
+	{
+		if (entry->list)
+		{
+			tbm_add_tuples(entry->matchBitmap, entry->list, entry->nlist, false);
+			entry->list = NULL;
+			entry->nlist = 0;
+		}
+		if (BlockNumberIsValid(postingRoot))
+		{
+			scanPostingTree(vodkastate->index, entry, postingRoot);
+		}
 	}
 
 	entry->matchBitmap = tbm_create(work_mem * 1024L);
 
 	do {
-		postingRoot = ItemPointerGetBlockNumber(&scanDesc->xs_ctup.t_self);
 
-		scanPostingTree(vodkastate->index, entry, postingRoot);
-
-		if (entry->matchBitmap && !tbm_is_empty(entry->matchBitmap))
+		if (scanDesc->xs_ctup.t_self.ip_posid == 0xFFFF)
 		{
-			entry->matchIterator = tbm_begin_iterate(entry->matchBitmap);
-			entry->isFinished = FALSE;
+			postingRoot = ItemPointerGetBlockNumber(&scanDesc->xs_ctup.t_self);
 		}
+		else
+		{
+			postingRoot = InvalidBlockNumber;
+			readPostingList(vodkastate, entry, &scanDesc->xs_ctup.t_self, &postingRoot);
+		}
+		if (BlockNumberIsValid(postingRoot))
+		{
+			scanPostingTree(vodkastate->index, entry, postingRoot);
+		}
+
 		found =	DatumGetBool(OidFunctionCall2(vodkastate->entryTree.rd_am->amgettuple,
 							 PointerGetDatum(scanDesc),
 							 Int32GetDatum(ForwardScanDirection)));
 	} while (found);
 	OidFunctionCall1(vodkastate->entryTree.rd_am->amendscan, PointerGetDatum(scanDesc));
+
+	if (entry->matchBitmap && !tbm_is_empty(entry->matchBitmap))
+	{
+		entry->matchIterator = tbm_begin_iterate(entry->matchBitmap);
+		entry->isFinished = FALSE;
+	}
 }
 
 /*
