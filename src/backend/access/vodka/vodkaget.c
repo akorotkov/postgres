@@ -161,15 +161,15 @@ startScanEntry(VodkaState *vodkastate, VodkaScanEntry entry)
 	entry->predictNumberResult = 0;
 	entry->isFinished = TRUE;
 
-	scanDesc = prepareEntryIndexScan(vodkastate,
-											entry->operator, entry->queryKey);
+	prepareEntryIndexScan(vodkastate, entry->operator, entry->queryKey);
+	scanDesc = vodkastate->entryScan;
 
 	found =	DatumGetBool(OidFunctionCall2(vodkastate->entryTree.rd_am->amgettuple,
 						 PointerGetDatum(scanDesc),
 						 Int32GetDatum(ForwardScanDirection)));
 	if  (!found)
 	{
-		OidFunctionCall1(vodkastate->entryTree.rd_am->amendscan, PointerGetDatum(scanDesc));
+		//OidFunctionCall1(vodkastate->entryTree.rd_am->amendscan, PointerGetDatum(scanDesc));
 		return;
 	}
 
@@ -191,7 +191,7 @@ startScanEntry(VodkaState *vodkastate, VodkaScanEntry entry)
 		Page		page;
 		ItemPointerData minItem;
 
-		OidFunctionCall1(vodkastate->entryTree.rd_am->amendscan, PointerGetDatum(scanDesc));
+		//OidFunctionCall1(vodkastate->entryTree.rd_am->amendscan, PointerGetDatum(scanDesc));
 
 		if (BlockNumberIsValid(postingRoot))
 		{
@@ -258,7 +258,7 @@ startScanEntry(VodkaState *vodkastate, VodkaScanEntry entry)
 							 PointerGetDatum(scanDesc),
 							 Int32GetDatum(ForwardScanDirection)));
 	} while (found);
-	OidFunctionCall1(vodkastate->entryTree.rd_am->amendscan, PointerGetDatum(scanDesc));
+	//OidFunctionCall1(vodkastate->entryTree.rd_am->amendscan, PointerGetDatum(scanDesc));
 
 	if (entry->matchBitmap && !tbm_is_empty(entry->matchBitmap))
 	{

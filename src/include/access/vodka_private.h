@@ -362,9 +362,12 @@ typedef struct VodkaState
 	RelFileNode	entryTreeNode;
 	RelationData entryTree;
 	Oid			entryTreeOpFamily;
-	IndexScanDesc	entryEqualScan;
 	Oid			entryEqualOperator;
 	VodkaLastUsedPage postingListLUP;
+
+	IndexScanDesc	entryScan;
+	ScanKeyData		entryScanKey;
+	Oid				entryScanOperator;
 } VodkaState;
 
 
@@ -605,7 +608,7 @@ typedef struct vodkaxlogDeleteListPages
 /* vodkautil.c */
 extern Datum vodkaoptions(PG_FUNCTION_ARGS);
 extern VodkaState *initVodkaState(Relation index);
-extern IndexScanDesc prepareEntryIndexScan(VodkaState *state, Oid operator, Datum value);
+extern void prepareEntryIndexScan(VodkaState *state, Oid operator, Datum value);
 extern void freeVodkaState(VodkaState *state);
 extern Buffer VodkaNewBuffer(Relation index);
 extern void VodkaInitBuffer(Buffer b, uint32 f);

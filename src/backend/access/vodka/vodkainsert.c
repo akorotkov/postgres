@@ -409,10 +409,9 @@ vodkaEntryInsert(VodkaState *vodkastate,
 	vodkaInsertValue(&btree, stack, &insertdata, buildStats);
 #endif
 
-	vodkastate->entryEqualScan = prepareEntryIndexScan(vodkastate,
-			vodkastate->entryEqualOperator, key);
+	prepareEntryIndexScan(vodkastate, vodkastate->entryEqualOperator, key);
 
-	equalScan = vodkastate->entryEqualScan;
+	equalScan = vodkastate->entryScan;
 
 	found =	DatumGetBool(OidFunctionCall2(vodkastate->entryTree.rd_am->amgettuple,
 						 PointerGetDatum(equalScan),
@@ -421,8 +420,8 @@ vodkaEntryInsert(VodkaState *vodkastate,
 	if (found)
 		iptr = equalScan->xs_ctup.t_self;
 
-	OidFunctionCall1(vodkastate->entryTree.rd_am->amendscan,
-						 PointerGetDatum(equalScan));
+	/*OidFunctionCall1(vodkastate->entryTree.rd_am->amendscan,
+						 PointerGetDatum(equalScan));*/
 
 	if (found)
 	{

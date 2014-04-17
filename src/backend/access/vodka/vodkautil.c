@@ -121,44 +121,58 @@ initEntryIndex(VodkaState *state, VodkaConfigOut *configOut)
 	state->entryEqualOperator = configOut->entryEqualOperator;
 }
 
-IndexScanDesc
+void
 prepareEntryIndexScan(VodkaState *state, Oid operator, Datum value)
 {
 	IndexScanDesc scanDesc;
-	ScanKey key =  (ScanKey)palloc0(sizeof(ScanKeyData));
+	ScanKey key;
 	HeapTuple	tp;
 	Form_pg_amop amop_tup;
 	Form_pg_operator operator_tup;
 
-	scanDesc = (IndexScanDesc)DatumGetPointer(OidFunctionCall3(state->entryTree.rd_am->ambeginscan,
-					 PointerGetDatum(&state->entryTree),
-					 Int32GetDatum(1),
-					 Int32GetDatum(0)));
+	if (state->entryScan)
+	{
+		scanDesc = state->entryScan;
+	}
+	else
+	{
+		scanDesc = (IndexScanDesc)DatumGetPointer(OidFunctionCall3(state->entryTree.rd_am->ambeginscan,
+						 PointerGetDatum(&state->entryTree),
+						 Int32GetDatum(1),
+						 Int32GetDatum(0)));
+		state->entryScan = scanDesc;
+	}
 
+	key = &state->entryScanKey;
 	key->sk_argument = value;
-	key->sk_attno = 1;
-	key->sk_collation = DEFAULT_COLLATION_OID;
+	if (state->entryScanOperator != operator)
+	{
+		key->sk_attno = 1;
+		key->sk_collation = DEFAULT_COLLATION_OID;
 
-	tp = SearchSysCache1(OPEROID,
-						 ObjectIdGetDatum(operator));
-	if (!HeapTupleIsValid(tp))
-		elog(ERROR, "%u operator doesn't exist",
-				operator);
-	operator_tup = (Form_pg_operator) GETSTRUCT(tp);
-	key->sk_subtype = operator_tup->oprright;
-	fmgr_info(operator_tup->oprcode, &key->sk_func);
-	ReleaseSysCache(tp);
+		tp = SearchSysCache1(OPEROID,
+							 ObjectIdGetDatum(operator));
+		if (!HeapTupleIsValid(tp))
+			elog(ERROR, "%u operator doesn't exist",
+					operator);
+		operator_tup = (Form_pg_operator) GETSTRUCT(tp);
+		key->sk_subtype = operator_tup->oprright;
+		fmgr_info(operator_tup->oprcode, &key->sk_func);
+		ReleaseSysCache(tp);
 
-	tp = SearchSysCache3(AMOPOPID,
-						 ObjectIdGetDatum(operator),
-						 CharGetDatum(AMOP_SEARCH),
-						 ObjectIdGetDatum(state->entryTreeOpFamily));
-	if (!HeapTupleIsValid(tp))
-		elog(ERROR, "%u operator is not in %u opfamily",
-				operator, state->entryTreeOpFamily);
-	amop_tup = (Form_pg_amop) GETSTRUCT(tp);
-	key->sk_strategy = amop_tup->amopstrategy;
-	ReleaseSysCache(tp);
+		tp = SearchSysCache3(AMOPOPID,
+							 ObjectIdGetDatum(operator),
+							 CharGetDatum(AMOP_SEARCH),
+							 ObjectIdGetDatum(state->entryTreeOpFamily));
+		if (!HeapTupleIsValid(tp))
+			elog(ERROR, "%u operator is not in %u opfamily",
+					operator, state->entryTreeOpFamily);
+		amop_tup = (Form_pg_amop) GETSTRUCT(tp);
+		key->sk_strategy = amop_tup->amopstrategy;
+		ReleaseSysCache(tp);
+
+		state->entryScanOperator = operator;
+	}
 
 	OidFunctionCall5(state->entryTree.rd_am->amrescan,
 					 PointerGetDatum(scanDesc),
@@ -167,7 +181,6 @@ prepareEntryIndexScan(VodkaState *state, Oid operator, Datum value)
 					 PointerGetDatum(NULL),
 					 Int32GetDatum(0));
 
-	return scanDesc;
 }
 
 /*
