@@ -1179,12 +1179,12 @@ extern Datum ginqueryarrayextract(PG_FUNCTION_ARGS);
 extern Datum ginarrayconsistent(PG_FUNCTION_ARGS);
 extern Datum ginarraytriconsistent(PG_FUNCTION_ARGS);
 
-/* access/vodka/vodkaarrayproc.c */
-extern Datum vodkaarrayconfig(PG_FUNCTION_ARGS);
-extern Datum vodkaarrayextract(PG_FUNCTION_ARGS);
-extern Datum vodkaqueryarrayextract(PG_FUNCTION_ARGS);
-extern Datum vodkaarrayconsistent(PG_FUNCTION_ARGS);
-extern Datum vodkaarraytriconsistent(PG_FUNCTION_ARGS);
+/* access/vodka/vodkajsonbproc.c */
+extern Datum vodkajsonbconfig(PG_FUNCTION_ARGS);
+extern Datum vodkajsonbextract(PG_FUNCTION_ARGS);
+extern Datum vodkaqueryjsonbextract(PG_FUNCTION_ARGS);
+extern Datum vodkajsonbconsistent(PG_FUNCTION_ARGS);
+extern Datum vodkajsonbtriconsistent(PG_FUNCTION_ARGS);
 
 /* access/transam/twophase.c */
 extern Datum pg_prepared_xact(PG_FUNCTION_ARGS);
