@@ -153,6 +153,7 @@ DATA(insert OID = 4034 (	405		jsonb_ops		PGNSP PGUID ));
 DATA(insert OID = 4035 (	783		jsonb_ops		PGNSP PGUID ));
 DATA(insert OID = 4036 (	2742	jsonb_ops		PGNSP PGUID ));
 DATA(insert OID = 4037 (	2742	jsonb_hash_ops	PGNSP PGUID ));
+DATA(insert OID = 5052 (	5033	jsonb_ops	PGNSP PGUID ));
 #define TEXT_SPGIST_FAM_OID 4017
 
 #endif   /* PG_OPFAMILY_H */

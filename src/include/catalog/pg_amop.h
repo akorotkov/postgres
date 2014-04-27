@@ -833,4 +833,9 @@ DATA(insert (	3550	869 869 25 s	932 783 0 ));
 DATA(insert (	3550	869 869 26 s	933 783 0 ));
 DATA(insert (	3550	869 869 27 s	934 783 0 ));
 
+/*
+ * VODKA jsonb ops
+ */
+DATA(insert (	5052   3802 3802 7 s 3246 2742 0 ));
+
 #endif   /* PG_AMOP_H */

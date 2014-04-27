@@ -137,10 +137,6 @@ static void dump_var(const char *str, NumericVar *var);
 
 #define init_var(v)		MemSetAligned(v, 0, sizeof(NumericVar))
 
-#define NUMERIC_DIGITS(num) (NUMERIC_IS_SHORT(num) ? \
-	(num)->choice.n_short.n_data : (num)->choice.n_long.n_data)
-#define NUMERIC_NDIGITS(num) \
-	((VARSIZE(num) - NUMERIC_HEADER_SIZE(num)) / sizeof(NumericDigit))
 #define NUMERIC_CAN_BE_SHORT(scale,weight) \
 	((scale) <= NUMERIC_SHORT_DSCALE_MAX && \
 	(weight) <= NUMERIC_SHORT_WEIGHT_MAX && \

@@ -284,4 +284,9 @@ typedef struct NumericVar
 	NumericDigit *digits;		/* base-NBASE digits */
 } NumericVar;
 
+#define NUMERIC_DIGITS(num) (NUMERIC_IS_SHORT(num) ? \
+	(num)->choice.n_short.n_data : (num)->choice.n_long.n_data)
+#define NUMERIC_NDIGITS(num) \
+	((VARSIZE(num) - NUMERIC_HEADER_SIZE(num)) / sizeof(NumericDigit))
+
 #endif   /* _PG_NUMERIC_H_ */

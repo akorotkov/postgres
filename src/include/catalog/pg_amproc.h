@@ -429,4 +429,12 @@ DATA(insert (	4017   25 25 3 4029 ));
 DATA(insert (	4017   25 25 4 4030 ));
 DATA(insert (	4017   25 25 5 4031 ));
 
+/* vodka */
+DATA(insert (	5052   3802 3802 1 5047 ));
+DATA(insert (	5052   3802 3802 2 1954 ));
+DATA(insert (	5052   3802 3802 3 5048 ));
+DATA(insert (	5052   3802 3802 4 5049 ));
+DATA(insert (	5052   3802 3802 5 5050 ));
+DATA(insert (	5052   3802 3802 6 5051 ));
+
 #endif   /* PG_AMPROC_H */

@@ -4082,15 +4082,15 @@ DATA(insert OID = 5046 (  vodkaoptions	   PGNSP PGUID 12 1 0 0 0 f f f f t f s 2
 DESCR("vodka(internal)");
 
 /* VODKA array support */
-DATA(insert OID = 5047 (  vodkaarrayconfig	 PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 2278 "2281 2281" _null_ _null_ _null_ _null_ vodkaarrayconfig _null_ _null_ _null_ ));
+DATA(insert OID = 5047 (  vodkajsonbconfig	 PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 2278 "2281 2281" _null_ _null_ _null_ _null_ vodkajsonbconfig _null_ _null_ _null_ ));
 DESCR("VODKA array support");
-DATA(insert OID = 5048 (  vodkaarrayextract	 PGNSP PGUID 12 1 0 0 0 f f f f t f i 3 0 2281 "2277 2281 2281" _null_ _null_ _null_ _null_ vodkaarrayextract _null_ _null_ _null_ ));
+DATA(insert OID = 5048 (  vodkajsonbextract	 PGNSP PGUID 12 1 0 0 0 f f f f t f i 3 0 2281 "2277 2281 2281" _null_ _null_ _null_ _null_ vodkajsonbextract _null_ _null_ _null_ ));
 DESCR("VODKA array support");
-DATA(insert OID = 5049 (  vodkaqueryarrayextract	PGNSP PGUID 12 1 0 0 0 f f f f t f i 4 0 2281 "2277 2281 21 2281" _null_ _null_ _null_ _null_ vodkaqueryarrayextract _null_ _null_ _null_ ));
+DATA(insert OID = 5049 (  vodkaqueryjsonbextract	PGNSP PGUID 12 1 0 0 0 f f f f t f i 4 0 2281 "2277 2281 21 2281" _null_ _null_ _null_ _null_ vodkaqueryjsonbextract _null_ _null_ _null_ ));
 DESCR("VODKA array support");
-DATA(insert OID = 5050 (  vodkaarrayconsistent	PGNSP PGUID 12 1 0 0 0 f f f f t f i 7 0 16 "2281 21 2277 23 2281 2281 2281" _null_ _null_ _null_ _null_ vodkaarrayconsistent _null_ _null_ _null_ ));
+DATA(insert OID = 5050 (  vodkajsonbconsistent	PGNSP PGUID 12 1 0 0 0 f f f f t f i 7 0 16 "2281 21 2277 23 2281 2281 2281" _null_ _null_ _null_ _null_ vodkajsonbconsistent _null_ _null_ _null_ ));
 DESCR("VODKA array support");
-DATA(insert OID = 5051 (  vodkaarraytriconsistent	PGNSP PGUID 12 1 0 0 0 f f f f t f i 6 0 16 "2281 21 2277 23 2281 2281" _null_ _null_ _null_ _null_ vodkaarraytriconsistent _null_ _null_ _null_ ));
+DATA(insert OID = 5051 (  vodkajsonbtriconsistent	PGNSP PGUID 12 1 0 0 0 f f f f t f i 6 0 16 "2281 21 2277 23 2281 2281" _null_ _null_ _null_ _null_ vodkajsonbtriconsistent _null_ _null_ _null_ ));
 DESCR("VODKA array support");
 
 

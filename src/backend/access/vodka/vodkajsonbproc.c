@@ -22,11 +22,6 @@
 #include "utils/numeric.h"
 #include "utils/lsyscache.h"
 
-#define VodkaOverlapStrategy	1
-#define VodkaContainsStrategy	2
-#define VodkaContainedStrategy	3
-#define VodkaEqualStrategy		4
-
 #define JSONB_VODKA_FLAG_VALUE		0x01
 
 #define JSONB_VODKA_FLAG_NULL		0x00
@@ -136,13 +131,13 @@ get_vodka_key(PathStack *stack, const JsonbValue *val)
 			vallen = 1;
 			break;
 		case jbvString:
-			vallen = val->string.len + 1;
+			vallen = val->val.string.len + 1;
 			break;
 		case jbvNumeric:
-			if (NUMERIC_IS_NAN(val->numeric))
+			if (NUMERIC_IS_NAN(val->val.numeric))
 				vallen = 1;
 			else
-				vallen = get_ndigits(val->numeric) + 5;
+				vallen = get_ndigits(val->val.numeric) + 5;
 			break;
 		default:
 			elog(ERROR, "invalid jsonb scalar type");
@@ -179,16 +174,16 @@ get_vodka_key(PathStack *stack, const JsonbValue *val)
 			break;
 		case jbvBool:
 			*ptr = JSONB_VODKA_FLAG_VALUE | JSONB_VODKA_FLAG_BOOL;
-			if (val->boolean)
+			if (val->val.boolean)
 				*ptr |= JSONB_VODKA_FLAG_TRUE;
 			break;
 		case jbvString:
 			*ptr = JSONB_VODKA_FLAG_VALUE | JSONB_VODKA_FLAG_STRING;
-			memcpy(ptr + 1, val->string.val, val->string.len);
+			memcpy(ptr + 1, val->val.string.val, val->val.string.len);
 			break;
 		case jbvNumeric:
 			*ptr = JSONB_VODKA_FLAG_VALUE | JSONB_VODKA_FLAG_STRING;
-			write_numeric_key(ptr, val->numeric);
+			write_numeric_key(ptr, val->val.numeric);
 			break;
 		default:
 			elog(ERROR, "invalid jsonb scalar type");
@@ -246,8 +241,8 @@ vodkajsonbextract(PG_FUNCTION_ARGS)
 				break;
 			case WJB_KEY:
 				/* Initialize hash from parent */
-				stack->s = v.string.val;
-				stack->len = v.string.len;
+				stack->s = v.val.string.val;
+				stack->len = v.val.string.len;
 				break;
 			case WJB_ELEM:
 			case WJB_VALUE:
@@ -281,6 +276,7 @@ vodkaqueryjsonbextract(PG_FUNCTION_ARGS)
 	int32	   *searchMode = (int32 *) PG_GETARG_POINTER(3);
 	Datum	   *entries;
 	VodkaKey   *keys;
+	int			i;
 
 	if (strategy != JsonbContainsStrategyNumber)
 		elog(ERROR, "unrecognized strategy number: %d", strategy);
