@@ -4979,6 +4979,17 @@ DESCR("SP-GiST support for radix tree over text");
 DATA(insert OID = 4031 (  spg_text_leaf_consistent	PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 16 "2281 2281" _null_ _null_ _null_ _null_  spg_text_leaf_consistent _null_ _null_ _null_ ));
 DESCR("SP-GiST support for radix tree over text");
 
+DATA(insert OID = 5053 (  spg_bytea_config	PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 2278 "2281 2281" _null_ _null_ _null_ _null_  spg_bytea_config _null_ _null_ _null_ ));
+DESCR("SP-GiST support for radix tree over bytea");
+DATA(insert OID = 5054 (  spg_bytea_choose	PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 2278 "2281 2281" _null_ _null_ _null_ _null_  spg_bytea_choose _null_ _null_ _null_ ));
+DESCR("SP-GiST support for radix tree over bytea");
+DATA(insert OID = 5055 (  spg_bytea_picksplit	PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 2278 "2281 2281" _null_ _null_ _null_ _null_  spg_bytea_picksplit _null_ _null_ _null_ ));
+DESCR("SP-GiST support for radix tree over bytea");
+DATA(insert OID = 5056 (  spg_bytea_inner_consistent PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 2278 "2281 2281" _null_ _null_ _null_ _null_  spg_bytea_inner_consistent _null_ _null_ _null_ ));
+DESCR("SP-GiST support for radix tree over bytea");
+DATA(insert OID = 5057 (  spg_bytea_leaf_consistent	PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 16 "2281 2281" _null_ _null_ _null_ _null_  spg_bytea_leaf_consistent _null_ _null_ _null_ ));
+DESCR("SP-GiST support for radix tree over bytea");
+
 DATA(insert OID = 3469 (  spg_range_quad_config PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 2278 "2281 2281" _null_ _null_ _null_ _null_  spg_range_quad_config _null_ _null_ _null_ ));
 DESCR("SP-GiST support for quad tree over range");
 DATA(insert OID = 3470 (  spg_range_quad_choose PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 2278 "2281 2281" _null_ _null_ _null_ _null_  spg_range_quad_choose _null_ _null_ _null_ ));

@@ -250,7 +250,9 @@ replacePostingList(VodkaState *vodkastate, Buffer buffer, Page page,
 	BlockNumber postingRoot;
 	OffsetNumber placed;
 
+#ifdef DEBUG_LOG
 	elog(NOTICE, "create nested posting tree");
+#endif
 
 	postingRoot = vodkaCreatePostingTree(vodkastate->index, items,
 			nitem, buildStats);
@@ -290,7 +292,9 @@ updatePostingList(VodkaState *vodkastate, ItemPointer iptr,
 	postinglist = (VodkaPostingList *)PageGetItem(page, PageGetItemId(page, offset));
 	if (postinglist->first.ip_posid == 0xFFFF)
 	{
+#ifdef DEBUG_LOG
 		elog(NOTICE, "update nested posting tree");
+#endif
 		vodkaInsertItemPointers(vodkastate->index,
 							  ItemPointerGetBlockNumber(&postinglist->first),
 							  items, nitem, buildStats);
@@ -325,7 +329,9 @@ updatePostingList(VodkaState *vodkastate, ItemPointer iptr,
 		return;
 	}
 
+#ifdef DEBUG_LOG
 	elog(NOTICE, "update posting list");
+#endif
 
 	updatePostingListLUP(vodkastate, BufferGetBlockNumber(buffer),
 			PageGetExactFreeSpace(page));
@@ -427,7 +433,9 @@ vodkaEntryInsert(VodkaState *vodkastate,
 	{
 		if (ItemPointerGetOffsetNumber(&iptr) == 0xFFFF)
 		{
+#ifdef DEBUG_LOG
 			elog(NOTICE, "update posting tree");
+#endif
 			vodkaInsertItemPointers(vodkastate->index,
 								  ItemPointerGetBlockNumber(&iptr),
 								  items, nitem, buildStats);
@@ -447,15 +455,19 @@ vodkaEntryInsert(VodkaState *vodkastate,
 		if (nitem == nwritten)
 		{
 			iptr = placeNewPostingList(vodkastate, compressedList);
+#ifdef DEBUG_LOG
 			elog(NOTICE, "new posting list (%d,%d)",
 					ItemPointerGetBlockNumber(&iptr),
 					ItemPointerGetOffsetNumber(&iptr));
+#endif
 		}
 		else
 		{
 			BlockNumber postingRoot;
 
+#ifdef DEBUG_LOG
 			elog(NOTICE, "new posting tree");
+#endif
 			pfree(compressedList);
 
 			postingRoot = vodkaCreatePostingTree(vodkastate->index, items, nitem,

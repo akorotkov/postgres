@@ -428,6 +428,11 @@ DATA(insert (	4017   25 25 2 4028 ));
 DATA(insert (	4017   25 25 3 4029 ));
 DATA(insert (	4017   25 25 4 4030 ));
 DATA(insert (	4017   25 25 5 4031 ));
+DATA(insert (	5058   17 17 1 5053 ));
+DATA(insert (	5058   17 17 2 5054 ));
+DATA(insert (	5058   17 17 3 5055 ));
+DATA(insert (	5058   17 17 4 5056 ));
+DATA(insert (	5058   17 17 5 5057 ));
 
 /* vodka */
 DATA(insert (	5052   3802 3802 1 5047 ));

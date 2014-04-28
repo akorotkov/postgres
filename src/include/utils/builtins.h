@@ -1186,6 +1186,13 @@ extern Datum vodkaqueryjsonbextract(PG_FUNCTION_ARGS);
 extern Datum vodkajsonbconsistent(PG_FUNCTION_ARGS);
 extern Datum vodkajsonbtriconsistent(PG_FUNCTION_ARGS);
 
+/* access/vodka/vodkajsonbentryproc.c */
+Datum spg_bytea_config(PG_FUNCTION_ARGS);
+Datum spg_bytea_choose(PG_FUNCTION_ARGS);
+Datum spg_bytea_inner_consistent(PG_FUNCTION_ARGS);
+Datum spg_bytea_leaf_consistent(PG_FUNCTION_ARGS);
+Datum spg_bytea_picksplit(PG_FUNCTION_ARGS);
+
 /* access/transam/twophase.c */
 extern Datum pg_prepared_xact(PG_FUNCTION_ARGS);
 

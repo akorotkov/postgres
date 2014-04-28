@@ -1350,6 +1350,7 @@ DESCR("unary plus");
 /* bytea operators */
 DATA(insert OID = 1955 ( "="	   PGNSP PGUID b t t 17 17	16 1955 1956 byteaeq eqsel eqjoinsel ));
 DESCR("equal");
+#define ByteaEqualOperator 1955
 DATA(insert OID = 1956 ( "<>"	   PGNSP PGUID b f f 17 17	16 1956 1955 byteane neqsel neqjoinsel ));
 DESCR("not equal");
 DATA(insert OID = 1957 ( "<"	   PGNSP PGUID b f f 17 17	16 1959 1960 bytealt scalarltsel scalarltjoinsel ));

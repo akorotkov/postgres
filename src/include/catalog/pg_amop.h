@@ -778,6 +778,11 @@ DATA(insert (	4017   25 25 14 s	667 4000 0 ));
 DATA(insert (	4017   25 25 15 s	666 4000 0 ));
 
 /*
+ * SP-GiST bytea_ops
+ */
+DATA(insert (	5058   17 17 3 s	1955 4000 0 ));
+
+/*
  * btree jsonb_ops
  */
 DATA(insert (	4033   3802 3802 1 s	3242 403 0 ));

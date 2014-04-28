@@ -41,8 +41,8 @@ vodkajsonbconfig(PG_FUNCTION_ARGS)
 	/* VodkaConfigIn *in = (VodkaConfigIn *)PG_GETARG_POINTER(0); */
 	VodkaConfigOut *out = (VodkaConfigOut *)PG_GETARG_POINTER(1);
 
-	out->entryOpclass = TEXT_SPGIST_OPS_OID;
-	out->entryEqualOperator = TextEqualOperator;
+	out->entryOpclass = BYTEA_SPGIST_OPS_OID;
+	out->entryEqualOperator = ByteaEqualOperator;
 	PG_RETURN_VOID();
 }
 
@@ -99,6 +99,9 @@ write_numeric_key(Pointer ptr, Numeric val)
 		ptr += sizeof(weight);
 
 		memcpy(ptr, digits, sizeof(NumericDigit) * ndigits);
+		ptr += sizeof(NumericDigit) * ndigits;
+
+		*ptr = 0;
 	}
 }
 
@@ -131,13 +134,13 @@ get_vodka_key(PathStack *stack, const JsonbValue *val)
 			vallen = 1;
 			break;
 		case jbvString:
-			vallen = val->val.string.len + 1;
+			vallen = val->val.string.len + 2;
 			break;
 		case jbvNumeric:
 			if (NUMERIC_IS_NAN(val->val.numeric))
 				vallen = 1;
 			else
-				vallen = get_ndigits(val->val.numeric) + 5;
+				vallen = get_ndigits(val->val.numeric) + 6;
 			break;
 		default:
 			elog(ERROR, "invalid jsonb scalar type");
@@ -180,6 +183,7 @@ get_vodka_key(PathStack *stack, const JsonbValue *val)
 		case jbvString:
 			*ptr = JSONB_VODKA_FLAG_VALUE | JSONB_VODKA_FLAG_STRING;
 			memcpy(ptr + 1, val->val.string.val, val->val.string.len);
+			ptr[val->val.string.len + 1] = 0;
 			break;
 		case jbvNumeric:
 			*ptr = JSONB_VODKA_FLAG_VALUE | JSONB_VODKA_FLAG_STRING;
@@ -294,7 +298,7 @@ vodkaqueryjsonbextract(PG_FUNCTION_ARGS)
 		keys[i].value = entries[i];
 		keys[i].isnull = false;
 		keys[i].extra = NULL;
-		keys[i].operator = TextEqualOperator;
+		keys[i].operator = ByteaEqualOperator;
 	}
 
 	/* ...although "contains {}" requires a full index scan */
