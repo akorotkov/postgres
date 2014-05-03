@@ -198,6 +198,8 @@ vodkaCompressPostingList(const ItemPointer ipd, int nipd, int maxsize,
 	maxbytes = maxsize - offsetof(VodkaPostingList, bytes);
 	Assert(maxbytes > 0);
 
+	Assert(OffsetNumberIsValid(ItemPointerGetOffsetNumber(ipd)));
+
 	/* Store the first special item */
 	result->first = ipd[0];
 

@@ -609,6 +609,7 @@ typedef struct vodkaxlogDeleteListPages
 extern Datum vodkaoptions(PG_FUNCTION_ARGS);
 extern VodkaState *initVodkaState(Relation index);
 extern void prepareEntryIndexScan(VodkaState *state, Oid operator, Datum value);
+extern void cleanEntryIndexScan(VodkaState *state);
 extern void freeVodkaState(VodkaState *state);
 extern Buffer VodkaNewBuffer(Relation index);
 extern void VodkaInitBuffer(Buffer b, uint32 f);

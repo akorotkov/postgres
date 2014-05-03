@@ -258,11 +258,10 @@ replacePostingList(VodkaState *vodkastate, Buffer buffer, Page page,
 			nitem, buildStats);
 	ItemPointerSetBlockNumber(&newiptr, postingRoot);
 	newiptr.ip_posid = 0xFFFF;
-	PageIndexTupleDelete(page, offset);
 	placed = PageAddItem(page,
 						 (Item) &newiptr,
 						 MAXALIGN(sizeof(newiptr)),
-						 offset, true, false);
+						 offset, false, false);
 	if (placed != offset)
 		elog(ERROR, "Can't update posting list");
 
@@ -311,6 +310,7 @@ updatePostingList(VodkaState *vodkastate, ItemPointer iptr,
 	if (nwritten < newNPosting)
 	{
 		pfree(postinglist);
+		PageIndexTupleDelete(page, offset);
 		replacePostingList(vodkastate, buffer, page, offset,
 				newItems, newNPosting, buildStats);
 		return;
@@ -552,6 +552,7 @@ vodkaBuildCallback(Relation index, HeapTuple htup, Datum *values,
 						   list, nlist, &buildstate->buildStats);
 		}
 
+		cleanEntryIndexScan(buildstate->vodkastate);
 		MemoryContextReset(buildstate->tmpCtx);
 		vodkaInitBA(&buildstate->accum);
 	}
@@ -681,6 +682,7 @@ vodkabuild(PG_FUNCTION_ARGS)
 	}
 	MemoryContextSwitchTo(oldCtx);
 
+	cleanEntryIndexScan(buildstate.vodkastate);
 	MemoryContextDelete(buildstate.tmpCtx);
 
 	/*

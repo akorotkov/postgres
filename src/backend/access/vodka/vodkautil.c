@@ -180,7 +180,17 @@ prepareEntryIndexScan(VodkaState *state, Oid operator, Datum value)
 					 Int32GetDatum(1),
 					 PointerGetDatum(NULL),
 					 Int32GetDatum(0));
+}
 
+void
+cleanEntryIndexScan(VodkaState *state)
+{
+	if (state->entryScan)
+	{
+		OidFunctionCall1(state->entryTree.rd_am->amendscan,
+						 PointerGetDatum(state->entryScan));
+		state->entryScan = NULL;
+	}
 }
 
 /*
