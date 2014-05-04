@@ -118,7 +118,7 @@ get_vodka_key(PathStack *stack, const JsonbValue *val)
 	{
 		if (tmp->s)
 		{
-			totallen = tmp->len + 2;
+			totallen += tmp->len + 2;
 		}
 		else
 		{
@@ -151,6 +151,7 @@ get_vodka_key(PathStack *stack, const JsonbValue *val)
 	SET_VARSIZE(result, totallen);
 	ptr = (Pointer)result + totallen - vallen;
 
+	tmp = stack;
 	while (tmp)
 	{
 		if (tmp->s)
