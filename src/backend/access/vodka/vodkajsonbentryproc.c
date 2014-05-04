@@ -493,6 +493,31 @@ spg_bytea_inner_consistent(PG_FUNCTION_ARGS)
 	PG_RETURN_VOID();
 }
 
+static char
+toHex(uint8 c)
+{
+	if (c <= 9)
+		return '0' + c;
+	else
+		return 'A' + (c - 10);
+}
+
+static void
+logValue(char *v, int len)
+{
+	char s[1024];
+	int i, j = 0;
+
+	for (i = 0; i < len; i++)
+	{
+		uint8 c = (uint8)v[i];
+		s[j++] = toHex(c/16);
+		s[j++] = toHex(c%16);
+	}
+	s[j++] = 0;
+	elog(NOTICE, "%s", s);
+}
+
 Datum
 spg_bytea_leaf_consistent(PG_FUNCTION_ARGS)
 {
@@ -563,6 +588,8 @@ spg_bytea_leaf_consistent(PG_FUNCTION_ARGS)
 		{
 			/* Non-collation-aware comparison */
 			r = memcmp(fullValue, VARDATA_ANY(query), Min(queryLen, fullLen));
+			/*logValue(fullValue, fullLen);
+			logValue(VARDATA_ANY(query), queryLen);*/
 		}
 
 		if (r == 0)

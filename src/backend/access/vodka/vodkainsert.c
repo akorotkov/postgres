@@ -38,6 +38,7 @@ typedef struct
 	MemoryContext tmpCtx;
 	MemoryContext funcCtx;
 	BuildAccumulator accum;
+	BlockNumber		firstblkno, nblocks;
 } VodkaBuildState;
 
 static void
@@ -189,7 +190,8 @@ static ItemPointerData
 placeNewPostingList(VodkaState *vodkastate, VodkaPostingList *postinglist)
 {
 	OffsetNumber requiredSize = SizeOfVodkaPostingList(postinglist) +
-			RelationGetTargetPageFreeSpace(vodkastate->index, VODKA_DEFAULT_FILLFACTOR);
+			vodkastate->targetFreeSpace;
+
 	BlockNumber blkno = InvalidBlockNumber;
 	Buffer		buffer;
 	Page		page;
@@ -363,6 +365,7 @@ vodkaEntryInsert(VodkaState *vodkastate,
 	bool		isnull, found;
 	ItemPointerData	iptr;
 	IndexScanDesc	equalScan;
+	MemoryContext ctx;
 
 	/*insertdata.isDelete = FALSE;*/
 
@@ -418,6 +421,9 @@ vodkaEntryInsert(VodkaState *vodkastate,
 	prepareEntryIndexScan(vodkastate, vodkastate->entryEqualOperator, key);
 
 	equalScan = vodkastate->entryScan;
+
+	if (vodkastate->funcCtx)
+		ctx = MemoryContextSwitchTo(vodkastate->funcCtx);
 
 	found =	DatumGetBool(OidFunctionCall2(vodkastate->entryTree.rd_am->amgettuple,
 						 PointerGetDatum(equalScan),
@@ -478,11 +484,18 @@ vodkaEntryInsert(VodkaState *vodkastate,
 			ItemPointerSetBlockNumber(&iptr, postingRoot);
 			iptr.ip_posid = 0xFFFF;
 		}
+
 		OidFunctionCall4(vodkastate->entryTree.rd_am->aminsert,
 						 PointerGetDatum(&vodkastate->entryTree),
 						 PointerGetDatum(&key),
 						 PointerGetDatum(&isnull),
 						 PointerGetDatum(&iptr));
+	}
+
+	if (vodkastate->funcCtx)
+	{
+		MemoryContextSwitchTo(ctx);
+		MemoryContextReset(vodkastate->funcCtx);
 	}
 
 	/*pfree(itup);*/
@@ -528,6 +541,9 @@ vodkaBuildCallback(Relation index, HeapTuple htup, Datum *values,
 
 	oldCtx = MemoryContextSwitchTo(buildstate->tmpCtx);
 
+	if (buildstate->firstblkno == InvalidBlockNumber)
+		buildstate->firstblkno = ItemPointerGetBlockNumber(&htup->t_self);
+
 	for (i = 0; i < buildstate->vodkastate->origTupdesc->natts; i++)
 		vodkaHeapTupleBulkInsert(buildstate, (OffsetNumber) (i + 1),
 							   values[i], isnull[i],
@@ -541,6 +557,26 @@ vodkaBuildCallback(Relation index, HeapTuple htup, Datum *values,
 		VodkaNullCategory category;
 		uint32		nlist;
 		OffsetNumber attnum;
+		BlockNumber	nblocks, blkno, delta;
+		int			fillfactor;
+
+		blkno = ItemPointerGetBlockNumber(&htup->t_self);
+		delta = Max(blkno, buildstate->firstblkno) - Min(blkno, buildstate->firstblkno) + 1;
+
+		fillfactor = RelationGetFillFactor(index, VODKA_DEFAULT_FILLFACTOR);
+
+		nblocks = buildstate->nblocks;
+
+		if (delta > 0)
+		{
+			fillfactor = (int)((double)fillfactor * (double)delta / (double)nblocks);
+			fillfactor = Min(100, Max(10, fillfactor));
+		}
+
+		buildstate->vodkastate->targetFreeSpace =
+				(BLCKSZ * (100 - fillfactor) / 100);
+
+		/*elog(NOTICE, "%d %d", fillfactor, buildstate->vodkastate->targetFreeSpace);*/
 
 		vodkaBeginBAScan(&buildstate->accum);
 		while ((list = vodkaGetBAEntry(&buildstate->accum,
@@ -555,6 +591,8 @@ vodkaBuildCallback(Relation index, HeapTuple htup, Datum *values,
 		cleanEntryIndexScan(buildstate->vodkastate);
 		MemoryContextReset(buildstate->tmpCtx);
 		vodkaInitBA(&buildstate->accum);
+
+		buildstate->firstblkno = InvalidBlockNumber;
 	}
 
 	MemoryContextSwitchTo(oldCtx);
@@ -626,6 +664,10 @@ vodkabuild(PG_FUNCTION_ARGS)
 	END_CRIT_SECTION();
 
 	buildstate.vodkastate = initVodkaState(index);
+	buildstate.firstblkno = InvalidBlockNumber;
+	RelationOpenSmgr(heap);
+	buildstate.nblocks = smgrnblocks(heap->rd_smgr, MAIN_FORKNUM);
+
 
 	RelationOpenSmgr(&buildstate.vodkastate->entryTree);
 	RelationCreateStorage(buildstate.vodkastate->entryTree.rd_node,
@@ -658,6 +700,7 @@ vodkabuild(PG_FUNCTION_ARGS)
 											   ALLOCSET_DEFAULT_MINSIZE,
 											   ALLOCSET_DEFAULT_INITSIZE,
 											   ALLOCSET_DEFAULT_MAXSIZE);
+	buildstate.vodkastate->funcCtx = buildstate.funcCtx;
 
 	buildstate.accum.vodkastate = buildstate.vodkastate;
 	vodkaInitBA(&buildstate.accum);
@@ -684,6 +727,8 @@ vodkabuild(PG_FUNCTION_ARGS)
 
 	cleanEntryIndexScan(buildstate.vodkastate);
 	MemoryContextDelete(buildstate.tmpCtx);
+
+	buildstate.vodkastate->funcCtx = NULL;
 
 	/*
 	 * Update metapage stats

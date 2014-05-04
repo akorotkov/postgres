@@ -222,6 +222,7 @@ initVodkaState(Relation index)
 	state->index = index;
 	state->oneCol = (origTupdesc->natts == 1) ? true : false;
 	state->origTupdesc = origTupdesc;
+	state->targetFreeSpace = RelationGetTargetPageFreeSpace(state->index, VODKA_DEFAULT_FILLFACTOR);
 
 	for (i = 0; i < origTupdesc->natts; i++)
 	{
