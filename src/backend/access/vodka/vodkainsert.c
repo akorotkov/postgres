@@ -29,6 +29,7 @@
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
+FILE *out = NULL;
 
 typedef struct
 {
@@ -274,6 +275,36 @@ replacePostingList(VodkaState *vodkastate, Buffer buffer, Page page,
 	UnlockReleaseBuffer(buffer);
 }
 
+static char
+toHex(uint8 c)
+{
+	if (c <= 9)
+		return '0' + c;
+	else
+		return 'A' + (c - 10);
+}
+
+static void
+logKey(bytea *key)
+{
+	char *s = VARDATA_ANY(key);
+	int len = VARSIZE_ANY_EXHDR(key), i;
+
+	if (!out)
+		return;
+
+	for (i = 0; i < len; i++)
+	{
+		uint8 c = (uint8)s[i];
+		fputc('\\', out);
+		fputc('x', out);
+		fputc(toHex(c/16), out);
+		fputc(toHex(c%16), out);
+	}
+	fputc('\n', out);
+	fflush(out);
+}
+
 static void
 updatePostingList(VodkaState *vodkastate, ItemPointer iptr,
 	ItemPointerData *items, uint32 nitem, VodkaStatsData *buildStats)
@@ -484,6 +515,8 @@ vodkaEntryInsert(VodkaState *vodkastate,
 			ItemPointerSetBlockNumber(&iptr, postingRoot);
 			iptr.ip_posid = 0xFFFF;
 		}
+
+		logKey(DatumGetByteaPP(key));
 
 		OidFunctionCall4(vodkastate->entryTree.rd_am->aminsert,
 						 PointerGetDatum(&vodkastate->entryTree),
@@ -704,6 +737,7 @@ vodkabuild(PG_FUNCTION_ARGS)
 
 	buildstate.accum.vodkastate = buildstate.vodkastate;
 	vodkaInitBA(&buildstate.accum);
+	out = fopen("/tmp/vodka.txt", "wt");
 
 	/*
 	 * Do the heap scan.  We disallow sync scan here because dataPlaceToPage
@@ -746,6 +780,7 @@ vodkabuild(PG_FUNCTION_ARGS)
 	result->index_tuples = buildstate.indtuples;
 
 	freeVodkaState(buildstate.vodkastate);
+	out = NULL;
 
 	PG_RETURN_POINTER(result);
 }
