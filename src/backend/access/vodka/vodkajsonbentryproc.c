@@ -45,7 +45,7 @@ typedef struct spgNodePtr
 {
 	Datum		d;
 	int			i;
-	uint8		c;
+	uint16		c;
 } spgNodePtr;
 
 
@@ -56,7 +56,7 @@ spg_bytea_config(PG_FUNCTION_ARGS)
 	spgConfigOut *cfg = (spgConfigOut *) PG_GETARG_POINTER(1);
 
 	cfg->prefixType = BYTEAOID;
-	cfg->labelType = CHAROID;
+	cfg->labelType = INT2OID;
 	cfg->canReturnData = true;
 	cfg->longValuesOK = true;	/* suffixing will shorten long values */
 	PG_RETURN_VOID();
@@ -107,12 +107,12 @@ commonPrefix(const char *a, const char *b, int lena, int lenb)
 }
 
 /*
- * Binary search an array of uint8 datums for a match to c
+ * Binary search an array of uint16 datums for a match to c
  *
  * On success, *i gets the match location; on failure, it gets where to insert
  */
 static bool
-searchChar(Datum *nodeLabels, int nNodes, uint8 c, int *i)
+searchChar(Datum *nodeLabels, int nNodes, uint16 c, int *i)
 {
 	int			StopLow = 0,
 				StopHigh = nNodes;
@@ -120,7 +120,7 @@ searchChar(Datum *nodeLabels, int nNodes, uint8 c, int *i)
 	while (StopLow < StopHigh)
 	{
 		int			StopMiddle = (StopLow + StopHigh) >> 1;
-		uint8		middle = DatumGetUInt8(nodeLabels[StopMiddle]);
+		uint16		middle = DatumGetUInt16(nodeLabels[StopMiddle]);
 
 		if (c < middle)
 			StopHigh = StopMiddle;
@@ -145,7 +145,7 @@ spg_bytea_choose(PG_FUNCTION_ARGS)
 	bytea	   *inText = DatumGetByteaPP(in->datum);
 	char	   *inStr = VARDATA_ANY(inText);
 	int			inSize = VARSIZE_ANY_EXHDR(inText);
-	uint8		nodeChar = '\0';
+	uint16		nodeChar = 0x100;
 	int			i = 0;
 	int			commonLen = 0;
 
@@ -166,7 +166,7 @@ spg_bytea_choose(PG_FUNCTION_ARGS)
 			if (inSize - in->level > commonLen)
 				nodeChar = *(uint8 *) (inStr + in->level + commonLen);
 			else
-				nodeChar = '\0';
+				nodeChar = 0x100;
 		}
 		else
 		{
@@ -184,7 +184,7 @@ spg_bytea_choose(PG_FUNCTION_ARGS)
 					formByteaDatum(prefixStr, commonLen);
 			}
 			out->result.splitTuple.nodeLabel =
-				UInt8GetDatum(*(prefixStr + commonLen));
+				UInt16GetDatum(*(prefixStr + commonLen));
 
 			if (prefixSize - commonLen == 1)
 			{
@@ -207,7 +207,7 @@ spg_bytea_choose(PG_FUNCTION_ARGS)
 	}
 	else
 	{
-		nodeChar = '\0';
+		nodeChar = 0x100;
 	}
 
 	/* Look up nodeChar in the node label array */
@@ -241,14 +241,14 @@ spg_bytea_choose(PG_FUNCTION_ARGS)
 		out->resultType = spgSplitTuple;
 		out->result.splitTuple.prefixHasPrefix = in->hasPrefix;
 		out->result.splitTuple.prefixPrefixDatum = in->prefixDatum;
-		out->result.splitTuple.nodeLabel = UInt8GetDatum('\0');
+		out->result.splitTuple.nodeLabel = UInt16GetDatum(0x100);
 		out->result.splitTuple.postfixHasPrefix = false;
 	}
 	else
 	{
 		/* Add a node for the not-previously-seen nodeChar value */
 		out->resultType = spgAddNode;
-		out->result.addNode.nodeLabel = UInt8GetDatum(nodeChar);
+		out->result.addNode.nodeLabel = UInt16GetDatum(nodeChar);
 		out->result.addNode.nodeN = i;
 	}
 
@@ -321,7 +321,7 @@ spg_bytea_picksplit(PG_FUNCTION_ARGS)
 		if (commonLen < VARSIZE_ANY_EXHDR(texti))
 			nodes[i].c = *(uint8 *) (VARDATA_ANY(texti) + commonLen);
 		else
-			nodes[i].c = '\0';	/* use \0 if string is all common */
+			nodes[i].c = 0x100;	/* use \0 if string is all common */
 		nodes[i].i = i;
 		nodes[i].d = in->datums[i];
 	}
@@ -346,7 +346,7 @@ spg_bytea_picksplit(PG_FUNCTION_ARGS)
 
 		if (i == 0 || nodes[i].c != nodes[i - 1].c)
 		{
-			out->nodeLabels[out->nNodes] = UInt8GetDatum(nodes[i].c);
+			out->nodeLabels[out->nNodes] = UInt16GetDatum(nodes[i].c);
 			out->nNodes++;
 		}
 
@@ -422,19 +422,19 @@ spg_bytea_inner_consistent(PG_FUNCTION_ARGS)
 
 	for (i = 0; i < in->nNodes; i++)
 	{
-		uint8		nodeChar = DatumGetUInt8(in->nodeLabels[i]);
+		uint16		nodeChar = DatumGetUInt16(in->nodeLabels[i]);
 		int			thisLen;
 		bool		res = true;
 		int			j;
 
 		/* If nodeChar is zero, don't include it in data */
-		/*if (nodeChar == '\0')
+		if (nodeChar == 0x100)
 			thisLen = maxReconstrLen - 1;
 		else
-		{*/
+		{
 			((char *) VARDATA(reconstrText))[maxReconstrLen - 1] = nodeChar;
 			thisLen = maxReconstrLen;
-		//}
+		}
 
 		for (j = 0; j < in->nkeys; j++)
 		{
