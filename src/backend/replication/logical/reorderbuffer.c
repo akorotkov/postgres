@@ -50,28 +50,20 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
-#include "miscadmin.h"
-
 #include "access/rewriteheap.h"
 #include "access/transam.h"
 #include "access/tuptoaster.h"
 #include "access/xact.h"
-
 #include "catalog/catalog.h"
-
-#include "common/relpath.h"
-
 #include "lib/binaryheap.h"
-
+#include "miscadmin.h"
 #include "replication/logical.h"
 #include "replication/reorderbuffer.h"
 #include "replication/slot.h"
-#include "replication/snapbuild.h" /* just for SnapBuildSnapDecRefcount */
-
+#include "replication/snapbuild.h"		/* just for SnapBuildSnapDecRefcount */
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
 #include "storage/sinval.h"
-
 #include "utils/builtins.h"
 #include "utils/combocid.h"
 #include "utils/memdebug.h"
@@ -79,6 +71,7 @@
 #include "utils/relcache.h"
 #include "utils/relfilenodemap.h"
 #include "utils/tqual.h"
+
 
 /* entry for a hash table we use to map from xid to our transaction state */
 typedef struct ReorderBufferTXNByIdEnt
@@ -463,7 +456,7 @@ ReorderBufferGetTupleBuf(ReorderBuffer *rb)
 		tuple = slist_container(ReorderBufferTupleBuf, node,
 								slist_pop_head_node(&rb->cached_tuplebufs));
 #ifdef USE_ASSERT_CHECKING
-		memset(tuple, 0xdeadbeef, sizeof(ReorderBufferTupleBuf));
+		memset(tuple, 0xa9, sizeof(ReorderBufferTupleBuf));
 #endif
 	}
 	else
@@ -589,7 +582,7 @@ ReorderBufferTXNByXid(ReorderBuffer *rb, TransactionId xid, bool create,
  */
 void
 ReorderBufferQueueChange(ReorderBuffer *rb, TransactionId xid, XLogRecPtr lsn,
-					   ReorderBufferChange *change)
+						 ReorderBufferChange *change)
 {
 	ReorderBufferTXN *txn;
 
@@ -1054,8 +1047,8 @@ ReorderBufferCleanupTXN(ReorderBuffer *rb, ReorderBufferTXN *txn)
 	}
 
 	/*
-	 * Cleanup the tuplecids we stored for decoding catalog snapshot
-	 * access. They are always stored in the toplevel transaction.
+	 * Cleanup the tuplecids we stored for decoding catalog snapshot access.
+	 * They are always stored in the toplevel transaction.
 	 */
 	dlist_foreach_modify(iter, &txn->tuplecids)
 	{
@@ -1211,9 +1204,9 @@ ReorderBufferCopySnap(ReorderBuffer *rb, Snapshot orig_snap,
 	snap->subxip[i++] = txn->xid;
 
 	/*
-	 * nsubxcnt isn't decreased when subtransactions abort, so count
-	 * manually. Since it's an upper boundary it is safe to use it for the
-	 * allocation above.
+	 * nsubxcnt isn't decreased when subtransactions abort, so count manually.
+	 * Since it's an upper boundary it is safe to use it for the allocation
+	 * above.
 	 */
 	snap->subxcnt = 1;
 
@@ -1269,10 +1262,10 @@ ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 	ReorderBufferIterTXNState *iterstate = NULL;
 	ReorderBufferChange *change;
 
-	volatile CommandId	command_id = FirstCommandId;
-	volatile Snapshot	snapshot_now = NULL;
-	volatile bool		txn_started = false;
-	volatile bool		subtxn_started = false;
+	volatile CommandId command_id = FirstCommandId;
+	volatile Snapshot snapshot_now = NULL;
+	volatile bool txn_started = false;
+	volatile bool subtxn_started = false;
 
 	txn = ReorderBufferTXNByXid(rb, xid, false, NULL, InvalidXLogRecPtr,
 								false);
@@ -1316,8 +1309,8 @@ ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 
 		/*
 		 * Decoding needs access to syscaches et al., which in turn use
-		 * heavyweight locks and such. Thus we need to have enough state around
-		 * to keep track of those. The easiest way is to simply use a
+		 * heavyweight locks and such. Thus we need to have enough state
+		 * around to keep track of those. The easiest way is to simply use a
 		 * transaction internally. That also allows us to easily enforce that
 		 * nothing writes to the database by checking for xid assignments.
 		 *
@@ -1351,7 +1344,7 @@ ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 					Assert(snapshot_now);
 
 					reloid = RelidByRelfilenode(change->data.tp.relnode.spcNode,
-												change->data.tp.relnode.relNode);
+											change->data.tp.relnode.relNode);
 
 					/*
 					 * Catalog tuple without data, emitted while catalog was
@@ -1362,14 +1355,17 @@ ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 						change->data.tp.oldtuple == NULL)
 						continue;
 					else if (reloid == InvalidOid)
-						elog(ERROR, "could not lookup relation %s",
-							 relpathperm(change->data.tp.relnode, MAIN_FORKNUM));
+						elog(ERROR, "could not map filenode \"%s\" to relation OID",
+							 relpathperm(change->data.tp.relnode,
+										 MAIN_FORKNUM));
 
 					relation = RelationIdGetRelation(reloid);
 
 					if (relation == NULL)
-						elog(ERROR, "could open relation descriptor %s",
-							 relpathperm(change->data.tp.relnode, MAIN_FORKNUM));
+						elog(ERROR, "could not open relation with OID %u (for filenode \"%s\")",
+							 reloid,
+							 relpathperm(change->data.tp.relnode,
+										 MAIN_FORKNUM));
 
 					if (RelationIsLogicallyLogged(relation))
 					{
@@ -1419,6 +1415,7 @@ ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 							ReorderBufferCopySnap(rb, change->data.snapshot,
 												  txn, command_id);
 					}
+
 					/*
 					 * Restored from disk, need to be careful not to double
 					 * free. We could introduce refcounting for that, but for
@@ -1451,7 +1448,7 @@ ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 						{
 							/* we don't use the global one anymore */
 							snapshot_now = ReorderBufferCopySnap(rb, snapshot_now,
-																 txn, command_id);
+															txn, command_id);
 						}
 
 						snapshot_now->curcid = command_id;
@@ -1482,7 +1479,7 @@ ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 
 		/* this is just a sanity check against bad output plugin behaviour */
 		if (GetCurrentTransactionIdIfAny() != InvalidTransactionId)
-			elog(ERROR, "output plugin used xid %u",
+			elog(ERROR, "output plugin used XID %u",
 				 GetCurrentTransactionId());
 
 		/* make sure there's no cache pollution */
@@ -1590,7 +1587,7 @@ ReorderBufferAbortOld(ReorderBuffer *rb, TransactionId oldestRunningXid)
 	 */
 	dlist_foreach_modify(it, &rb->toplevel_by_lsn)
 	{
-		ReorderBufferTXN * txn;
+		ReorderBufferTXN *txn;
 
 		txn = dlist_container(ReorderBufferTXN, node, it.cur);
 
@@ -1910,7 +1907,7 @@ ReorderBufferSerializeTXN(ReorderBuffer *rb, ReorderBufferTXN *txn)
 	Size		spilled = 0;
 	char		path[MAXPGPATH];
 
-	elog(DEBUG2, "spill %u changes in tx %u to disk",
+	elog(DEBUG2, "spill %u changes in XID %u to disk",
 		 (uint32) txn->nentries_mem, txn->xid);
 
 	/* do the same to all child TXs */
@@ -2002,7 +1999,8 @@ ReorderBufferSerializeChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 		case REORDER_BUFFER_CHANGE_DELETE:
 			{
 				char	   *data;
-				ReorderBufferTupleBuf *oldtup, *newtup;
+				ReorderBufferTupleBuf *oldtup,
+						   *newtup;
 				Size		oldlen = 0;
 				Size		newlen = 0;
 
@@ -2011,12 +2009,12 @@ ReorderBufferSerializeChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 
 				if (oldtup)
 					oldlen = offsetof(ReorderBufferTupleBuf, data)
-						+ oldtup->tuple.t_len
+						+oldtup->tuple.t_len
 						- offsetof(HeapTupleHeaderData, t_bits);
 
 				if (newtup)
 					newlen = offsetof(ReorderBufferTupleBuf, data)
-						+ newtup->tuple.t_len
+						+newtup->tuple.t_len
 						- offsetof(HeapTupleHeaderData, t_bits);
 
 				sz += oldlen;
@@ -2066,15 +2064,15 @@ ReorderBufferSerializeChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 				if (snap->xcnt)
 				{
 					memcpy(data, snap->xip,
-						   sizeof(TransactionId) + snap->xcnt);
-					data += sizeof(TransactionId) + snap->xcnt;
+						   sizeof(TransactionId) * snap->xcnt);
+					data += sizeof(TransactionId) * snap->xcnt;
 				}
 
 				if (snap->subxcnt)
 				{
 					memcpy(data, snap->subxip,
-						   sizeof(TransactionId) + snap->subxcnt);
-					data += sizeof(TransactionId) + snap->subxcnt;
+						   sizeof(TransactionId) * snap->subxcnt);
+					data += sizeof(TransactionId) * snap->subxcnt;
 				}
 				break;
 			}
@@ -2093,7 +2091,7 @@ ReorderBufferSerializeChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 		CloseTransientFile(fd);
 		ereport(ERROR,
 				(errcode_for_file_access(),
-				 errmsg("could not write to xid %u's data file: %m",
+				 errmsg("could not write to data file for XID %u: %m",
 						txn->xid)));
 	}
 
@@ -2170,15 +2168,12 @@ ReorderBufferRestoreChanges(ReorderBuffer *rb, ReorderBufferTXN *txn,
 
 		}
 
-		ReorderBufferSerializeReserve(rb, sizeof(ReorderBufferDiskChange));
-
-
 		/*
 		 * Read the statically sized part of a change which has information
 		 * about the total size. If we couldn't read a record, we're at the
 		 * end of this file.
 		 */
-
+		ReorderBufferSerializeReserve(rb, sizeof(ReorderBufferDiskChange));
 		readBytes = read(*fd, rb->outbuf, sizeof(ReorderBufferDiskChange));
 
 		/* eof */
@@ -2192,18 +2187,18 @@ ReorderBufferRestoreChanges(ReorderBuffer *rb, ReorderBufferTXN *txn,
 		else if (readBytes < 0)
 			ereport(ERROR,
 					(errcode_for_file_access(),
-					 errmsg("could not read from reorderbuffer spill file: %m")));
+				errmsg("could not read from reorderbuffer spill file: %m")));
 		else if (readBytes != sizeof(ReorderBufferDiskChange))
 			ereport(ERROR,
 					(errcode_for_file_access(),
-					 errmsg("incomplete read from reorderbuffer spill file: read %d instead of %u",
+					 errmsg("incomplete read from reorderbuffer spill file: read %d instead of %u bytes",
 							readBytes,
 							(uint32) sizeof(ReorderBufferDiskChange))));
 
 		ondisk = (ReorderBufferDiskChange *) rb->outbuf;
 
 		ReorderBufferSerializeReserve(rb,
-									  sizeof(ReorderBufferDiskChange) + ondisk->size);
+							 sizeof(ReorderBufferDiskChange) + ondisk->size);
 		ondisk = (ReorderBufferDiskChange *) rb->outbuf;
 
 		readBytes = read(*fd, rb->outbuf + sizeof(ReorderBufferDiskChange),
@@ -2212,13 +2207,13 @@ ReorderBufferRestoreChanges(ReorderBuffer *rb, ReorderBufferTXN *txn,
 		if (readBytes < 0)
 			ereport(ERROR,
 					(errcode_for_file_access(),
-					 errmsg("could not read from reorderbuffer spill file: %m")));
+				errmsg("could not read from reorderbuffer spill file: %m")));
 		else if (readBytes != ondisk->size - sizeof(ReorderBufferDiskChange))
 			ereport(ERROR,
 					(errcode_for_file_access(),
-					 errmsg("could not read from reorderbuffer spill file: read %d instead of %u",
+					 errmsg("could not read from reorderbuffer spill file: read %d instead of %u bytes",
 							readBytes,
-							(uint32) (ondisk->size - sizeof(ReorderBufferDiskChange)))));
+				(uint32) (ondisk->size - sizeof(ReorderBufferDiskChange)))));
 
 		/*
 		 * ok, read a full change from disk, now restore it into proper
@@ -2368,7 +2363,7 @@ StartupReorderBuffer(void)
 	logical_dir = AllocateDir("pg_replslot");
 	while ((logical_de = ReadDir(logical_dir, "pg_replslot")) != NULL)
 	{
-		struct stat	statbuf;
+		struct stat statbuf;
 		char		path[MAXPGPATH];
 
 		if (strcmp(logical_de->d_name, ".") == 0 ||
@@ -2624,7 +2619,7 @@ ReorderBufferToastReplace(ReorderBuffer *rb, ReorderBufferTXN *txn,
 			cchange = dlist_container(ReorderBufferChange, node, it.cur);
 			ctup = cchange->data.tp.newtuple;
 			chunk = DatumGetPointer(
-				fastgetattr(&ctup->tuple, 3, toast_desc, &isnull));
+						  fastgetattr(&ctup->tuple, 3, toast_desc, &isnull));
 
 			Assert(!isnull);
 			Assert(!VARATT_IS_EXTERNAL(chunk));
@@ -2804,7 +2799,7 @@ ApplyLogicalMappingFile(HTAB *tuplecid_data, Oid relid, const char *fname)
 		ReorderBufferTupleCidKey key;
 		ReorderBufferTupleCidEnt *ent;
 		ReorderBufferTupleCidEnt *new_ent;
-		bool found;
+		bool		found;
 
 		/* be careful about padding */
 		memset(&key, 0, sizeof(ReorderBufferTupleCidKey));
@@ -2817,12 +2812,12 @@ ApplyLogicalMappingFile(HTAB *tuplecid_data, Oid relid, const char *fname)
 					(errcode_for_file_access(),
 					 errmsg("could not read file \"%s\": %m",
 							path)));
-		else if (readBytes == 0) /* EOF */
+		else if (readBytes == 0)	/* EOF */
 			break;
 		else if (readBytes != sizeof(LogicalRewriteMappingData))
 			ereport(ERROR,
 					(errcode_for_file_access(),
-					 errmsg("could not read file \"%s\", read %d instead of %d",
+					 errmsg("could not read from file \"%s\": read %d instead of %d bytes",
 							path, readBytes,
 							(int32) sizeof(LogicalRewriteMappingData))));
 
@@ -2888,8 +2883,8 @@ TransactionIdInArray(TransactionId xid, TransactionId *xip, Size num)
 static int
 file_sort_by_lsn(const void *a_p, const void *b_p)
 {
-	RewriteMappingFile *a = *(RewriteMappingFile **)a_p;
-	RewriteMappingFile *b = *(RewriteMappingFile **)b_p;
+	RewriteMappingFile *a = *(RewriteMappingFile **) a_p;
+	RewriteMappingFile *b = *(RewriteMappingFile **) b_p;
 
 	if (a->lsn < b->lsn)
 		return -1;
@@ -2916,26 +2911,27 @@ UpdateLogicalMappings(HTAB *tuplecid_data, Oid relid, Snapshot snapshot)
 	mapping_dir = AllocateDir("pg_llog/mappings");
 	while ((mapping_de = ReadDir(mapping_dir, "pg_llog/mappings")) != NULL)
 	{
-		Oid				f_dboid;
-		Oid				f_relid;
-		TransactionId	f_mapped_xid;
-		TransactionId	f_create_xid;
-		XLogRecPtr		f_lsn;
-		uint32			f_hi, f_lo;
+		Oid			f_dboid;
+		Oid			f_relid;
+		TransactionId f_mapped_xid;
+		TransactionId f_create_xid;
+		XLogRecPtr	f_lsn;
+		uint32		f_hi,
+					f_lo;
 		RewriteMappingFile *f;
 
 		if (strcmp(mapping_de->d_name, ".") == 0 ||
 			strcmp(mapping_de->d_name, "..") == 0)
 			continue;
 
-		/* Ignore files that aren't ours*/
+		/* Ignore files that aren't ours */
 		if (strncmp(mapping_de->d_name, "map-", 4) != 0)
 			continue;
 
 		if (sscanf(mapping_de->d_name, LOGICAL_REWRITE_FORMAT,
 				   &f_dboid, &f_relid, &f_hi, &f_lo,
 				   &f_mapped_xid, &f_create_xid) != 6)
-			elog(ERROR, "could not parse fname %s", mapping_de->d_name);
+			elog(ERROR, "could not parse filename \"%s\"", mapping_de->d_name);
 
 		f_lsn = ((uint64) f_hi) << 32 | f_lo;
 
@@ -2975,11 +2971,12 @@ UpdateLogicalMappings(HTAB *tuplecid_data, Oid relid, Snapshot snapshot)
 	qsort(files_a, list_length(files), sizeof(RewriteMappingFile *),
 		  file_sort_by_lsn);
 
-	for(off = 0; off < list_length(files); off++)
+	for (off = 0; off < list_length(files); off++)
 	{
 		RewriteMappingFile *f = files_a[off];
-		elog(DEBUG1, "applying mapping: %s in %u", f->fname,
-			snapshot->subxip[0]);
+
+		elog(DEBUG1, "applying mapping: \"%s\" in %u", f->fname,
+			 snapshot->subxip[0]);
 		ApplyLogicalMappingFile(tuplecid_data, relid, f->fname);
 		pfree(f);
 	}
@@ -2999,7 +2996,7 @@ ResolveCminCmaxDuringDecoding(HTAB *tuplecid_data,
 	ReorderBufferTupleCidEnt *ent;
 	ForkNumber	forkno;
 	BlockNumber blockno;
-	bool updated_mapping = false;
+	bool		updated_mapping = false;
 
 	/* be careful about padding */
 	memset(&key, 0, sizeof(key));

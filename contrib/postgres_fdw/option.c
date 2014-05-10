@@ -57,8 +57,6 @@ static bool is_libpq_option(const char *keyword);
  *
  * Raise an ERROR if the option or its value is considered invalid.
  */
-extern Datum postgres_fdw_validator(PG_FUNCTION_ARGS);
-
 PG_FUNCTION_INFO_V1(postgres_fdw_validator);
 
 Datum
@@ -268,7 +266,7 @@ is_libpq_option(const char *keyword)
 
 /*
  * Generate key-value arrays which include only libpq options from the
- * given list (which can contain any kind of options).	Caller must have
+ * given list (which can contain any kind of options).  Caller must have
  * allocated large-enough arrays.  Returns number of options found.
  */
 int

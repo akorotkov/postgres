@@ -53,7 +53,13 @@ uninstall:
 
 clean distclean maintainer-clean:
 	rm -f initdb$(X) $(OBJS) encnames.c localtime.c
-
+	rm -rf tmp_check
 
 # ensure that changes in datadir propagate into object file
 initdb.o: initdb.c $(top_builddir)/src/Makefile.global
+
+check: all
+	$(prove_check)
+
+installcheck:
+	$(prove_installcheck)

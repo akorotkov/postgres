@@ -85,7 +85,7 @@ regprocin(PG_FUNCTION_ARGS)
 
 	/*
 	 * In bootstrap mode we assume the given name is not schema-qualified, and
-	 * just search pg_proc for a unique match.	This is needed for
+	 * just search pg_proc for a unique match.  This is needed for
 	 * initializing other system catalogs (pg_namespace may not exist yet, and
 	 * certainly there are no schemas other than pg_catalog).
 	 */
@@ -165,8 +165,8 @@ to_regproc(PG_FUNCTION_ARGS)
 	FuncCandidateList clist;
 
 	/*
-	 * Parse the name into components and see if it matches any pg_proc entries
-	 * in the current search path.
+	 * Parse the name into components and see if it matches any pg_proc
+	 * entries in the current search path.
 	 */
 	names = stringToQualifiedNameList(pro_name);
 	clist = FuncnameGetCandidates(names, -1, NIL, false, false, true);
@@ -295,7 +295,7 @@ regprocedurein(PG_FUNCTION_ARGS)
 	/*
 	 * Else it's a name and arguments.  Parse the name and arguments, look up
 	 * potential matches in the current namespace search list, and scan to see
-	 * which one exactly matches the given argument types.	(There will not be
+	 * which one exactly matches the given argument types.  (There will not be
 	 * more than one match.)
 	 *
 	 * XXX at present, this code will not work in bootstrap mode, hence this
@@ -323,6 +323,38 @@ regprocedurein(PG_FUNCTION_ARGS)
 }
 
 /*
+ * to_regprocedure	- converts "proname(args)" to proc OID
+ *
+ * If the name is not found, we return NULL.
+ */
+Datum
+to_regprocedure(PG_FUNCTION_ARGS)
+{
+	char	   *pro_name = PG_GETARG_CSTRING(0);
+	List	   *names;
+	int			nargs;
+	Oid			argtypes[FUNC_MAX_ARGS];
+	FuncCandidateList clist;
+
+	/*
+	 * Parse the name and arguments, look up potential matches in the current
+	 * namespace search list, and scan to see which one exactly matches the
+	 * given argument types.    (There will not be more than one match.)
+	 */
+	parseNameAndArgTypes(pro_name, false, &names, &nargs, argtypes);
+
+	clist = FuncnameGetCandidates(names, nargs, NIL, false, false, true);
+
+	for (; clist; clist = clist->next)
+	{
+		if (memcmp(clist->args, argtypes, nargs * sizeof(Oid)) == 0)
+			PG_RETURN_OID(clist->oid);
+	}
+
+	PG_RETURN_NULL();
+}
+
+/*
  * format_procedure		- converts proc OID to "pro_name(args)"
  *
  * This exports the useful functionality of regprocedureout for use
@@ -344,7 +376,7 @@ format_procedure_qualified(Oid procedure_oid)
  * Routine to produce regprocedure names; see format_procedure above.
  *
  * force_qualify says whether to schema-qualify; if true, the name is always
- * qualified regardless of search_path visibility.	Otherwise the name is only
+ * qualified regardless of search_path visibility.  Otherwise the name is only
  * qualified if the function is not in path.
  */
 static char *
@@ -478,7 +510,7 @@ regoperin(PG_FUNCTION_ARGS)
 
 	/*
 	 * In bootstrap mode we assume the given name is not schema-qualified, and
-	 * just search pg_operator for a unique match.	This is needed for
+	 * just search pg_operator for a unique match.  This is needed for
 	 * initializing other system catalogs (pg_namespace may not exist yet, and
 	 * certainly there are no schemas other than pg_catalog).
 	 */
@@ -692,7 +724,7 @@ regoperatorin(PG_FUNCTION_ARGS)
 	/*
 	 * Else it's a name and arguments.  Parse the name and arguments, look up
 	 * potential matches in the current namespace search list, and scan to see
-	 * which one exactly matches the given argument types.	(There will not be
+	 * which one exactly matches the given argument types.  (There will not be
 	 * more than one match.)
 	 *
 	 * XXX at present, this code will not work in bootstrap mode, hence this
@@ -717,6 +749,45 @@ regoperatorin(PG_FUNCTION_ARGS)
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_FUNCTION),
 				 errmsg("operator does not exist: %s", opr_name_or_oid)));
+
+	PG_RETURN_OID(result);
+}
+
+/*
+ * to_regoperator	- converts "oprname(args)" to operator OID
+ *
+ * If the name is not found, we return NULL.
+ */
+Datum
+to_regoperator(PG_FUNCTION_ARGS)
+{
+	char	   *opr_name_or_oid = PG_GETARG_CSTRING(0);
+	Oid			result;
+	List	   *names;
+	int			nargs;
+	Oid			argtypes[FUNC_MAX_ARGS];
+
+	/*
+	 * Parse the name and arguments, look up potential matches in the current
+	 * namespace search list, and scan to see which one exactly matches the
+	 * given argument types.    (There will not be more than one match.)
+	 */
+	parseNameAndArgTypes(opr_name_or_oid, true, &names, &nargs, argtypes);
+	if (nargs == 1)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_PARAMETER),
+				 errmsg("missing argument"),
+				 errhint("Use NONE to denote the missing argument of a unary operator.")));
+	if (nargs != 2)
+		ereport(ERROR,
+				(errcode(ERRCODE_TOO_MANY_ARGUMENTS),
+				 errmsg("too many arguments"),
+				 errhint("Provide two argument types for operator.")));
+
+	result = OpernameGetOprid(names, argtypes[0], argtypes[1]);
+
+	if (!OidIsValid(result))
+		PG_RETURN_NULL();
 
 	PG_RETURN_OID(result);
 }
@@ -935,8 +1006,8 @@ to_regclass(PG_FUNCTION_ARGS)
 	List	   *names;
 
 	/*
-	 * Parse the name into components and see if it matches any pg_class entries
-	 * in the current search path.
+	 * Parse the name into components and see if it matches any pg_class
+	 * entries in the current search path.
 	 */
 	names = stringToQualifiedNameList(class_name);
 
@@ -974,7 +1045,7 @@ regclassout(PG_FUNCTION_ARGS)
 
 		/*
 		 * In bootstrap mode, skip the fancy namespace stuff and just return
-		 * the class name.	(This path is only needed for debugging output
+		 * the class name.  (This path is only needed for debugging output
 		 * anyway.)
 		 */
 		if (IsBootstrapProcessingMode())
@@ -1489,7 +1560,7 @@ stringToQualifiedNameList(const char *string)
 
 /*
  * Given a C string, parse it into a qualified function or operator name
- * followed by a parenthesized list of type names.	Reduce the
+ * followed by a parenthesized list of type names.  Reduce the
  * type names to an array of OIDs (returned into *nargs and *argtypes;
  * the argtypes array should be of size FUNC_MAX_ARGS).  The function or
  * operator name is returned to *names as a List of Strings.

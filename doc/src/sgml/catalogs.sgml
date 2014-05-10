@@ -405,6 +405,18 @@
       <entry>Final function for moving-aggregate mode (zero if none)</entry>
      </row>
      <row>
+      <entry><structfield>aggfinalextra</structfield></entry>
+      <entry><type>bool</type></entry>
+      <entry></entry>
+      <entry>True to pass extra dummy arguments to aggfinalfn</entry>
+     </row>
+     <row>
+      <entry><structfield>aggmfinalextra</structfield></entry>
+      <entry><type>bool</type></entry>
+      <entry></entry>
+      <entry>True to pass extra dummy arguments to aggmfinalfn</entry>
+     </row>
+     <row>
       <entry><structfield>aggsortop</structfield></entry>
       <entry><type>oid</type></entry>
       <entry><literal><link linkend="catalog-pg-operator"><structname>pg_operator</structname></link>.oid</literal></entry>
@@ -2581,10 +2593,10 @@
       <entry><type>bool</type></entry>
       <entry></entry>
       <entry>
-       If true then this database can be used in the
-       <literal>TEMPLATE</literal> clause of <command>CREATE
-       DATABASE</command> to create a new database as a clone of
-       this one
+       If true, then this database can be cloned by
+       any user with <literal>CREATEDB</> privileges;
+       if false, then only superusers or the owner of
+       the database can clone it.
       </entry>
      </row>
 
@@ -5240,9 +5252,16 @@
     <tbody>
      <row>
       <entry><structfield>slot_name</structfield></entry>
-      <entry><type>text</type></entry>
+      <entry><type>name</type></entry>
       <entry></entry>
       <entry>A unique, cluster-wide identifier for the replication slot</entry>
+     </row>
+
+     <row>
+      <entry><structfield>plugin</structfield></entry>
+      <entry><type>name</type></entry>
+      <entry></entry>
+      <entry>The basename of the shared object containing the output plugin this logical slot is using, or null for physical slots.</entry>
      </row>
 
      <row>
@@ -5250,13 +5269,6 @@
       <entry><type>text</type></entry>
       <entry></entry>
       <entry>The slot type - <literal>physical</> or <literal>logical</></entry>
-     </row>
-
-     <row>
-      <entry><structfield>plugin</structfield></entry>
-      <entry><type>text</type></entry>
-      <entry></entry>
-      <entry>The basename of the shared object containing the output plugin this logical slot is using, or null for physical slots.</entry>
      </row>
 
      <row>
@@ -5293,21 +5305,13 @@
      </row>
 
      <row>
-      <entry><structfield>xmin</structfield></entry>
-      <entry><type>xid</type></entry>
-      <entry></entry>
-      <entry>The oldest transaction that this slot needs the database to
-      retain.  <literal>VACUUM</literal> cannot remove catalog tuples deleted
-      by any later transaction.
-      </entry>
-     </row>
-
-     <row>
       <entry><structfield>catalog_xmin</structfield></entry>
       <entry><type>xid</type></entry>
       <entry></entry>
-      <entry>The <literal>xmin</literal>, or oldest transaction ID, that this
-      slot forces to be retained in the system catalogs. </entry>
+      <entry>The oldest transaction affecting the system catalogs that this
+      slot needs the database to retain.  <literal>VACUUM</literal> cannot
+      remove catalog tuples deleted by any later transaction.
+      </entry>
      </row>
 
      <row>

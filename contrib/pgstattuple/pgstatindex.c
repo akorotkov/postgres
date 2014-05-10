@@ -47,12 +47,6 @@
  * Those functions which have text-type input arg will be deprecated
  * in the future release.
  */
-extern Datum pgstatindex(PG_FUNCTION_ARGS);
-extern Datum pgstatindexbyid(PG_FUNCTION_ARGS);
-extern Datum pg_relpages(PG_FUNCTION_ARGS);
-extern Datum pg_relpagesbyid(PG_FUNCTION_ARGS);
-extern Datum pgstatginindex(PG_FUNCTION_ARGS);
-
 PG_FUNCTION_INFO_V1(pgstatindex);
 PG_FUNCTION_INFO_V1(pgstatindexbyid);
 PG_FUNCTION_INFO_V1(pg_relpages);
@@ -274,11 +268,11 @@ pgstatindex_impl(Relation rel, FunctionCallInfo fcinfo)
 		values[j++] = psprintf("%d", indexStat.version);
 		values[j++] = psprintf("%d", indexStat.level);
 		values[j++] = psprintf(INT64_FORMAT,
-				 (indexStat.root_pages +
-				  indexStat.leaf_pages +
-				  indexStat.internal_pages +
-				  indexStat.deleted_pages +
-				  indexStat.empty_pages) * BLCKSZ);
+							   (indexStat.root_pages +
+								indexStat.leaf_pages +
+								indexStat.internal_pages +
+								indexStat.deleted_pages +
+								indexStat.empty_pages) * BLCKSZ);
 		values[j++] = psprintf("%u", indexStat.root_blkno);
 		values[j++] = psprintf(INT64_FORMAT, indexStat.internal_pages);
 		values[j++] = psprintf(INT64_FORMAT, indexStat.leaf_pages);
@@ -286,12 +280,12 @@ pgstatindex_impl(Relation rel, FunctionCallInfo fcinfo)
 		values[j++] = psprintf(INT64_FORMAT, indexStat.deleted_pages);
 		if (indexStat.max_avail > 0)
 			values[j++] = psprintf("%.2f",
-					 100.0 - (double) indexStat.free_space / (double) indexStat.max_avail * 100.0);
+								   100.0 - (double) indexStat.free_space / (double) indexStat.max_avail * 100.0);
 		else
 			values[j++] = pstrdup("NaN");
 		if (indexStat.leaf_pages > 0)
 			values[j++] = psprintf("%.2f",
-					 (double) indexStat.fragments / (double) indexStat.leaf_pages * 100.0);
+								   (double) indexStat.fragments / (double) indexStat.leaf_pages * 100.0);
 		else
 			values[j++] = pstrdup("NaN");
 

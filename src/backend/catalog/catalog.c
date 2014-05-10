@@ -37,7 +37,6 @@
 #include "catalog/pg_shseclabel.h"
 #include "catalog/pg_tablespace.h"
 #include "catalog/toasting.h"
-#include "common/relpath.h"
 #include "miscadmin.h"
 #include "storage/fd.h"
 #include "utils/fmgroids.h"
@@ -45,61 +44,11 @@
 #include "utils/tqual.h"
 
 
-
-/*
- * forkname_to_number - look up fork number by name
- */
-ForkNumber
-forkname_to_number(char *forkName)
-{
-	ForkNumber	forkNum;
-
-	for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
-		if (strcmp(forkNames[forkNum], forkName) == 0)
-			return forkNum;
-
-	ereport(ERROR,
-			(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-			 errmsg("invalid fork name"),
-			 errhint("Valid fork names are \"main\", \"fsm\", and \"vm\".")));
-	return InvalidForkNumber;	/* keep compiler quiet */
-}
-
-/*
- * GetDatabasePath			- construct path to a database dir
- *
- * Result is a palloc'd string.
- *
- * XXX this must agree with relpath()!
- */
-char *
-GetDatabasePath(Oid dbNode, Oid spcNode)
-{
-	if (spcNode == GLOBALTABLESPACE_OID)
-	{
-		/* Shared system relations live in {datadir}/global */
-		Assert(dbNode == 0);
-		return pstrdup("global");
-	}
-	else if (spcNode == DEFAULTTABLESPACE_OID)
-	{
-		/* The default tablespace is {datadir}/base */
-		return psprintf("base/%u", dbNode);
-	}
-	else
-	{
-		/* All other tablespaces are accessed via symlinks */
-		return psprintf("pg_tblspc/%u/%s/%u",
-						spcNode, TABLESPACE_VERSION_DIRECTORY, dbNode);
-	}
-}
-
-
 /*
  * IsSystemRelation
  *		True iff the relation is either a system catalog or toast table.
  *		By a system catalog, we mean one that created in the pg_catalog schema
- * 		during initdb.  User-created relations in pg_catalog don't count as
+ *		during initdb.  User-created relations in pg_catalog don't count as
  *		system catalogs.
  *
  *		NB: TOAST relations are considered system relations by this test
@@ -151,7 +100,7 @@ IsCatalogRelation(Relation relation)
 bool
 IsCatalogClass(Oid relid, Form_pg_class reltuple)
 {
-	Oid         relnamespace = reltuple->relnamespace;
+	Oid			relnamespace = reltuple->relnamespace;
 
 	/*
 	 * Never consider relations outside pg_catalog/pg_toast to be catalog
@@ -319,7 +268,7 @@ IsSharedRelation(Oid relationId)
  * Since the OID is not immediately inserted into the table, there is a
  * race condition here; but a problem could occur only if someone else
  * managed to cycle through 2^32 OIDs and generate the same OID before we
- * finish inserting our row.  This seems unlikely to be a problem.	Note
+ * finish inserting our row.  This seems unlikely to be a problem.  Note
  * that if we had to *commit* the row to end the race condition, the risk
  * would be rather higher; therefore we use SnapshotDirty in the test,
  * so that we will see uncommitted rows.
@@ -365,7 +314,7 @@ GetNewOid(Relation relation)
  * This is exported separately because there are cases where we want to use
  * an index that will not be recognized by RelationGetOidIndex: TOAST tables
  * have indexes that are usable, but have multiple columns and are on
- * ordinary columns rather than a true OID column.	This code will work
+ * ordinary columns rather than a true OID column.  This code will work
  * anyway, so long as the OID is the index's first column.  The caller must
  * pass in the actual heap attnum of the OID column, however.
  *

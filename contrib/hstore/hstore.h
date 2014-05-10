@@ -12,7 +12,7 @@
  * HEntry: there is one of these for each key _and_ value in an hstore
  *
  * the position offset points to the _end_ so that we can get the length
- * by subtraction from the previous entry.	the ISFIRST flag lets us tell
+ * by subtraction from the previous entry.  the ISFIRST flag lets us tell
  * whether there is a previous entry.
  */
 typedef struct
@@ -194,7 +194,6 @@ extern Pairs *hstoreArrayToPairs(ArrayType *a, int *npairs);
 #if HSTORE_POLLUTE_NAMESPACE
 #define HSTORE_POLLUTE(newname_,oldname_) \
 	PG_FUNCTION_INFO_V1(oldname_);		  \
-	Datum oldname_(PG_FUNCTION_ARGS);	  \
 	Datum newname_(PG_FUNCTION_ARGS);	  \
 	Datum oldname_(PG_FUNCTION_ARGS) { return newname_(fcinfo); } \
 	extern int no_such_variable

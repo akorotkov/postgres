@@ -1353,6 +1353,7 @@ if test "$PORTNAME" = "win32"; then
   AC_REPLACE_FUNCS(gettimeofday)
   AC_LIBOBJ(kill)
   AC_LIBOBJ(open)
+  AC_LIBOBJ(system)
   AC_LIBOBJ(win32env)
   AC_LIBOBJ(win32error)
   AC_LIBOBJ(win32setlocale)
@@ -1816,6 +1817,11 @@ PGAC_PATH_DOCBOOK_STYLESHEETS
 PGAC_PATH_COLLATEINDEX
 AC_CHECK_PROGS(XSLTPROC, xsltproc)
 AC_CHECK_PROGS(OSX, [osx sgml2xml sx])
+
+#
+# Check for test tools
+#
+AC_CHECK_PROGS(PROVE, prove)
 
 # Thread testing
 

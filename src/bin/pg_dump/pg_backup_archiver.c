@@ -423,7 +423,7 @@ RestoreArchive(Archive *AHX)
 				{
 					if (!ropt->if_exists)
 					{
-						/* No --if-exists?  Then just use the original */
+						/* No --if-exists?	Then just use the original */
 						ahprintf(AH, "%s", te->dropStmt);
 					}
 					else
@@ -432,7 +432,7 @@ RestoreArchive(Archive *AHX)
 						char	   *mark;
 						char	   *dropStmt = pg_strdup(te->dropStmt);
 						char	   *dropStmtPtr = dropStmt;
-						PQExpBuffer	ftStmt = createPQExpBuffer();
+						PQExpBuffer ftStmt = createPQExpBuffer();
 
 						/*
 						 * Need to inject IF EXISTS clause after ALTER TABLE
@@ -449,12 +449,12 @@ RestoreArchive(Archive *AHX)
 						 * ALTER TABLE..ALTER COLUMN..DROP DEFAULT does not
 						 * support the IF EXISTS clause, and therefore we
 						 * simply emit the original command for such objects.
-						 * For other objects, we need to extract the first part
-						 * of the DROP which includes the object type.  Most of
-						 * the time this matches te->desc, so search for that;
-						 * however for the different kinds of CONSTRAINTs, we
-						 * know to search for hardcoded "DROP CONSTRAINT"
-						 * instead.
+						 * For other objects, we need to extract the first
+						 * part of the DROP which includes the object type.
+						 * Most of the time this matches te->desc, so search
+						 * for that; however for the different kinds of
+						 * CONSTRAINTs, we know to search for hardcoded "DROP
+						 * CONSTRAINT" instead.
 						 */
 						if (strcmp(te->desc, "DEFAULT") == 0)
 							appendPQExpBuffer(ftStmt, "%s", dropStmt);
@@ -712,8 +712,8 @@ restore_toc_entry(ArchiveHandle *AH, TocEntry *te,
 					/*
 					 * In parallel restore, if we created the table earlier in
 					 * the run then we wrap the COPY in a transaction and
-					 * precede it with a TRUNCATE.	If archiving is not on
-					 * this prevents WAL-logging the COPY.	This obtains a
+					 * precede it with a TRUNCATE.  If archiving is not on
+					 * this prevents WAL-logging the COPY.  This obtains a
 					 * speedup similar to that from using single_txn mode in
 					 * non-parallel restores.
 					 */
@@ -855,7 +855,7 @@ _enableTriggersIfNecessary(ArchiveHandle *AH, TocEntry *te, RestoreOptions *ropt
  */
 
 /* Public */
-size_t
+void
 WriteData(Archive *AHX, const void *data, size_t dLen)
 {
 	ArchiveHandle *AH = (ArchiveHandle *) AHX;
@@ -863,7 +863,9 @@ WriteData(Archive *AHX, const void *data, size_t dLen)
 	if (!AH->currToc)
 		exit_horribly(modulename, "internal error -- WriteData cannot be called outside the context of a DataDumper routine\n");
 
-	return (*AH->WriteDataPtr) (AH, data, dLen);
+	(*AH->WriteDataPtr) (AH, data, dLen);
+
+	return;
 }
 
 /*
@@ -1246,10 +1248,11 @@ SortTocFromFile(Archive *AHX, RestoreOptions *ropt)
  **********************/
 
 /* Public */
-int
+void
 archputs(const char *s, Archive *AH)
 {
-	return WriteData(AH, s, strlen(s));
+	WriteData(AH, s, strlen(s));
+	return;
 }
 
 /* Public */
@@ -1486,10 +1489,10 @@ dump_lo_buf(ArchiveHandle *AH)
  *	format to create a custom output routine to 'fake' a restore if it
  *	wants to generate a script (see TAR output).
  */
-int
+void
 ahwrite(const void *ptr, size_t size, size_t nmemb, ArchiveHandle *AH)
 {
-	size_t		res;
+	int			bytes_written = 0;
 
 	if (AH->writingBlob)
 	{
@@ -1509,23 +1512,13 @@ ahwrite(const void *ptr, size_t size, size_t nmemb, ArchiveHandle *AH)
 		memcpy((char *) AH->lo_buf + AH->lo_buf_used, ptr, remaining);
 		AH->lo_buf_used += remaining;
 
-		return size * nmemb;
+		bytes_written = size * nmemb;
 	}
 	else if (AH->gzOut)
-	{
-		res = GZWRITE(ptr, size, nmemb, AH->OF);
-		if (res != (nmemb * size))
-			exit_horribly(modulename, "could not write to output file: %s\n", strerror(errno));
-		return res;
-	}
+		bytes_written = GZWRITE(ptr, size, nmemb, AH->OF);
 	else if (AH->CustomOutPtr)
-	{
-		res = AH->CustomOutPtr (AH, ptr, size * nmemb);
+		bytes_written = AH->CustomOutPtr (AH, ptr, size * nmemb);
 
-		if (res != (nmemb * size))
-			exit_horribly(modulename, "could not write to custom output routine\n");
-		return res;
-	}
 	else
 	{
 		/*
@@ -1533,16 +1526,15 @@ ahwrite(const void *ptr, size_t size, size_t nmemb, ArchiveHandle *AH)
 		 * connected then send it to the DB.
 		 */
 		if (RestoringToDB(AH))
-			return ExecuteSqlCommandBuf(AH, (const char *) ptr, size * nmemb);
+			bytes_written = ExecuteSqlCommandBuf(AH, (const char *) ptr, size * nmemb);
 		else
-		{
-			res = fwrite(ptr, size, nmemb, AH->OF);
-			if (res != nmemb)
-				exit_horribly(modulename, "could not write to output file: %s\n",
-							  strerror(errno));
-			return res;
-		}
+			bytes_written = fwrite(ptr, size, nmemb, AH->OF) * size;
 	}
+
+	if (bytes_written != size * nmemb)
+		WRITE_ERROR_EXIT;
+
+	return;
 }
 
 /* on some error, we may decide to go on... */
@@ -1632,7 +1624,7 @@ _moveBefore(ArchiveHandle *AH, TocEntry *pos, TocEntry *te)
  * items.
  *
  * The arrays are indexed by dump ID (so entry zero is unused).  Note that the
- * array entries run only up to maxDumpId.	We might see dependency dump IDs
+ * array entries run only up to maxDumpId.  We might see dependency dump IDs
  * beyond that (if the dump was partial); so always check the array bound
  * before trying to touch an array entry.
  */
@@ -1656,7 +1648,7 @@ buildTocEntryArrays(ArchiveHandle *AH)
 
 		/*
 		 * tableDataId provides the TABLE DATA item's dump ID for each TABLE
-		 * TOC entry that has a DATA item.	We compute this by reversing the
+		 * TOC entry that has a DATA item.  We compute this by reversing the
 		 * TABLE DATA item's dependency, knowing that a TABLE DATA item has
 		 * just one dependency and it is the TABLE item.
 		 */
@@ -1847,8 +1839,11 @@ WriteStr(ArchiveHandle *AH, const char *c)
 
 	if (c)
 	{
-		res = WriteInt(AH, strlen(c));
-		res += (*AH->WriteBufPtr) (AH, c, strlen(c));
+		int			len = strlen(c);
+
+		res = WriteInt(AH, len);
+		(*AH->WriteBufPtr) (AH, c, len);
+		res += len;
 	}
 	else
 		res = WriteInt(AH, -1);
@@ -1868,8 +1863,7 @@ ReadStr(ArchiveHandle *AH)
 	else
 	{
 		buf = (char *) pg_malloc(l + 1);
-		if ((*AH->ReadBufPtr) (AH, (void *) buf, l) != l)
-			exit_horribly(modulename, "unexpected end of file\n");
+		(*AH->ReadBufPtr) (AH, (void *) buf, l);
 
 		buf[l] = '\0';
 	}
@@ -1950,9 +1944,7 @@ _discoverArchiveFormat(ArchiveHandle *AH)
 						  strerror(errno));
 	}
 
-	cnt = fread(sig, 1, 5, fh);
-
-	if (cnt != 5)
+	if ((cnt = fread(sig, 1, 5, fh)) != 5)
 	{
 		if (ferror(fh))
 			exit_horribly(modulename, "could not read input file: %s\n", strerror(errno));
@@ -1967,7 +1959,7 @@ _discoverArchiveFormat(ArchiveHandle *AH)
 
 	if (strncmp(sig, "PGDMP", 5) == 0)
 	{
-		int byteread;
+		int			byteread;
 
 		/*
 		 * Finish reading (most of) a custom-format header.
@@ -1975,12 +1967,12 @@ _discoverArchiveFormat(ArchiveHandle *AH)
 		 * NB: this code must agree with ReadHead().
 		 */
 		if ((byteread = fgetc(fh)) == EOF)
-			exit_horribly(modulename, "could not read input file: %s\n", strerror(errno));
+			READ_ERROR_EXIT(fh);
 
 		AH->vmaj = byteread;
 
 		if ((byteread = fgetc(fh)) == EOF)
-			exit_horribly(modulename, "could not read input file: %s\n", strerror(errno));
+			READ_ERROR_EXIT(fh);
 
 		AH->vmin = byteread;
 
@@ -1992,7 +1984,7 @@ _discoverArchiveFormat(ArchiveHandle *AH)
 		if (AH->vmaj > 1 || ((AH->vmaj == 1) && (AH->vmin > 0)))		/* Version > 1.0 */
 		{
 			if ((byteread = fgetc(fh)) == EOF)
-				exit_horribly(modulename, "could not read input file: %s\n", strerror(errno));
+				READ_ERROR_EXIT(fh);
 
 			AH->vrev = byteread;
 			AH->lookahead[AH->lookaheadLen++] = AH->vrev;
@@ -2004,20 +1996,20 @@ _discoverArchiveFormat(ArchiveHandle *AH)
 		AH->version = ((AH->vmaj * 256 + AH->vmin) * 256 + AH->vrev) * 256 + 0;
 
 		if ((AH->intSize = fgetc(fh)) == EOF)
-			exit_horribly(modulename, "could not read input file: %s\n", strerror(errno));
+			READ_ERROR_EXIT(fh);
 		AH->lookahead[AH->lookaheadLen++] = AH->intSize;
 
 		if (AH->version >= K_VERS_1_7)
 		{
 			if ((AH->offSize = fgetc(fh)) == EOF)
-				exit_horribly(modulename, "could not read input file: %s\n", strerror(errno));
+				READ_ERROR_EXIT(fh);
 			AH->lookahead[AH->lookaheadLen++] = AH->offSize;
 		}
 		else
 			AH->offSize = AH->intSize;
 
 		if ((byteread = fgetc(fh)) == EOF)
-			exit_horribly(modulename, "could not read input file: %s\n", strerror(errno));
+			READ_ERROR_EXIT(fh);
 
 		AH->format = byteread;
 		AH->lookahead[AH->lookaheadLen++] = AH->format;
@@ -2029,6 +2021,7 @@ _discoverArchiveFormat(ArchiveHandle *AH)
 		 * read first 512 byte header...
 		 */
 		cnt = fread(&AH->lookahead[AH->lookaheadLen], 1, 512 - AH->lookaheadLen, fh);
+		/* read failure is checked below */
 		AH->lookaheadLen += cnt;
 
 		if (AH->lookaheadLen >= strlen(TEXT_DUMPALL_HEADER) &&
@@ -2043,7 +2036,12 @@ _discoverArchiveFormat(ArchiveHandle *AH)
 		}
 
 		if (AH->lookaheadLen != 512)
-			exit_horribly(modulename, "input file does not appear to be a valid archive (too short?)\n");
+		{
+			if (feof(fh))
+				exit_horribly(modulename, "input file does not appear to be a valid archive (too short?)\n");
+			else
+				READ_ERROR_EXIT(fh);
+		}
 
 		if (!isValidTarHeader(AH->lookahead))
 			exit_horribly(modulename, "input file does not appear to be a valid archive\n");
@@ -2712,7 +2710,7 @@ _doSetSessionAuth(ArchiveHandle *AH, const char *user)
 	appendPQExpBufferStr(cmd, "SET SESSION AUTHORIZATION ");
 
 	/*
-	 * SQL requires a string literal here.	Might as well be correct.
+	 * SQL requires a string literal here.  Might as well be correct.
 	 */
 	if (user && *user)
 		appendStringLiteralAHX(cmd, user, AH);
@@ -2843,7 +2841,7 @@ _becomeUser(ArchiveHandle *AH, const char *user)
 }
 
 /*
- * Become the owner of the given TOC entry object.	If
+ * Become the owner of the given TOC entry object.  If
  * changes in ownership are not allowed, this doesn't do anything.
  */
 static void
@@ -2998,7 +2996,7 @@ _getObjectDescription(PQExpBuffer buf, TocEntry *te, ArchiveHandle *AH)
 		strcmp(type, "FOREIGN TABLE") == 0 ||
 		strcmp(type, "TEXT SEARCH DICTIONARY") == 0 ||
 		strcmp(type, "TEXT SEARCH CONFIGURATION") == 0 ||
-		/* non-schema-specified objects */
+	/* non-schema-specified objects */
 		strcmp(type, "DATABASE") == 0 ||
 		strcmp(type, "PROCEDURAL LANGUAGE") == 0 ||
 		strcmp(type, "SCHEMA") == 0 ||
@@ -3313,13 +3311,12 @@ ReadHead(ArchiveHandle *AH)
 	/*
 	 * If we haven't already read the header, do so.
 	 *
-	 * NB: this code must agree with _discoverArchiveFormat().	Maybe find a
+	 * NB: this code must agree with _discoverArchiveFormat().  Maybe find a
 	 * way to unify the cases?
 	 */
 	if (!AH->readHeader)
 	{
-		if ((*AH->ReadBufPtr) (AH, tmpMag, 5) != 5)
-			exit_horribly(modulename, "unexpected end of file\n");
+		(*AH->ReadBufPtr) (AH, tmpMag, 5);
 
 		if (strncmp(tmpMag, "PGDMP", 5) != 0)
 			exit_horribly(modulename, "did not find magic string in file header\n");
@@ -3423,7 +3420,7 @@ checkSeek(FILE *fp)
 		return false;
 
 	/*
-	 * Check that fseeko(SEEK_SET) works, too.	NB: we used to try to test
+	 * Check that fseeko(SEEK_SET) works, too.  NB: we used to try to test
 	 * this with fseeko(fp, 0, SEEK_CUR).  But some platforms treat that as a
 	 * successful no-op even on files that are otherwise unseekable.
 	 */
@@ -3463,7 +3460,7 @@ dumpTimestamp(ArchiveHandle *AH, const char *msg, time_t tim)
  *
  * Work is done in three phases.
  * First we process all SECTION_PRE_DATA tocEntries, in a single connection,
- * just as for a standard restore.	Second we process the remaining non-ACL
+ * just as for a standard restore.  Second we process the remaining non-ACL
  * steps in parallel worker children (threads on Windows, processes on Unix),
  * each of which connects separately to the database.  Finally we process all
  * the ACL entries in a single connection (that happens back in
@@ -3485,7 +3482,7 @@ restore_toc_entries_prefork(ArchiveHandle *AH)
 	 * Do all the early stuff in a single connection in the parent. There's no
 	 * great point in running it in parallel, in fact it will actually run
 	 * faster in a single connection because we avoid all the connection and
-	 * setup overhead.	Also, pre-9.2 pg_dump versions were not very good
+	 * setup overhead.  Also, pre-9.2 pg_dump versions were not very good
 	 * about showing all the dependencies of SECTION_PRE_DATA items, so we do
 	 * not risk trying to process them out-of-order.
 	 *
@@ -3531,7 +3528,7 @@ restore_toc_entries_prefork(ArchiveHandle *AH)
 	}
 
 	/*
-	 * Now close parent connection in prep for parallel steps.	We do this
+	 * Now close parent connection in prep for parallel steps.  We do this
 	 * mainly to ensure that we don't exceed the specified number of parallel
 	 * connections.
 	 */
@@ -3576,7 +3573,7 @@ restore_toc_entries_parallel(ArchiveHandle *AH, ParallelState *pstate,
 
 	/*
 	 * Initialize the lists of ready items, the list for pending items has
-	 * already been initialized in the caller.	After this setup, the pending
+	 * already been initialized in the caller.  After this setup, the pending
 	 * list is everything that needs to be done but is blocked by one or more
 	 * dependencies, while the ready list contains items that have no
 	 * remaining dependencies. Note: we don't yet filter out entries that

@@ -24,9 +24,9 @@
  */
 static PID_TYPE
 psql_start_test(const char *testname,
-				_stringlist ** resultfiles,
-				_stringlist ** expectfiles,
-				_stringlist ** tags)
+				_stringlist **resultfiles,
+				_stringlist **expectfiles,
+				_stringlist **tags)
 {
 	PID_TYPE	pid;
 	char		infile[MAXPGPATH];
@@ -64,7 +64,7 @@ psql_start_test(const char *testname,
 						   "%s ", launcher);
 
 	snprintf(psql_cmd + offset, sizeof(psql_cmd) - offset,
-			 SYSTEMQUOTE "\"%s%spsql\" -X -a -q -d \"%s\" < \"%s\" > \"%s\" 2>&1" SYSTEMQUOTE,
+			 "\"%s%spsql\" -X -a -q -d \"%s\" < \"%s\" > \"%s\" 2>&1",
 			 psqldir ? psqldir : "",
 			 psqldir ? "/" : "",
 			 dblist->str,

@@ -104,11 +104,12 @@ static void populate_recordset_array_element_start(void *state, bool isnull);
 /* worker function for populate_recordset and to_recordset */
 static inline Datum populate_recordset_worker(FunctionCallInfo fcinfo,
 						  bool have_record_arg);
+
 /* Worker that takes care of common setup for us */
-static JsonbValue *findJsonbValueFromSuperHeaderLen(JsonbSuperHeader sheader,
-													uint32 flags,
-													char *key,
-													uint32 keylen);
+static JsonbValue *findJsonbValueFromContainerLen(JsonbContainer *container,
+								 uint32 flags,
+								 char *key,
+								 uint32 keylen);
 
 /* search type classification for json_get* functions */
 typedef enum
@@ -235,8 +236,8 @@ typedef struct PopulateRecordsetState
 } PopulateRecordsetState;
 
 /* Turn a jsonb object into a record */
-static void make_row_from_rec_and_jsonb(Jsonb * element,
-										PopulateRecordsetState *state);
+static void make_row_from_rec_and_jsonb(Jsonb *element,
+							PopulateRecordsetState *state);
 
 /*
  * SQL function json_object_keys
@@ -285,7 +286,7 @@ jsonb_object_keys(PG_FUNCTION_ARGS)
 		state->sent_count = 0;
 		state->result = palloc(state->result_size * sizeof(char *));
 
-		it = JsonbIteratorInit(VARDATA_ANY(jb));
+		it = JsonbIteratorInit(&jb->root);
 
 		while ((r = JsonbIteratorNext(&it, &v, skipNested)) != WJB_DONE)
 		{
@@ -483,7 +484,7 @@ jsonb_object_field(PG_FUNCTION_ARGS)
 
 	Assert(JB_ROOT_IS_OBJECT(jb));
 
-	it = JsonbIteratorInit(VARDATA_ANY(jb));
+	it = JsonbIteratorInit(&jb->root);
 
 	while ((r = JsonbIteratorNext(&it, &v, skipNested)) != WJB_DONE)
 	{
@@ -544,7 +545,7 @@ jsonb_object_field_text(PG_FUNCTION_ARGS)
 
 	Assert(JB_ROOT_IS_OBJECT(jb));
 
-	it = JsonbIteratorInit(VARDATA_ANY(jb));
+	it = JsonbIteratorInit(&jb->root);
 
 	while ((r = JsonbIteratorNext(&it, &v, skipNested)) != WJB_DONE)
 	{
@@ -579,7 +580,7 @@ jsonb_object_field_text(PG_FUNCTION_ARGS)
 					StringInfo	jtext = makeStringInfo();
 					Jsonb	   *tjb = JsonbValueToJsonb(&v);
 
-					(void) JsonbToCString(jtext, VARDATA(tjb), -1);
+					(void) JsonbToCString(jtext, &tjb->root , -1);
 					result = cstring_to_text_with_len(jtext->data, jtext->len);
 				}
 				PG_RETURN_TEXT_P(result);
@@ -627,7 +628,7 @@ jsonb_array_element(PG_FUNCTION_ARGS)
 
 	Assert(JB_ROOT_IS_ARRAY(jb));
 
-	it = JsonbIteratorInit(VARDATA_ANY(jb));
+	it = JsonbIteratorInit(&jb->root);
 
 	while ((r = JsonbIteratorNext(&it, &v, skipNested)) != WJB_DONE)
 	{
@@ -681,7 +682,7 @@ jsonb_array_element_text(PG_FUNCTION_ARGS)
 
 	Assert(JB_ROOT_IS_ARRAY(jb));
 
-	it = JsonbIteratorInit(VARDATA_ANY(jb));
+	it = JsonbIteratorInit(&jb->root);
 
 	while ((r = JsonbIteratorNext(&it, &v, skipNested)) != WJB_DONE)
 	{
@@ -710,7 +711,7 @@ jsonb_array_element_text(PG_FUNCTION_ARGS)
 					StringInfo	jtext = makeStringInfo();
 					Jsonb	   *tjb = JsonbValueToJsonb(&v);
 
-					(void) JsonbToCString(jtext, VARDATA(tjb), -1);
+					(void) JsonbToCString(jtext, &tjb->root, -1);
 					result = cstring_to_text_with_len(jtext->data, jtext->len);
 				}
 				PG_RETURN_TEXT_P(result);
@@ -791,7 +792,7 @@ get_path_all(FunctionCallInfo fcinfo, bool as_text)
 	result = get_worker(json, NULL, -1, tpath, ipath, npath, as_text);
 
 	if (result != NULL)
-			PG_RETURN_TEXT_P(result);
+		PG_RETURN_TEXT_P(result);
 	else
 		/* null is NULL, regardless */
 		PG_RETURN_NULL();
@@ -1154,7 +1155,7 @@ get_jsonb_path_all(FunctionCallInfo fcinfo, bool as_text)
 				have_array = false;
 	JsonbValue *jbvp = NULL;
 	JsonbValue	tv;
-	JsonbSuperHeader superHeader;
+	JsonbContainer *container;
 
 	if (array_contains_nulls(path))
 		ereport(ERROR,
@@ -1169,16 +1170,16 @@ get_jsonb_path_all(FunctionCallInfo fcinfo, bool as_text)
 	else if (JB_ROOT_IS_ARRAY(jb) && !JB_ROOT_IS_SCALAR(jb))
 		have_array = true;
 
-	superHeader = (JsonbSuperHeader) VARDATA(jb);
+	container = &jb->root;
 
 	for (i = 0; i < npath; i++)
 	{
 		if (have_object)
 		{
-			jbvp = findJsonbValueFromSuperHeaderLen(superHeader,
-													JB_FOBJECT,
-													VARDATA_ANY(pathtext[i]),
-													VARSIZE_ANY_EXHDR(pathtext[i]));
+			jbvp = findJsonbValueFromContainerLen(container,
+												  JB_FOBJECT,
+												  VARDATA_ANY(pathtext[i]),
+											 VARSIZE_ANY_EXHDR(pathtext[i]));
 		}
 		else if (have_array)
 		{
@@ -1191,7 +1192,7 @@ get_jsonb_path_all(FunctionCallInfo fcinfo, bool as_text)
 			if (*endptr != '\0' || lindex > INT_MAX || lindex < 0)
 				PG_RETURN_NULL();
 			index = (uint32) lindex;
-			jbvp = getIthJsonbValueFromSuperHeader(superHeader, index);
+			jbvp = getIthJsonbValueFromContainer(container, index);
 		}
 		else
 		{
@@ -1209,11 +1210,11 @@ get_jsonb_path_all(FunctionCallInfo fcinfo, bool as_text)
 
 		if (jbvp->type == jbvBinary)
 		{
-			JsonbIterator  *it = JsonbIteratorInit(jbvp->val.binary.data);
-			int				r;
+			JsonbIterator *it = JsonbIteratorInit((JsonbContainer *) jbvp->val.binary.data);
+			int			r;
 
 			r = JsonbIteratorNext(&it, &tv, true);
-			superHeader = (JsonbSuperHeader) jbvp->val.binary.data;
+			container = (JsonbContainer *) jbvp->val.binary.data;
 			have_object = r == WJB_BEGIN_OBJECT;
 			have_array = r == WJB_BEGIN_ARRAY;
 		}
@@ -1237,7 +1238,7 @@ get_jsonb_path_all(FunctionCallInfo fcinfo, bool as_text)
 	if (as_text)
 	{
 		PG_RETURN_TEXT_P(cstring_to_text(JsonbToCString(NULL,
-														VARDATA(res),
+														&res->root,
 														VARSIZE(res))));
 	}
 	else
@@ -1427,7 +1428,7 @@ each_worker_jsonb(FunctionCallInfo fcinfo, bool as_text)
 									ALLOCSET_DEFAULT_MAXSIZE);
 
 
-	it = JsonbIteratorInit(VARDATA_ANY(jb));
+	it = JsonbIteratorInit(&jb->root);
 
 	while ((r = JsonbIteratorNext(&it, &v, skipNested)) != WJB_DONE)
 	{
@@ -1476,7 +1477,7 @@ each_worker_jsonb(FunctionCallInfo fcinfo, bool as_text)
 						StringInfo	jtext = makeStringInfo();
 						Jsonb	   *jb = JsonbValueToJsonb(&v);
 
-						(void) JsonbToCString(jtext, VARDATA(jb), 2 * v.estSize);
+						(void) JsonbToCString(jtext, &jb->root, 0);
 						sv = cstring_to_text_with_len(jtext->data, jtext->len);
 					}
 
@@ -1752,7 +1753,7 @@ elements_worker_jsonb(FunctionCallInfo fcinfo, bool as_text)
 									ALLOCSET_DEFAULT_MAXSIZE);
 
 
-	it = JsonbIteratorInit(VARDATA_ANY(jb));
+	it = JsonbIteratorInit(&jb->root);
 
 	while ((r = JsonbIteratorNext(&it, &v, skipNested)) != WJB_DONE)
 	{
@@ -1796,7 +1797,7 @@ elements_worker_jsonb(FunctionCallInfo fcinfo, bool as_text)
 						StringInfo	jtext = makeStringInfo();
 						Jsonb	   *jb = JsonbValueToJsonb(&v);
 
-						(void) JsonbToCString(jtext, VARDATA(jb), 2 * v.estSize);
+						(void) JsonbToCString(jtext, &jb->root, 0);
 						sv = cstring_to_text_with_len(jtext->data, jtext->len);
 					}
 
@@ -1932,7 +1933,7 @@ elements_array_element_end(void *state, bool isnull)
 	text	   *val;
 	HeapTuple	tuple;
 	Datum		values[1];
-	bool nulls[1] = {false};
+	bool		nulls[1] = {false};
 
 	/* skip over nested objects */
 	if (_state->lex->lex_level != 1)
@@ -2035,7 +2036,7 @@ json_to_record(PG_FUNCTION_ARGS)
 static inline Datum
 populate_record_worker(FunctionCallInfo fcinfo, bool have_record_arg)
 {
-	int         json_arg_num =  have_record_arg ? 1 : 0;
+	int			json_arg_num = have_record_arg ? 1 : 0;
 	Oid			jtype = get_fn_expr_argtype(fcinfo->flinfo, json_arg_num);
 	text	   *json;
 	Jsonb	   *jb = NULL;
@@ -2060,7 +2061,7 @@ populate_record_worker(FunctionCallInfo fcinfo, bool have_record_arg)
 
 	if (have_record_arg)
 	{
-		Oid argtype = get_fn_expr_argtype(fcinfo->flinfo, 0);
+		Oid			argtype = get_fn_expr_argtype(fcinfo->flinfo, 0);
 
 		if (!type_is_rowtype(argtype))
 			ereport(ERROR,
@@ -2218,8 +2219,8 @@ populate_record_worker(FunctionCallInfo fcinfo, bool have_record_arg)
 		{
 			char	   *key = NameStr(tupdesc->attrs[i]->attname);
 
-			v = findJsonbValueFromSuperHeaderLen(VARDATA(jb), JB_FOBJECT, key,
-												 strlen(key));
+			v = findJsonbValueFromContainerLen(&jb->root, JB_FOBJECT, key,
+											   strlen(key));
 		}
 
 		/*
@@ -2275,13 +2276,13 @@ populate_record_worker(FunctionCallInfo fcinfo, bool have_record_arg)
 					s = pnstrdup((v->val.boolean) ? "t" : "f", 1);
 				else if (v->type == jbvNumeric)
 					s = DatumGetCString(DirectFunctionCall1(numeric_out,
-											   PointerGetDatum(v->val.numeric)));
+										   PointerGetDatum(v->val.numeric)));
 				else if (!use_json_as_text)
 					ereport(ERROR,
 							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 							 errmsg("cannot populate with a nested object unless use_json_as_text is true")));
 				else if (v->type == jbvBinary)
-					s = JsonbToCString(NULL, v->val.binary.data, v->val.binary.len);
+					s = JsonbToCString(NULL, (JsonbContainer *) v->val.binary.data, v->val.binary.len);
 				else
 					elog(ERROR, "invalid jsonb type");
 			}
@@ -2476,7 +2477,7 @@ json_to_recordset(PG_FUNCTION_ARGS)
 }
 
 static void
-make_row_from_rec_and_jsonb(Jsonb * element, PopulateRecordsetState *state)
+make_row_from_rec_and_jsonb(Jsonb *element, PopulateRecordsetState *state)
 {
 	Datum	   *values;
 	bool	   *nulls;
@@ -2528,8 +2529,8 @@ make_row_from_rec_and_jsonb(Jsonb * element, PopulateRecordsetState *state)
 
 		key = NameStr(tupdesc->attrs[i]->attname);
 
-		v = findJsonbValueFromSuperHeaderLen(VARDATA(element), JB_FOBJECT,
-											 key, strlen(key));
+		v = findJsonbValueFromContainerLen(&element->root, JB_FOBJECT,
+										   key, strlen(key));
 
 		/*
 		 * We can't just skip here if the key wasn't found since we might have
@@ -2575,13 +2576,13 @@ make_row_from_rec_and_jsonb(Jsonb * element, PopulateRecordsetState *state)
 				s = pnstrdup((v->val.boolean) ? "t" : "f", 1);
 			else if (v->type == jbvNumeric)
 				s = DatumGetCString(DirectFunctionCall1(numeric_out,
-											   PointerGetDatum(v->val.numeric)));
+										   PointerGetDatum(v->val.numeric)));
 			else if (!state->use_json_as_text)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						 errmsg("cannot populate with a nested object unless use_json_as_text is true")));
 			else if (v->type == jbvBinary)
-				s = JsonbToCString(NULL, v->val.binary.data, v->val.binary.len);
+				s = JsonbToCString(NULL, (JsonbContainer *) v->val.binary.data, v->val.binary.len);
 			else
 				elog(ERROR, "invalid jsonb type");
 
@@ -2603,7 +2604,7 @@ make_row_from_rec_and_jsonb(Jsonb * element, PopulateRecordsetState *state)
 static inline Datum
 populate_recordset_worker(FunctionCallInfo fcinfo, bool have_record_arg)
 {
-	int         json_arg_num = have_record_arg ? 1 : 0;
+	int			json_arg_num = have_record_arg ? 1 : 0;
 	Oid			jtype = get_fn_expr_argtype(fcinfo->flinfo, json_arg_num);
 	bool		use_json_as_text;
 	ReturnSetInfo *rsi;
@@ -2620,7 +2621,7 @@ populate_recordset_worker(FunctionCallInfo fcinfo, bool have_record_arg)
 
 	if (have_record_arg)
 	{
-		Oid argtype = get_fn_expr_argtype(fcinfo->flinfo, 0);
+		Oid			argtype = get_fn_expr_argtype(fcinfo->flinfo, 0);
 
 		if (!type_is_rowtype(argtype))
 			ereport(ERROR,
@@ -2749,7 +2750,7 @@ populate_recordset_worker(FunctionCallInfo fcinfo, bool have_record_arg)
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 			   errmsg("cannot call jsonb_populate_recordset on non-array")));
 
-		it = JsonbIteratorInit(VARDATA_ANY(jb));
+		it = JsonbIteratorInit(&jb->root);
 
 		while ((r = JsonbIteratorNext(&it, &v, skipNested)) != WJB_DONE)
 		{
@@ -3018,11 +3019,11 @@ populate_recordset_object_field_end(void *state, char *fname, bool isnull)
 }
 
 /*
- * findJsonbValueFromSuperHeader() wrapper that sets up JsonbValue key string.
+ * findJsonbValueFromContainer() wrapper that sets up JsonbValue key string.
  */
 static JsonbValue *
-findJsonbValueFromSuperHeaderLen(JsonbSuperHeader sheader, uint32 flags,
-								 char *key, uint32 keylen)
+findJsonbValueFromContainerLen(JsonbContainer *container, uint32 flags,
+							   char *key, uint32 keylen)
 {
 	JsonbValue	k;
 
@@ -3030,5 +3031,5 @@ findJsonbValueFromSuperHeaderLen(JsonbSuperHeader sheader, uint32 flags,
 	k.val.string.val = key;
 	k.val.string.len = keylen;
 
-	return findJsonbValueFromSuperHeader(sheader, flags, NULL, &k);
+	return findJsonbValueFromContainer(container, flags, &k);
 }

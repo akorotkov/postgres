@@ -42,9 +42,6 @@ PG_MODULE_MAGIC;
 PG_FUNCTION_INFO_V1(pgstattuple);
 PG_FUNCTION_INFO_V1(pgstattuplebyid);
 
-extern Datum pgstattuple(PG_FUNCTION_ARGS);
-extern Datum pgstattuplebyid(PG_FUNCTION_ARGS);
-
 /*
  * struct pgstattuple_type
  *
@@ -313,7 +310,7 @@ pgstat_heap(Relation rel, FunctionCallInfo fcinfo)
 
 		/*
 		 * To avoid physically reading the table twice, try to do the
-		 * free-space scan in parallel with the heap scan.	However,
+		 * free-space scan in parallel with the heap scan.  However,
 		 * heap_getnext may find no tuples on a given page, so we cannot
 		 * simply examine the pages returned by the heap scan.
 		 */

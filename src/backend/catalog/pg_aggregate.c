@@ -60,6 +60,8 @@ AggregateCreate(const char *aggName,
 				List *aggmtransfnName,
 				List *aggminvtransfnName,
 				List *aggmfinalfnName,
+				bool finalfnExtraArgs,
+				bool mfinalfnExtraArgs,
 				List *aggsortopName,
 				Oid aggTransType,
 				int32 aggTransSpace,
@@ -150,10 +152,10 @@ AggregateCreate(const char *aggName,
 				 errdetail("An aggregate using a polymorphic transition type must have at least one polymorphic argument.")));
 
 	/*
-	 * An ordered-set aggregate that is VARIADIC must be VARIADIC ANY.	In
+	 * An ordered-set aggregate that is VARIADIC must be VARIADIC ANY.  In
 	 * principle we could support regular variadic types, but it would make
 	 * things much more complicated because we'd have to assemble the correct
-	 * subsets of arguments into array values.	Since no standard aggregates
+	 * subsets of arguments into array values.  Since no standard aggregates
 	 * have use for such a case, we aren't bothering for now.
 	 */
 	if (AGGKIND_IS_ORDERED_SET(aggKind) && OidIsValid(variadicArgType) &&
@@ -165,7 +167,7 @@ AggregateCreate(const char *aggName,
 	/*
 	 * If it's a hypothetical-set aggregate, there must be at least as many
 	 * direct arguments as aggregated ones, and the last N direct arguments
-	 * must match the aggregated ones in type.	(We have to check this again
+	 * must match the aggregated ones in type.  (We have to check this again
 	 * when the aggregate is called, in case ANY is involved, but it makes
 	 * sense to reject the aggregate definition now if the declared arg types
 	 * don't match up.)  It's unconditionally OK if numDirectArgs == numArgs,
@@ -344,48 +346,46 @@ AggregateCreate(const char *aggName,
 		ReleaseSysCache(tup);
 	}
 
-	/*
-	 * Set up fnArgs for looking up finalfn(s)
-	 *
-	 * For ordinary aggs, the finalfn just takes the transtype.  For
-	 * ordered-set aggs, it takes the transtype plus all args.	(The
-	 * aggregated args are useless at runtime, and are actually passed as
-	 * NULLs, but we may need them in the function signature to allow
-	 * resolution of a polymorphic agg's result type.)
-	 */
-	fnArgs[0] = aggTransType;
-	if (AGGKIND_IS_ORDERED_SET(aggKind))
-	{
-		nargs_finalfn = numArgs + 1;
-		memcpy(fnArgs + 1, aggArgTypes, numArgs * sizeof(Oid));
-	}
-	else
-	{
-		nargs_finalfn = 1;
-		/* variadic-ness of the aggregate doesn't affect finalfn */
-		variadicArgType = InvalidOid;
-	}
-
 	/* handle finalfn, if supplied */
 	if (aggfinalfnName)
 	{
+		/*
+		 * If finalfnExtraArgs is specified, the transfn takes the transtype
+		 * plus all args; otherwise, it just takes the transtype plus any
+		 * direct args.  (Non-direct args are useless at runtime, and are
+		 * actually passed as NULLs, but we may need them in the function
+		 * signature to allow resolution of a polymorphic agg's result type.)
+		 */
+		Oid			ffnVariadicArgType = variadicArgType;
+
+		fnArgs[0] = aggTransType;
+		memcpy(fnArgs + 1, aggArgTypes, numArgs * sizeof(Oid));
+		if (finalfnExtraArgs)
+			nargs_finalfn = numArgs + 1;
+		else
+		{
+			nargs_finalfn = numDirectArgs + 1;
+			if (numDirectArgs < numArgs)
+			{
+				/* variadic argument doesn't affect finalfn */
+				ffnVariadicArgType = InvalidOid;
+			}
+		}
+
 		finalfn = lookup_agg_function(aggfinalfnName, nargs_finalfn,
-									  fnArgs, variadicArgType,
+									  fnArgs, ffnVariadicArgType,
 									  &finaltype);
 
 		/*
-		 * The finalfn of an ordered-set agg will certainly be passed at least
-		 * one null argument, so complain if it's strict.  Nothing bad would
-		 * happen at runtime (you'd just get a null result), but it's surely
-		 * not what the user wants, so let's complain now.
-		 *
-		 * Note: it's likely that a strict transfn would also be a mistake,
-		 * but the case isn't quite so airtight, so we let that pass.
+		 * When finalfnExtraArgs is specified, the finalfn will certainly be
+		 * passed at least one null argument, so complain if it's strict.
+		 * Nothing bad would happen at runtime (you'd just get a null result),
+		 * but it's surely not what the user wants, so let's complain now.
 		 */
-		if (AGGKIND_IS_ORDERED_SET(aggKind) && func_strict(finalfn))
+		if (finalfnExtraArgs && func_strict(finalfn))
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
-					 errmsg("final function of an ordered-set aggregate must not be declared STRICT")));
+					 errmsg("final function with extra arguments must not be declared STRICT")));
 	}
 	else
 	{
@@ -434,21 +434,34 @@ AggregateCreate(const char *aggName,
 		if (aggmfinalfnName)
 		{
 			/*
-			 * The arguments are the same as for the regular finalfn, except
-			 * that the transition data type might be different.  So re-use
-			 * the fnArgs values set up above, except for that one.
+			 * The arguments are figured the same way as for the regular
+			 * finalfn, but using aggmTransType and mfinalfnExtraArgs.
 			 */
+			Oid			ffnVariadicArgType = variadicArgType;
+
 			fnArgs[0] = aggmTransType;
+			memcpy(fnArgs + 1, aggArgTypes, numArgs * sizeof(Oid));
+			if (mfinalfnExtraArgs)
+				nargs_finalfn = numArgs + 1;
+			else
+			{
+				nargs_finalfn = numDirectArgs + 1;
+				if (numDirectArgs < numArgs)
+				{
+					/* variadic argument doesn't affect finalfn */
+					ffnVariadicArgType = InvalidOid;
+				}
+			}
 
 			mfinalfn = lookup_agg_function(aggmfinalfnName, nargs_finalfn,
-										   fnArgs, variadicArgType,
+										   fnArgs, ffnVariadicArgType,
 										   &rettype);
 
-			/* As above, check strictness if it's an ordered-set agg */
-			if (AGGKIND_IS_ORDERED_SET(aggKind) && func_strict(mfinalfn))
+			/* As above, check strictness if mfinalfnExtraArgs is given */
+			if (mfinalfnExtraArgs && func_strict(mfinalfn))
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
-						 errmsg("final function of an ordered-set aggregate must not be declared STRICT")));
+						 errmsg("final function with extra arguments must not be declared STRICT")));
 		}
 		else
 		{
@@ -554,6 +567,8 @@ AggregateCreate(const char *aggName,
 	values[Anum_pg_aggregate_aggmtransfn - 1] = ObjectIdGetDatum(mtransfn);
 	values[Anum_pg_aggregate_aggminvtransfn - 1] = ObjectIdGetDatum(minvtransfn);
 	values[Anum_pg_aggregate_aggmfinalfn - 1] = ObjectIdGetDatum(mfinalfn);
+	values[Anum_pg_aggregate_aggfinalextra - 1] = BoolGetDatum(finalfnExtraArgs);
+	values[Anum_pg_aggregate_aggmfinalextra - 1] = BoolGetDatum(mfinalfnExtraArgs);
 	values[Anum_pg_aggregate_aggsortop - 1] = ObjectIdGetDatum(sortop);
 	values[Anum_pg_aggregate_aggtranstype - 1] = ObjectIdGetDatum(aggTransType);
 	values[Anum_pg_aggregate_aggtransspace - 1] = Int32GetDatum(aggTransSpace);

@@ -19,7 +19,6 @@
 #include "access/xlogreader.h"
 #include "access/transam.h"
 #include "common/fe_memutils.h"
-#include "common/relpath.h"
 #include "getopt_long.h"
 #include "rmgrdesc.h"
 
@@ -705,7 +704,7 @@ main(int argc, char **argv)
 				break;
 			else
 			{
-				pg_usleep(1000000L);		/* 1 second */
+				pg_usleep(1000000L);	/* 1 second */
 				continue;
 			}
 		}

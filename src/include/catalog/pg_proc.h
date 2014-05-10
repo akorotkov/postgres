@@ -175,6 +175,8 @@ DATA(insert OID =  45 (  regprocout		   PGNSP PGUID 12 1 0 0 0 f f f f t f s 1 0
 DESCR("I/O");
 DATA(insert OID = 3494 (  to_regproc		PGNSP PGUID 12 1 0 0 0 f f f f t f s 1 0 24 "2275" _null_ _null_ _null_ _null_ to_regproc _null_ _null_ _null_ ));
 DESCR("convert proname to regproc");
+DATA(insert OID = 3479 (  to_regprocedure	PGNSP PGUID 12 1 0 0 0 f f f f t f s 1 0 2202 "2275" _null_ _null_ _null_ _null_ to_regprocedure _null_ _null_ _null_ ));
+DESCR("convert proname to regprocedure");
 DATA(insert OID =  46 (  textin			   PGNSP PGUID 12 1 0 0 0 f f f f t f i 1 0 25 "2275" _null_ _null_ _null_ _null_ textin _null_ _null_ _null_ ));
 DESCR("I/O");
 DATA(insert OID =  47 (  textout		   PGNSP PGUID 12 1 0 0 0 f f f f t f i 1 0 2275 "25" _null_ _null_ _null_ _null_ textout _null_ _null_ _null_ ));
@@ -877,7 +879,7 @@ DATA(insert OID = 3168 (  array_replace    PGNSP PGUID 12 1 0 0 0 f f f f f f i 
 DESCR("replace any occurrences of an element in an array");
 DATA(insert OID = 2333 (  array_agg_transfn   PGNSP PGUID 12 1 0 0 0 f f f f f f i 2 0 2281 "2281 2283" _null_ _null_ _null_ _null_ array_agg_transfn _null_ _null_ _null_ ));
 DESCR("aggregate transition function");
-DATA(insert OID = 2334 (  array_agg_finalfn   PGNSP PGUID 12 1 0 0 0 f f f f f f i 1 0 2277 "2281" _null_ _null_ _null_ _null_ array_agg_finalfn _null_ _null_ _null_ ));
+DATA(insert OID = 2334 (  array_agg_finalfn   PGNSP PGUID 12 1 0 0 0 f f f f f f i 2 0 2277 "2281 2283" _null_ _null_ _null_ _null_ array_agg_finalfn _null_ _null_ _null_ ));
 DESCR("aggregate final function");
 DATA(insert OID = 2335 (  array_agg		   PGNSP PGUID 12 1 0 0 0 t f f f f f i 1 0 2277 "2283" _null_ _null_ _null_ _null_ aggregate_dummy _null_ _null_ _null_ ));
 DESCR("concatenate aggregate input into an array");
@@ -1468,7 +1470,7 @@ DESCR("natural exponential (e^x)");
 
 /*
  * This form of obj_description is now deprecated, since it will fail if
- * OIDs are not unique across system catalogs.	Use the other form instead.
+ * OIDs are not unique across system catalogs.  Use the other form instead.
  */
 DATA(insert OID = 1348 (  obj_description	 PGNSP PGUID 14 100 0 0 0 f f f f t f s 1 0 25 "26" _null_ _null_ _null_ _null_ "select description from pg_catalog.pg_description where objoid = $1 and objsubid = 0" _null_ _null_ _null_ ));
 DESCR("deprecated, use two-argument form instead");
@@ -1773,7 +1775,7 @@ DATA(insert OID = 1576 (  setval			PGNSP PGUID 12 1 0 0 0 f f f f t f v 2 0 20 "
 DESCR("set sequence value");
 DATA(insert OID = 1765 (  setval			PGNSP PGUID 12 1 0 0 0 f f f f t f v 3 0 20 "2205 20 16" _null_ _null_ _null_ _null_ setval3_oid _null_ _null_ _null_ ));
 DESCR("set sequence value and is_called status");
-DATA(insert OID = 3078 (  pg_sequence_parameters	PGNSP PGUID 12 1 0 0 0 f f f f t f s 1 0 2249 "26" "{23,20,20,20,20,16}" "{i,o,o,o,o,o}" "{sequence_oid,start_value,minimum_value,maximum_value,increment,cycle_option}" _null_ pg_sequence_parameters _null_ _null_ _null_));
+DATA(insert OID = 3078 (  pg_sequence_parameters	PGNSP PGUID 12 1 0 0 0 f f f f t f s 1 0 2249 "26" "{26,20,20,20,20,16}" "{i,o,o,o,o,o}" "{sequence_oid,start_value,minimum_value,maximum_value,increment,cycle_option}" _null_ pg_sequence_parameters _null_ _null_ _null_));
 DESCR("sequence parameters, for use by information schema");
 
 DATA(insert OID = 1579 (  varbit_in			PGNSP PGUID 12 1 0 0 0 f f f f t f i 3 0 1562 "2275 26 23" _null_ _null_ _null_ _null_ varbit_in _null_ _null_ _null_ ));
@@ -1981,7 +1983,7 @@ DATA(insert OID = 2232 (  pg_get_function_identity_arguments	   PGNSP PGUID 12 1
 DESCR("identity argument list of a function");
 DATA(insert OID = 2165 (  pg_get_function_result	   PGNSP PGUID 12 1 0 0 0 f f f f t f s 1 0 25 "26" _null_ _null_ _null_ _null_ pg_get_function_result _null_ _null_ _null_ ));
 DESCR("result type of a function");
-DATA(insert OID = 3808 (  pg_get_function_arg_default   PGNSP PGUID 12 1 0 0 0 f f f f t f s 2 0 25 "26 23" _null_ _null_ _null_ _null_ pg_get_function_arg_default _null_ _null_ _null_ ));
+DATA(insert OID = 3808 (  pg_get_function_arg_default	PGNSP PGUID 12 1 0 0 0 f f f f t f s 2 0 25 "26 23" _null_ _null_ _null_ _null_ pg_get_function_arg_default _null_ _null_ _null_ ));
 DESCR("function argument default");
 
 DATA(insert OID = 1686 (  pg_get_keywords		PGNSP PGUID 12 10 400 0 0 f f f f t t s 0 0 2249 "" "{25,18,25}" "{o,o,o}" "{word,catcode,catdesc}" _null_ pg_get_keywords _null_ _null_ _null_ ));
@@ -2653,7 +2655,7 @@ DATA(insert OID = 2878 (  pg_stat_get_live_tuples	PGNSP PGUID 12 1 0 0 0 f f f f
 DESCR("statistics: number of live tuples");
 DATA(insert OID = 2879 (  pg_stat_get_dead_tuples	PGNSP PGUID 12 1 0 0 0 f f f f t f s 1 0 20 "26" _null_ _null_ _null_ _null_ pg_stat_get_dead_tuples _null_ _null_ _null_ ));
 DESCR("statistics: number of dead tuples");
-DATA(insert OID = 3177 (  pg_stat_get_mod_since_analyze	PGNSP PGUID 12 1 0 0 0 f f f f t f s 1 0 20 "26" _null_ _null_ _null_ _null_ pg_stat_get_mod_since_analyze _null_ _null_ _null_ ));
+DATA(insert OID = 3177 (  pg_stat_get_mod_since_analyze PGNSP PGUID 12 1 0 0 0 f f f f t f s 1 0 20 "26" _null_ _null_ _null_ _null_ pg_stat_get_mod_since_analyze _null_ _null_ _null_ ));
 DESCR("statistics: number of tuples changed since last analyze");
 DATA(insert OID = 1934 (  pg_stat_get_blocks_fetched	PGNSP PGUID 12 1 0 0 0 f f f f t f s 1 0 20 "26" _null_ _null_ _null_ _null_ pg_stat_get_blocks_fetched _null_ _null_ _null_ ));
 DESCR("statistics: number of blocks fetched");
@@ -2979,7 +2981,7 @@ DESCR("view members of a multixactid");
 DATA(insert OID = 3537 (  pg_describe_object		PGNSP PGUID 12 1 0 0 0 f f f f t f s 3 0 25 "26 26 23" _null_ _null_ _null_ _null_ pg_describe_object _null_ _null_ _null_ ));
 DESCR("get identification of SQL object");
 
-DATA(insert OID = 3839 (  pg_identify_object		PGNSP PGUID 12 1 0 0 0 f f f f t f s 3 0 2249 "26 26 23" "{26,23,23,25,25,25,25}" "{i,i,i,o,o,o,o}" "{classid,objid,subobjid,type,schema,name,identity}" _null_ pg_identify_object _null_ _null_ _null_ ));
+DATA(insert OID = 3839 (  pg_identify_object		PGNSP PGUID 12 1 0 0 0 f f f f t f s 3 0 2249 "26 26 23" "{26,26,23,25,25,25,25}" "{i,i,i,o,o,o,o}" "{classid,objid,subobjid,type,schema,name,identity}" _null_ pg_identify_object _null_ _null_ _null_ ));
 DESCR("get machine-parseable identification of SQL object");
 
 DATA(insert OID = 2079 (  pg_table_is_visible		PGNSP PGUID 12 10 0 0 0 f f f f t f s 1 0 16 "26" _null_ _null_ _null_ _null_ pg_table_is_visible _null_ _null_ _null_ ));
@@ -3351,6 +3353,8 @@ DATA(insert OID = 2215 (  regoperout		PGNSP PGUID 12 1 0 0 0 f f f f t f s 1 0 2
 DESCR("I/O");
 DATA(insert OID = 3492 (  to_regoper		PGNSP PGUID 12 1 0 0 0 f f f f t f s 1 0 2203 "2275" _null_ _null_ _null_ _null_ to_regoper _null_ _null_ _null_ ));
 DESCR("convert operator name to regoper");
+DATA(insert OID = 3476 (  to_regoperator	PGNSP PGUID 12 1 0 0 0 f f f f t f s 1 0 2204 "2275" _null_ _null_ _null_ _null_ to_regoperator _null_ _null_ _null_ ));
+DESCR("convert operator name to regoperator");
 DATA(insert OID = 2216 (  regoperatorin		PGNSP PGUID 12 1 0 0 0 f f f f t f s 1 0 2204 "2275" _null_ _null_ _null_ _null_ regoperatorin _null_ _null_ _null_ ));
 DESCR("I/O");
 DATA(insert OID = 2217 (  regoperatorout	PGNSP PGUID 12 1 0 0 0 f f f f t f s 1 0 2275 "2204" _null_ _null_ _null_ _null_ regoperatorout _null_ _null_ _null_ ));
@@ -4050,7 +4054,7 @@ DATA(insert OID = 2774 (  ginqueryarrayextract	PGNSP PGUID 12 1 0 0 0 f f f f t 
 DESCR("GIN array support");
 DATA(insert OID = 2744 (  ginarrayconsistent	PGNSP PGUID 12 1 0 0 0 f f f f t f i 8 0 16 "2281 21 2277 23 2281 2281 2281 2281" _null_ _null_ _null_ _null_ ginarrayconsistent _null_ _null_ _null_ ));
 DESCR("GIN array support");
-DATA(insert OID = 3920 (  ginarraytriconsistent	PGNSP PGUID 12 1 0 0 0 f f f f t f i 7 0 16 "2281 21 2277 23 2281 2281 2281" _null_ _null_ _null_ _null_ ginarraytriconsistent _null_ _null_ _null_ ));
+DATA(insert OID = 3920 (  ginarraytriconsistent PGNSP PGUID 12 1 0 0 0 f f f f t f i 7 0 16 "2281 21 2277 23 2281 2281 2281" _null_ _null_ _null_ _null_ ginarraytriconsistent _null_ _null_ _null_ ));
 DESCR("GIN array support");
 DATA(insert OID = 3076 (  ginarrayextract	 PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 2281 "2277 2281" _null_ _null_ _null_ _null_	ginarrayextract_2args _null_ _null_ _null_ ));
 DESCR("GIN array support (obsolete)");
@@ -4248,13 +4252,13 @@ DATA(insert OID = 3198 (  json_build_array	   PGNSP PGUID 12 1 0 2276 0 f f f f 
 DESCR("build a json array from any inputs");
 DATA(insert OID = 3199 (  json_build_array	   PGNSP PGUID 12 1 0 0 0 f f f f f f i 0 0 114  "" _null_ _null_ _null_ _null_ json_build_array_noargs _null_ _null_ _null_ ));
 DESCR("build an empty json array");
-DATA(insert OID = 3200 (  json_build_object	   PGNSP PGUID 12 1 0 2276 0 f f f f f f i 1 0 114 "2276" "{2276}" "{v}" _null_ _null_ json_build_object _null_ _null_ _null_ ));
+DATA(insert OID = 3200 (  json_build_object    PGNSP PGUID 12 1 0 2276 0 f f f f f f i 1 0 114 "2276" "{2276}" "{v}" _null_ _null_ json_build_object _null_ _null_ _null_ ));
 DESCR("build a json object from pairwise key/value inputs");
-DATA(insert OID = 3201 (  json_build_object	   PGNSP PGUID 12 1 0 0 0 f f f f f f i 0 0 114  "" _null_ _null_ _null_ _null_ json_build_object_noargs _null_ _null_ _null_ ));
+DATA(insert OID = 3201 (  json_build_object    PGNSP PGUID 12 1 0 0 0 f f f f f f i 0 0 114  "" _null_ _null_ _null_ _null_ json_build_object_noargs _null_ _null_ _null_ ));
 DESCR("build an empty json object");
-DATA(insert OID = 3202 (  json_object    PGNSP PGUID 12 1 0 0 0 f f f f t f s 1 0 114 "1009" _null_ _null_ _null_ _null_ json_object _null_ _null_ _null_ ));
+DATA(insert OID = 3202 (  json_object	 PGNSP PGUID 12 1 0 0 0 f f f f t f s 1 0 114 "1009" _null_ _null_ _null_ _null_ json_object _null_ _null_ _null_ ));
 DESCR("map text arrayof key value pais to json object");
-DATA(insert OID = 3203 (  json_object    PGNSP PGUID 12 1 0 0 0 f f f f t f s 2 0 114 "1009 1009" _null_ _null_ _null_ _null_ json_object_two_arg _null_ _null_ _null_ ));
+DATA(insert OID = 3203 (  json_object	 PGNSP PGUID 12 1 0 0 0 f f f f t f s 2 0 114 "1009 1009" _null_ _null_ _null_ _null_ json_object_two_arg _null_ _null_ _null_ ));
 DESCR("map text arrayof key value pais to json object");
 DATA(insert OID = 3176 (  to_json	   PGNSP PGUID 12 1 0 0 0 f f f f t f s 1 0 114 "2283" _null_ _null_ _null_ _null_ to_json _null_ _null_ _null_ ));
 DESCR("map input to json");
@@ -4289,7 +4293,7 @@ DATA(insert OID = 3204 (  json_to_record	   PGNSP PGUID 12 1 0 0 0 f f f f f f s
 DESCR("get record fields from a json object");
 DATA(insert OID = 3205 (  json_to_recordset  PGNSP PGUID 12 1 100 0 0 f f f f f t s 2 0 2249 "114 16" _null_ _null_ _null_ _null_ json_to_recordset _null_ _null_ _null_ ));
 DESCR("get set of records with fields from a json array of objects");
-DATA(insert OID = 3968 (  json_typeof              PGNSP PGUID 12 1 0 0 0 f f f f t f i 1 0 25 "114" _null_ _null_ _null_ _null_ json_typeof _null_ _null_ _null_ ));
+DATA(insert OID = 3968 (  json_typeof			   PGNSP PGUID 12 1 0 0 0 f f f f t f i 1 0 25 "114" _null_ _null_ _null_ _null_ json_typeof _null_ _null_ _null_ ));
 DESCR("get the type of a json value");
 
 /* uuid */
@@ -4906,7 +4910,7 @@ DATA(insert OID = 3846 ( make_date	PGNSP PGUID 12 1 0 0 0 f f f f t f i 3 0 1082
 DESCR("construct date");
 DATA(insert OID = 3847 ( make_time	PGNSP PGUID 12 1 0 0 0 f f f f t f i 3 0 1083 "23 23 701" _null_ _null_ "{hour,min,sec}" _null_ make_time _null_ _null_ _null_ ));
 DESCR("construct time");
-DATA(insert OID = 3461 ( make_timestamp	PGNSP PGUID 12 1 0 0 0 f f f f t f i 6 0 1114 "23 23 23 23 23 701" _null_ _null_ "{year,month,mday,hour,min,sec}" _null_ make_timestamp _null_ _null_ _null_ ));
+DATA(insert OID = 3461 ( make_timestamp PGNSP PGUID 12 1 0 0 0 f f f f t f i 6 0 1114 "23 23 23 23 23 701" _null_ _null_ "{year,month,mday,hour,min,sec}" _null_ make_timestamp _null_ _null_ _null_ ));
 DESCR("construct timestamp");
 DATA(insert OID = 3462 ( make_timestamptz	PGNSP PGUID 12 1 0 0 0 f f f f t f s 6 0 1184 "23 23 23 23 23 701" _null_ _null_ "{year,month,mday,hour,min,sec}" _null_ make_timestamptz _null_ _null_ _null_ ));
 DESCR("construct timestamp with time zone");
@@ -5036,11 +5040,11 @@ DATA(insert OID = 3973 ( percentile_disc_final	PGNSP PGUID 12 1 0 0 0 f f f f f 
 DESCR("aggregate final function");
 DATA(insert OID = 3974 ( percentile_cont		PGNSP PGUID 12 1 0 0 0 t f f f f f i 2 0 701 "701 701" _null_ _null_ _null_ _null_ aggregate_dummy _null_ _null_ _null_ ));
 DESCR("continuous distribution percentile");
-DATA(insert OID = 3975 ( percentile_cont_float8_final	PGNSP PGUID 12 1 0 0 0 f f f f f f i 3 0 701 "2281 701 701" _null_ _null_ _null_ _null_ percentile_cont_float8_final _null_ _null_ _null_ ));
+DATA(insert OID = 3975 ( percentile_cont_float8_final	PGNSP PGUID 12 1 0 0 0 f f f f f f i 2 0 701 "2281 701" _null_ _null_ _null_ _null_ percentile_cont_float8_final _null_ _null_ _null_ ));
 DESCR("aggregate final function");
 DATA(insert OID = 3976 ( percentile_cont		PGNSP PGUID 12 1 0 0 0 t f f f f f i 2 0 1186 "701 1186" _null_ _null_ _null_ _null_ aggregate_dummy _null_ _null_ _null_ ));
 DESCR("continuous distribution percentile");
-DATA(insert OID = 3977 ( percentile_cont_interval_final PGNSP PGUID 12 1 0 0 0 f f f f f f i 3 0 1186 "2281 701 1186" _null_ _null_ _null_ _null_ percentile_cont_interval_final _null_ _null_ _null_ ));
+DATA(insert OID = 3977 ( percentile_cont_interval_final PGNSP PGUID 12 1 0 0 0 f f f f f f i 2 0 1186 "2281 701" _null_ _null_ _null_ _null_ percentile_cont_interval_final _null_ _null_ _null_ ));
 DESCR("aggregate final function");
 DATA(insert OID = 3978 ( percentile_disc		PGNSP PGUID 12 1 0 0 0 t f f f f f i 2 0 2277 "1022 2283" _null_ _null_ _null_ _null_ aggregate_dummy _null_ _null_ _null_ ));
 DESCR("multiple discrete percentiles");
@@ -5048,11 +5052,11 @@ DATA(insert OID = 3979 ( percentile_disc_multi_final	PGNSP PGUID 12 1 0 0 0 f f 
 DESCR("aggregate final function");
 DATA(insert OID = 3980 ( percentile_cont		PGNSP PGUID 12 1 0 0 0 t f f f f f i 2 0 1022 "1022 701" _null_ _null_ _null_ _null_ aggregate_dummy _null_ _null_ _null_ ));
 DESCR("multiple continuous percentiles");
-DATA(insert OID = 3981 ( percentile_cont_float8_multi_final PGNSP PGUID 12 1 0 0 0 f f f f f f i 3 0 1022 "2281 1022 701" _null_ _null_ _null_ _null_ percentile_cont_float8_multi_final _null_ _null_ _null_ ));
+DATA(insert OID = 3981 ( percentile_cont_float8_multi_final PGNSP PGUID 12 1 0 0 0 f f f f f f i 2 0 1022 "2281 1022" _null_ _null_ _null_ _null_ percentile_cont_float8_multi_final _null_ _null_ _null_ ));
 DESCR("aggregate final function");
 DATA(insert OID = 3982 ( percentile_cont		PGNSP PGUID 12 1 0 0 0 t f f f f f i 2 0 1187 "1022 1186" _null_ _null_ _null_ _null_ aggregate_dummy _null_ _null_ _null_ ));
 DESCR("multiple continuous percentiles");
-DATA(insert OID = 3983 ( percentile_cont_interval_multi_final	PGNSP PGUID 12 1 0 0 0 f f f f f f i 3 0 1187 "2281 1022 1186" _null_ _null_ _null_ _null_ percentile_cont_interval_multi_final _null_ _null_ _null_ ));
+DATA(insert OID = 3983 ( percentile_cont_interval_multi_final	PGNSP PGUID 12 1 0 0 0 f f f f f f i 2 0 1187 "2281 1022" _null_ _null_ _null_ _null_ percentile_cont_interval_multi_final _null_ _null_ _null_ ));
 DESCR("aggregate final function");
 DATA(insert OID = 3984 ( mode					PGNSP PGUID 12 1 0 0 0 t f f f f f i 1 0 2283 "2283" _null_ _null_ _null_ _null_	aggregate_dummy _null_ _null_ _null_ ));
 DESCR("most common value");
@@ -5091,7 +5095,7 @@ DESCR("aggregate final function");
 #define PROVOLATILE_VOLATILE	'v'		/* can change even within a scan */
 
 /*
- * Symbolic values for proargmodes column.	Note that these must agree with
+ * Symbolic values for proargmodes column.  Note that these must agree with
  * the FunctionParameterMode enum in parsenodes.h; we declare them here to
  * be accessible from either header.
  */

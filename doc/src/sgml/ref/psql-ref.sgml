@@ -636,7 +636,7 @@ $ <userinput>psql postgresql://dbmaster:5433/mydb?sslmode=require</userinput>
     </para>
 
     <para>
-     If at least one of standard input or standard output are a
+     If both standard input and standard output are a
      terminal, then <application>psql</application> sets the client
      encoding to <quote>auto</quote>, which will detect the
      appropriate client encoding from the locale settings
@@ -951,7 +951,9 @@ testdb=&gt;
         The command form <literal>\d+</literal> is identical, except that
         more information is displayed: any comments associated with the
         columns of the table are shown, as is the presence of OIDs in the
-        table, the view definition if the relation is a view.
+        table, the view definition if the relation is a view, a non-default 
+        <link linkend="SQL-CREATETABLE-REPLICA-IDENTITY">replica
+        identity</link> setting.
         </para>
 
         <para>
@@ -2729,11 +2731,13 @@ bar
 
     <variablelist>
       <varlistentry>
-      <indexterm>
-       <primary>autocommit</primary>
-       <secondary>psql</secondary>
-      </indexterm>
-        <term><varname>AUTOCOMMIT</varname></term>
+      <term>
+       <varname>AUTOCOMMIT</varname>
+       <indexterm>
+        <primary>autocommit</primary>
+        <secondary>psql</secondary>
+       </indexterm>
+      </term>
         <listitem>
         <para>
         When <literal>on</> (the default), each SQL command is automatically
@@ -2969,11 +2973,13 @@ bar
       </varlistentry>
 
       <varlistentry>
-      <indexterm>
-       <primary>rollback</primary>
-       <secondary>psql</secondary>
-      </indexterm>
-        <term><varname>ON_ERROR_ROLLBACK</varname></term>
+      <term>
+       <varname>ON_ERROR_ROLLBACK</varname>
+       <indexterm>
+        <primary>rollback</primary>
+        <secondary>psql</secondary>
+       </indexterm>
+      </term>
         <listitem>
         <para>
         When <literal>on</>, if a statement in a transaction block

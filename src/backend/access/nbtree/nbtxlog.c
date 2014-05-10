@@ -27,13 +27,6 @@
  * had been its upper part (pd_upper to pd_special).  We assume that the
  * tuples had been added to the page in item-number order, and therefore
  * the one with highest item number appears first (lowest on the page).
- *
- * NOTE: the way this routine is coded, the rebuilt page will have the items
- * in correct itemno sequence, but physically the opposite order from the
- * original, because we insert them in the opposite of itemno order.  This
- * does not matter in any current btree code, but it's something to keep an
- * eye on.	Is it worth changing just on general principles?  See also the
- * notes in btree_xlog_split().
  */
 static void
 _bt_restore_page(Page page, char *from, int len)
@@ -41,14 +34,35 @@ _bt_restore_page(Page page, char *from, int len)
 	IndexTupleData itupdata;
 	Size		itemsz;
 	char	   *end = from + len;
+	Item		items[MaxIndexTuplesPerPage];
+	uint16		itemsizes[MaxIndexTuplesPerPage];
+	int			i;
+	int			nitems;
 
-	for (; from < end;)
+	/*
+	 * To get the items back in the original order, we add them to the page in
+	 * reverse.  To figure out where one tuple ends and another begins, we
+	 * have to scan them in forward order first.
+	 */
+	i = 0;
+	while (from < end)
 	{
 		/* Need to copy tuple header due to alignment considerations */
 		memcpy(&itupdata, from, sizeof(IndexTupleData));
 		itemsz = IndexTupleDSize(itupdata);
 		itemsz = MAXALIGN(itemsz);
-		if (PageAddItem(page, (Item) from, itemsz, FirstOffsetNumber,
+
+		items[i] = (Item) from;
+		itemsizes[i] = itemsz;
+		i++;
+
+		from += itemsz;
+	}
+	nitems = i;
+
+	for (i = nitems - 1; i >= 0; i--)
+	{
+		if (PageAddItem(page, items[i], itemsizes[i], nitems - i,
 						false, false) == InvalidOffsetNumber)
 			elog(PANIC, "_bt_restore_page: cannot add item to page");
 		from += itemsz;
@@ -83,7 +97,7 @@ _bt_restore_meta(RelFileNode rnode, XLogRecPtr lsn,
 	pageop->btpo_flags = BTP_META;
 
 	/*
-	 * Set pd_lower just past the end of the metadata.	This is not essential
+	 * Set pd_lower just past the end of the metadata.  This is not essential
 	 * but it makes the page look compressible to xlog.c.
 	 */
 	((PageHeader) metapg)->pd_lower =
@@ -104,7 +118,7 @@ static void
 _bt_clear_incomplete_split(XLogRecPtr lsn, XLogRecord *record,
 						   RelFileNode rnode, BlockNumber cblock)
 {
-	Buffer buf;
+	Buffer		buf;
 
 	buf = XLogReadBuffer(rnode, cblock, false);
 	if (BufferIsValid(buf))
@@ -114,6 +128,7 @@ _bt_clear_incomplete_split(XLogRecPtr lsn, XLogRecord *record,
 		if (lsn > PageGetLSN(page))
 		{
 			BTPageOpaque pageop = (BTPageOpaque) PageGetSpecialPointer(page);
+
 			Assert((pageop->btpo_flags & BTP_INCOMPLETE_SPLIT) != 0);
 			pageop->btpo_flags &= ~BTP_INCOMPLETE_SPLIT;
 
@@ -139,6 +154,7 @@ btree_xlog_insert(bool isleaf, bool ismeta,
 
 	datapos = (char *) xlrec + SizeOfBtreeInsert;
 	datalen = record->xl_len - SizeOfBtreeInsert;
+
 	/*
 	 * if this insert finishes a split at lower level, extract the block
 	 * number of the (left) child.
@@ -158,10 +174,10 @@ btree_xlog_insert(bool isleaf, bool ismeta,
 	}
 
 	/*
-	 * Insertion to an internal page finishes an incomplete split at the
-	 * child level.  Clear the incomplete-split flag in the child.  Note:
-	 * during normal operation, the child and parent pages are locked at the
-	 * same time, so that clearing the flag and inserting the downlink appear
+	 * Insertion to an internal page finishes an incomplete split at the child
+	 * level.  Clear the incomplete-split flag in the child.  Note: during
+	 * normal operation, the child and parent pages are locked at the same
+	 * time, so that clearing the flag and inserting the downlink appear
 	 * atomic to other backends.  We don't bother with that during replay,
 	 * because readers don't care about the incomplete-split flag and there
 	 * cannot be updates happening.
@@ -265,9 +281,10 @@ btree_xlog_split(bool onleft, bool isroot,
 		datapos += left_hikeysz;
 		datalen -= left_hikeysz;
 	}
+
 	/*
-	 * If this insertion finishes an incomplete split, get the block number
-	 * of the child.
+	 * If this insertion finishes an incomplete split, get the block number of
+	 * the child.
 	 */
 	if (!isleaf && !(record->xl_info & XLR_BKP_BLOCK(1)))
 	{
@@ -332,10 +349,13 @@ btree_xlog_split(bool onleft, bool isroot,
 		if (BufferIsValid(lbuf))
 		{
 			/*
-			 * Note that this code ensures that the items remaining on the
-			 * left page are in the correct item number order, but it does not
-			 * reproduce the physical order they would have had.  Is this
-			 * worth changing?	See also _bt_restore_page().
+			 * To retain the same physical order of the tuples that they had,
+			 * we initialize a temporary empty page for the left page and add
+			 * all the items to that in item number order.  This mirrors how
+			 * _bt_split() works.  It's not strictly required to retain the
+			 * same physical order, as long as the items are in the correct
+			 * item number order, but it helps debugging.  See also
+			 * _bt_restore_page(), which does the same for the right page.
 			 */
 			Page		lpage = (Page) BufferGetPage(lbuf);
 			BTPageOpaque lopaque = (BTPageOpaque) PageGetSpecialPointer(lpage);
@@ -343,45 +363,52 @@ btree_xlog_split(bool onleft, bool isroot,
 			if (lsn > PageGetLSN(lpage))
 			{
 				OffsetNumber off;
-				OffsetNumber maxoff = PageGetMaxOffsetNumber(lpage);
-				OffsetNumber deletable[MaxOffsetNumber];
-				int			ndeletable = 0;
+				Page		newlpage;
+				OffsetNumber leftoff;
 
-				/*
-				 * Remove the items from the left page that were copied to the
-				 * right page.	Also remove the old high key, if any. (We must
-				 * remove everything before trying to insert any items, else
-				 * we risk not having enough space.)
-				 */
-				if (!P_RIGHTMOST(lopaque))
-				{
-					deletable[ndeletable++] = P_HIKEY;
-
-					/*
-					 * newitemoff is given to us relative to the original
-					 * page's item numbering, so adjust it for this deletion.
-					 */
-					newitemoff--;
-				}
-				for (off = xlrec->firstright; off <= maxoff; off++)
-					deletable[ndeletable++] = off;
-				if (ndeletable > 0)
-					PageIndexMultiDelete(lpage, deletable, ndeletable);
-
-				/*
-				 * Add the new item if it was inserted on left page.
-				 */
-				if (onleft)
-				{
-					if (PageAddItem(lpage, newitem, newitemsz, newitemoff,
-									false, false) == InvalidOffsetNumber)
-						elog(PANIC, "failed to add new item to left page after split");
-				}
+				newlpage = PageGetTempPageCopySpecial(lpage);
 
 				/* Set high key */
-				if (PageAddItem(lpage, left_hikey, left_hikeysz,
+				leftoff = P_HIKEY;
+				if (PageAddItem(newlpage, left_hikey, left_hikeysz,
 								P_HIKEY, false, false) == InvalidOffsetNumber)
 					elog(PANIC, "failed to add high key to left page after split");
+				leftoff = OffsetNumberNext(leftoff);
+
+				for (off = P_FIRSTDATAKEY(lopaque); off < xlrec->firstright; off++)
+				{
+					ItemId		itemid;
+					Size		itemsz;
+					Item		item;
+
+					/* add the new item if it was inserted on left page */
+					if (onleft && off == newitemoff)
+					{
+						if (PageAddItem(newlpage, newitem, newitemsz, leftoff,
+										false, false) == InvalidOffsetNumber)
+							elog(ERROR, "failed to add new item to left page after split");
+						leftoff = OffsetNumberNext(leftoff);
+					}
+
+					itemid = PageGetItemId(lpage, off);
+					itemsz = ItemIdGetLength(itemid);
+					item = PageGetItem(lpage, itemid);
+					if (PageAddItem(newlpage, item, itemsz, leftoff,
+									false, false) == InvalidOffsetNumber)
+						elog(ERROR, "failed to add old item to left page after split");
+					leftoff = OffsetNumberNext(leftoff);
+				}
+
+				/* cope with possibility that newitem goes at the end */
+				if (onleft && off == newitemoff)
+				{
+					if (PageAddItem(newlpage, newitem, newitemsz, leftoff,
+									false, false) == InvalidOffsetNumber)
+						elog(ERROR, "failed to add new item to left page after split");
+					leftoff = OffsetNumberNext(leftoff);
+				}
+
+				PageRestoreTempPage(newlpage, lpage);
 
 				/* Fix opaque fields */
 				lopaque->btpo_flags = BTP_INCOMPLETE_SPLIT;
@@ -415,7 +442,7 @@ btree_xlog_split(bool onleft, bool isroot,
 		 * the backup block containing right sibling is 2 or 3, depending
 		 * whether this was a leaf or internal page.
 		 */
-		int		rnext_index = isleaf ? 2 : 3;
+		int			rnext_index = isleaf ? 2 : 3;
 
 		if (record->xl_info & XLR_BKP_BLOCK(rnext_index))
 			(void) RestoreBackupBlock(lsn, record, rnext_index, false, false);
@@ -596,7 +623,7 @@ btree_xlog_delete_get_latestRemovedXid(xl_btree_delete *xlrec)
 
 	/*
 	 * In what follows, we have to examine the previous state of the index
-	 * page, as well as the heap page(s) it points to.	This is only valid if
+	 * page, as well as the heap page(s) it points to.  This is only valid if
 	 * WAL replay has reached a consistent database state; which means that
 	 * the preceding check is not just an optimization, but is *necessary*. We
 	 * won't have let in any user sessions before we reach consistency.
@@ -605,9 +632,9 @@ btree_xlog_delete_get_latestRemovedXid(xl_btree_delete *xlrec)
 		elog(PANIC, "btree_xlog_delete_get_latestRemovedXid: cannot operate with inconsistent data");
 
 	/*
-	 * Get index page.	If the DB is consistent, this should not fail, nor
+	 * Get index page.  If the DB is consistent, this should not fail, nor
 	 * should any of the heap page fetches below.  If one does, we return
-	 * InvalidTransactionId to cancel all HS transactions.	That's probably
+	 * InvalidTransactionId to cancel all HS transactions.  That's probably
 	 * overkill, but it's safe, and certainly better than panicking here.
 	 */
 	ibuffer = XLogReadBuffer(xlrec->node, xlrec->block, false);
@@ -690,11 +717,11 @@ btree_xlog_delete_get_latestRemovedXid(xl_btree_delete *xlrec)
 	UnlockReleaseBuffer(ibuffer);
 
 	/*
-	 * XXX If all heap tuples were LP_DEAD then we will be returning
-	 * InvalidTransactionId here, causing conflict for all HS transactions.
-	 * That should happen very rarely (reasoning please?). Also note that
-	 * caller can't tell the difference between this case and the fast path
-	 * exit above. May need to change that in future.
+	 * If all heap tuples were LP_DEAD then we will be returning
+	 * InvalidTransactionId here, which avoids conflicts. This matches
+	 * existing logic which assumes that LP_DEAD tuples must already be older
+	 * than the latestRemovedXid on the cleanup record that set them as
+	 * LP_DEAD, hence must already have generated a conflict.
 	 */
 	return latestRemovedXid;
 }
@@ -711,7 +738,7 @@ btree_xlog_delete(XLogRecPtr lsn, XLogRecord *record)
 	 * If we have any conflict processing to do, it must happen before we
 	 * update the page.
 	 *
-	 * Btree delete records can conflict with standby queries.	You might
+	 * Btree delete records can conflict with standby queries.  You might
 	 * think that vacuum records would conflict as well, but we've handled
 	 * that already.  XLOG_HEAP2_CLEANUP_INFO records provide the highest xid
 	 * cleaned by the vacuum of the heap and so we can resolve any conflicts
@@ -804,7 +831,7 @@ btree_xlog_mark_page_halfdead(uint8 info, XLogRecPtr lsn, XLogRecord *record)
 				ItemId		itemid;
 				IndexTuple	itup;
 				OffsetNumber nextoffset;
-				BlockNumber	rightsib;
+				BlockNumber rightsib;
 
 				poffset = ItemPointerGetOffsetNumber(&(xlrec->target.tid));
 
@@ -846,8 +873,8 @@ btree_xlog_mark_page_halfdead(uint8 info, XLogRecPtr lsn, XLogRecord *record)
 	 */
 	MemSet(&trunctuple, 0, sizeof(IndexTupleData));
 	trunctuple.t_info = sizeof(IndexTupleData);
-	if (xlrec->downlink != InvalidBlockNumber)
-		ItemPointerSet(&trunctuple.t_tid, xlrec->downlink, P_HIKEY);
+	if (xlrec->topparent != InvalidBlockNumber)
+		ItemPointerSet(&trunctuple.t_tid, xlrec->topparent, P_HIKEY);
 	else
 		ItemPointerSetInvalid(&trunctuple.t_tid);
 	if (PageAddItem(page, (Item) &trunctuple, sizeof(IndexTupleData), P_HIKEY,
@@ -982,8 +1009,8 @@ btree_xlog_unlink_page(uint8 info, XLogRecPtr lsn, XLogRecord *record)
 		/* Add a dummy hikey item */
 		MemSet(&trunctuple, 0, sizeof(IndexTupleData));
 		trunctuple.t_info = sizeof(IndexTupleData);
-		if (xlrec->downlink != InvalidBlockNumber)
-			ItemPointerSet(&trunctuple.t_tid, xlrec->downlink, P_HIKEY);
+		if (xlrec->topparent != InvalidBlockNumber)
+			ItemPointerSet(&trunctuple.t_tid, xlrec->topparent, P_HIKEY);
 		else
 			ItemPointerSetInvalid(&trunctuple.t_tid);
 		if (PageAddItem(page, (Item) &trunctuple, sizeof(IndexTupleData), P_HIKEY,

@@ -28,18 +28,10 @@
 #define RDELIM			')'
 #define DELIM			','
 
-extern Datum regress_dist_ptpath(PG_FUNCTION_ARGS);
-extern Datum regress_path_dist(PG_FUNCTION_ARGS);
 extern PATH *poly2path(POLYGON *poly);
-extern Datum interpt_pp(PG_FUNCTION_ARGS);
 extern void regress_lseg_construct(LSEG *lseg, Point *pt1, Point *pt2);
-extern Datum overpaid(PG_FUNCTION_ARGS);
-extern Datum boxarea(PG_FUNCTION_ARGS);
 extern char *reverse_name(char *string);
 extern int	oldstyle_length(int n, text *t);
-extern Datum int44in(PG_FUNCTION_ARGS);
-extern Datum int44out(PG_FUNCTION_ARGS);
-extern Datum make_tuple_indirect(PG_FUNCTION_ARGS);
 
 #ifdef PG_MODULE_MAGIC
 PG_MODULE_MAGIC;
@@ -232,11 +224,10 @@ typedef struct
 {
 	Point		center;
 	double		radius;
-}	WIDGET;
+} WIDGET;
 
 WIDGET	   *widget_in(char *str);
-char	   *widget_out(WIDGET * widget);
-extern Datum pt_in_widget(PG_FUNCTION_ARGS);
+char	   *widget_out(WIDGET *widget);
 
 #define NARGS	3
 
@@ -267,13 +258,13 @@ widget_in(char *str)
 }
 
 char *
-widget_out(WIDGET * widget)
+widget_out(WIDGET *widget)
 {
 	if (widget == NULL)
 		return NULL;
 
 	return psprintf("(%g,%g,%g)",
-			widget->center.x, widget->center.y, widget->radius);
+					widget->center.x, widget->center.y, widget->radius);
 }
 
 PG_FUNCTION_INFO_V1(pt_in_widget);
@@ -341,7 +332,6 @@ static int	fd17b_level = 0;
 static int	fd17a_level = 0;
 static bool fd17b_recursion = true;
 static bool fd17a_recursion = true;
-extern Datum funny_dup17(PG_FUNCTION_ARGS);
 
 PG_FUNCTION_INFO_V1(funny_dup17);
 
@@ -452,9 +442,6 @@ funny_dup17(PG_FUNCTION_ARGS)
 
 	return PointerGetDatum(tuple);
 }
-
-extern Datum ttdummy(PG_FUNCTION_ARGS);
-extern Datum set_ttdummy(PG_FUNCTION_ARGS);
 
 #define TTDUMMY_INFINITY	999999
 
@@ -802,6 +789,7 @@ make_tuple_indirect(PG_FUNCTION_ARGS)
 		else
 		{
 			struct varlena *oldattr = attr;
+
 			attr = palloc0(VARSIZE_ANY(oldattr));
 			memcpy(attr, oldattr, VARSIZE_ANY(oldattr));
 		}
@@ -823,5 +811,14 @@ make_tuple_indirect(PG_FUNCTION_ARGS)
 
 	MemoryContextSwitchTo(old_context);
 
-	PG_RETURN_HEAPTUPLEHEADER(newtup->t_data);
+	/*
+	 * We intentionally don't use PG_RETURN_HEAPTUPLEHEADER here, because that
+	 * would cause the indirect toast pointers to be flattened out of the
+	 * tuple immediately, rendering subsequent testing irrelevant.  So just
+	 * return the HeapTupleHeader pointer as-is.  This violates the general
+	 * rule that composite Datums shouldn't contain toast pointers, but so
+	 * long as the regression test scripts don't insert the result of this
+	 * function into a container type (record, array, etc) it should be OK.
+	 */
+	PG_RETURN_POINTER(newtup->t_data);
 }

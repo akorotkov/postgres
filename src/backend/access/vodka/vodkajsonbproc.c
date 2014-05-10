@@ -221,7 +221,7 @@ vodkajsonbextract(PG_FUNCTION_ARGS)
 
 	entries = (Datum *) palloc(sizeof(Datum) * total);
 
-	it = JsonbIteratorInit(VARDATA(jb));
+	it = JsonbIteratorInit(&jb->root);
 	stack = NULL;
 
 	while ((r = JsonbIteratorNext(&it, &v, false)) != WJB_DONE)

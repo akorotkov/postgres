@@ -37,6 +37,7 @@
 #include "commands/tablespace.h"
 #include "executor/spi.h"
 #include "funcapi.h"
+#include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/tlist.h"
@@ -68,9 +69,10 @@
 
 /* Indent counts */
 #define PRETTYINDENT_STD		8
-#define PRETTYINDENT_JOIN	   13
-#define PRETTYINDENT_JOIN_ON	(PRETTYINDENT_JOIN-PRETTYINDENT_STD)
+#define PRETTYINDENT_JOIN		4
 #define PRETTYINDENT_VAR		4
+
+#define PRETTYINDENT_LIMIT		40		/* wrap limit */
 
 /* Pretty flags */
 #define PRETTYFLAG_PAREN		1
@@ -153,11 +155,11 @@ typedef struct
  *
  * Selecting aliases is unreasonably complicated because of the need to dump
  * rules/views whose underlying tables may have had columns added, deleted, or
- * renamed since the query was parsed.	We must nonetheless print the rule/view
+ * renamed since the query was parsed.  We must nonetheless print the rule/view
  * in a form that can be reloaded and will produce the same results as before.
  *
  * For each RTE used in the query, we must assign column aliases that are
- * unique within that RTE.	SQL does not require this of the original query,
+ * unique within that RTE.  SQL does not require this of the original query,
  * but due to factors such as *-expansion we need to be able to uniquely
  * reference every column in a decompiled query.  As long as we qualify all
  * column references, per-RTE uniqueness is sufficient for that.
@@ -172,11 +174,14 @@ typedef struct
  * query to ensure it can be referenced unambiguously.
  *
  * Another problem is that a JOIN USING clause requires the columns to be
- * merged to have the same aliases in both input RTEs.	To handle that, we do
- * USING-column alias assignment in a recursive traversal of the query's
- * jointree.  When descending through a JOIN with USING, we preassign the
- * USING column names to the child columns, overriding other rules for column
- * alias assignment.
+ * merged to have the same aliases in both input RTEs, and that no other
+ * columns in those RTEs or their children conflict with the USING names.
+ * To handle that, we do USING-column alias assignment in a recursive
+ * traversal of the query's jointree.  When descending through a JOIN with
+ * USING, we preassign the USING column names to the child columns, overriding
+ * other rules for column alias assignment.  We also mark each RTE with a list
+ * of all USING column names selected for joins containing that RTE, so that
+ * when we assign other columns' aliases later, we can avoid conflicts.
  *
  * Another problem is that if a JOIN's input tables have had columns added or
  * deleted since the query was parsed, we must generate a column alias list
@@ -209,8 +214,8 @@ typedef struct
 	/*
 	 * new_colnames is an array containing column aliases to use for columns
 	 * that would exist if the query was re-parsed against the current
-	 * definitions of its base tables.	This is what to print as the column
-	 * alias list for the RTE.	This array does not include dropped columns,
+	 * definitions of its base tables.  This is what to print as the column
+	 * alias list for the RTE.  This array does not include dropped columns,
 	 * but it will include columns added since original parsing.  Indexes in
 	 * it therefore have little to do with current varattno values.  As above,
 	 * entries are unique unless this is for an unnamed JOIN RTE.  (In such an
@@ -226,6 +231,9 @@ typedef struct
 
 	/* This flag tells whether we should actually print a column alias list */
 	bool		printaliases;
+
+	/* This list has all names used as USING names in joins above this RTE */
+	List	   *parentUsing;	/* names assigned to parent merged columns */
 
 	/*
 	 * If this struct is for a JOIN RTE, we fill these fields during the
@@ -304,7 +312,8 @@ static void set_deparse_for_query(deparse_namespace *dpns, Query *query,
 					  List *parent_namespaces);
 static void set_simple_column_names(deparse_namespace *dpns);
 static bool has_dangerous_join_using(deparse_namespace *dpns, Node *jtnode);
-static void set_using_names(deparse_namespace *dpns, Node *jtnode);
+static void set_using_names(deparse_namespace *dpns, Node *jtnode,
+				List *parentUsing);
 static void set_relation_column_names(deparse_namespace *dpns,
 						  RangeTblEntry *rte,
 						  deparse_columns *colinfo);
@@ -1068,7 +1077,7 @@ pg_get_indexdef_worker(Oid indexrelid, int colno,
 	context = deparse_context_for(get_relation_name(indrelid), indrelid);
 
 	/*
-	 * Start the index definition.	Note that the index's name should never be
+	 * Start the index definition.  Note that the index's name should never be
 	 * schema-qualified, but the indexed rel's name may be.
 	 */
 	initStringInfo(&buf);
@@ -1295,9 +1304,9 @@ pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
 	HeapTuple	tup;
 	Form_pg_constraint conForm;
 	StringInfoData buf;
-	SysScanDesc	scandesc;
+	SysScanDesc scandesc;
 	ScanKeyData scankey[1];
-	Snapshot    snapshot = RegisterSnapshot(GetTransactionSnapshot());
+	Snapshot	snapshot = RegisterSnapshot(GetTransactionSnapshot());
 	Relation	relation = heap_open(ConstraintRelationId, AccessShareLock);
 
 	ScanKeyInit(&scankey[0],
@@ -1306,15 +1315,15 @@ pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
 				ObjectIdGetDatum(constraintId));
 
 	scandesc = systable_beginscan(relation,
-									ConstraintOidIndexId,
-									true,
-									snapshot,
-									1,
-									scankey);
+								  ConstraintOidIndexId,
+								  true,
+								  snapshot,
+								  1,
+								  scankey);
 
 	/*
-	 * We later use the tuple with SysCacheGetAttr() as if we
-	 * had obtained it via SearchSysCache, which works fine.
+	 * We later use the tuple with SysCacheGetAttr() as if we had obtained it
+	 * via SearchSysCache, which works fine.
 	 */
 	tup = systable_getnext(scandesc);
 
@@ -1797,7 +1806,7 @@ pg_get_serial_sequence(PG_FUNCTION_ARGS)
 	SysScanDesc scan;
 	HeapTuple	tup;
 
-	/* Look up table name.	Can't lock it - we might not have privileges. */
+	/* Look up table name.  Can't lock it - we might not have privileges. */
 	tablerv = makeRangeVarFromNameList(textToQualifiedNameList(tablename));
 	tableOid = RangeVarGetRelid(tablerv, NoLock, false);
 
@@ -2397,8 +2406,10 @@ pg_get_function_arg_default(PG_FUNCTION_ARGS)
 
 	proc = (Form_pg_proc) GETSTRUCT(proctup);
 
-	/* Calculate index into proargdefaults: proargdefaults corresponds to the
-	 * last N input arguments, where N = pronargdefaults. */
+	/*
+	 * Calculate index into proargdefaults: proargdefaults corresponds to the
+	 * last N input arguments, where N = pronargdefaults.
+	 */
 	nth_default = nth_inputarg - 1 - (proc->pronargs - proc->pronargdefaults);
 
 	if (nth_default < 0 || nth_default >= list_length(argdefaults))
@@ -2435,7 +2446,7 @@ deparse_expression(Node *expr, List *dpcontext,
  * tree (ie, not the raw output of gram.y).
  *
  * dpcontext is a list of deparse_namespace nodes representing the context
- * for interpreting Vars in the node tree.	It can be NIL if no Vars are
+ * for interpreting Vars in the node tree.  It can be NIL if no Vars are
  * expected.
  *
  * forceprefix is TRUE to force all Vars to be prefixed with their table names.
@@ -2475,7 +2486,7 @@ deparse_expression_pretty(Node *expr, List *dpcontext,
  *
  * Given the reference name (alias) and OID of a relation, build deparsing
  * context for an expression referencing only that relation (as varno 1,
- * varlevelsup 0).	This is sufficient for many uses of deparse_expression.
+ * varlevelsup 0).  This is sufficient for many uses of deparse_expression.
  * ----------
  */
 List *
@@ -2546,7 +2557,7 @@ deparse_context_for_planstate(Node *planstate, List *ancestors,
 	dpns->ctes = NIL;
 
 	/*
-	 * Set up column name aliases.	We will get rather bogus results for join
+	 * Set up column name aliases.  We will get rather bogus results for join
 	 * RTEs, but that doesn't matter because plan trees don't contain any join
 	 * alias Vars.
 	 */
@@ -2724,7 +2735,7 @@ set_deparse_for_query(deparse_namespace *dpns, Query *query,
 		 * Select names for columns merged by USING, via a recursive pass over
 		 * the query jointree.
 		 */
-		set_using_names(dpns, (Node *) query->jointree);
+		set_using_names(dpns, (Node *) query->jointree, NIL);
 	}
 
 	/*
@@ -2858,9 +2869,12 @@ has_dangerous_join_using(deparse_namespace *dpns, Node *jtnode)
  *
  * Column alias info is saved in the dpns->rtable_columns list, which is
  * assumed to be filled with pre-zeroed deparse_columns structs.
+ *
+ * parentUsing is a list of all USING aliases assigned in parent joins of
+ * the current jointree node.  (The passed-in list must not be modified.)
  */
 static void
-set_using_names(deparse_namespace *dpns, Node *jtnode)
+set_using_names(deparse_namespace *dpns, Node *jtnode, List *parentUsing)
 {
 	if (IsA(jtnode, RangeTblRef))
 	{
@@ -2872,7 +2886,7 @@ set_using_names(deparse_namespace *dpns, Node *jtnode)
 		ListCell   *lc;
 
 		foreach(lc, f->fromlist)
-			set_using_names(dpns, (Node *) lfirst(lc));
+			set_using_names(dpns, (Node *) lfirst(lc), parentUsing);
 	}
 	else if (IsA(jtnode, JoinExpr))
 	{
@@ -2952,6 +2966,9 @@ set_using_names(deparse_namespace *dpns, Node *jtnode)
 		 */
 		if (j->usingClause)
 		{
+			/* Copy the input parentUsing list so we don't modify it */
+			parentUsing = list_copy(parentUsing);
+
 			/* USING names must correspond to the first join output columns */
 			expand_colnames_array_to(colinfo, list_length(j->usingClause));
 			i = 0;
@@ -2981,6 +2998,7 @@ set_using_names(deparse_namespace *dpns, Node *jtnode)
 
 				/* Remember selected names for use later */
 				colinfo->usingNames = lappend(colinfo->usingNames, colname);
+				parentUsing = lappend(parentUsing, colname);
 
 				/* Push down to left column, unless it's a system column */
 				if (leftattnos[i] > 0)
@@ -3000,9 +3018,13 @@ set_using_names(deparse_namespace *dpns, Node *jtnode)
 			}
 		}
 
+		/* Mark child deparse_columns structs with correct parentUsing info */
+		leftcolinfo->parentUsing = parentUsing;
+		rightcolinfo->parentUsing = parentUsing;
+
 		/* Now recursively assign USING column names in children */
-		set_using_names(dpns, j->larg);
-		set_using_names(dpns, j->rarg);
+		set_using_names(dpns, j->larg, parentUsing);
+		set_using_names(dpns, j->rarg, parentUsing);
 	}
 	else
 		elog(ERROR, "unrecognized node type: %d",
@@ -3093,7 +3115,7 @@ set_relation_column_names(deparse_namespace *dpns, RangeTblEntry *rte,
 	/*
 	 * Scan the columns, select a unique alias for each one, and store it in
 	 * colinfo->colnames and colinfo->new_colnames.  The former array has NULL
-	 * entries for dropped columns, the latter omits them.	Also mark
+	 * entries for dropped columns, the latter omits them.  Also mark
 	 * new_colnames entries as to whether they are new since parse time; this
 	 * is the case for entries beyond the length of rte->eref->colnames.
 	 */
@@ -3148,7 +3170,7 @@ set_relation_column_names(deparse_namespace *dpns, RangeTblEntry *rte,
 
 	/*
 	 * For a relation RTE, we need only print the alias column names if any
-	 * are different from the underlying "real" names.	For a function RTE,
+	 * are different from the underlying "real" names.  For a function RTE,
 	 * always emit a complete column alias list; this is to protect against
 	 * possible instability of the default column names (eg, from altering
 	 * parameter names).  For other RTE types, print if we changed anything OR
@@ -3469,6 +3491,15 @@ colname_is_unique(char *colname, deparse_namespace *dpns,
 			return false;
 	}
 
+	/* Also check against names already assigned for parent-join USING cols */
+	foreach(lc, colinfo->parentUsing)
+	{
+		char	   *oldname = (char *) lfirst(lc);
+
+		if (strcmp(oldname, colname) == 0)
+			return false;
+	}
+
 	return true;
 }
 
@@ -3602,7 +3633,7 @@ identify_join_columns(JoinExpr *j, RangeTblEntry *jrte,
 
 	/*
 	 * If there's a USING clause, deconstruct the join quals to identify the
-	 * merged columns.	This is a tad painful but if we cannot rely on the
+	 * merged columns.  This is a tad painful but if we cannot rely on the
 	 * column names, there is no other representation of which columns were
 	 * joined by USING.  (Unless the join type is FULL, we can't tell from the
 	 * joinaliasvars list which columns are merged.)  Note: we assume that the
@@ -3736,7 +3767,7 @@ set_deparse_planstate(deparse_namespace *dpns, PlanState *ps)
 	 * We special-case Append and MergeAppend to pretend that the first child
 	 * plan is the OUTER referent; we have to interpret OUTER Vars in their
 	 * tlists according to one of the children, and the first one is the most
-	 * natural choice.	Likewise special-case ModifyTable to pretend that the
+	 * natural choice.  Likewise special-case ModifyTable to pretend that the
 	 * first child plan is the OUTER referent; this is to support RETURNING
 	 * lists containing references to non-target relations.
 	 */
@@ -4132,10 +4163,14 @@ get_query_def(Query *query, StringInfo buf, List *parentnamespace,
 	deparse_context context;
 	deparse_namespace dpns;
 
+	/* Guard against excessively long or deeply-nested queries */
+	CHECK_FOR_INTERRUPTS();
+	check_stack_depth();
+
 	/*
 	 * Before we begin to examine the query, acquire locks on referenced
-	 * relations, and fix up deleted columns in JOIN RTEs.	This ensures
-	 * consistent results.	Note we assume it's OK to scribble on the passed
+	 * relations, and fix up deleted columns in JOIN RTEs.  This ensures
+	 * consistent results.  Note we assume it's OK to scribble on the passed
 	 * querytree!
 	 *
 	 * We are only deparsing the query (we are not about to execute it), so we
@@ -4608,7 +4643,7 @@ get_target_list(List *targetList, deparse_context *context,
 		}
 
 		/*
-		 * Figure out what the result column should be called.	In the context
+		 * Figure out what the result column should be called.  In the context
 		 * of a view, use the view's tuple descriptor (so as to pick up the
 		 * effects of any column RENAME that's been done on the view).
 		 * Otherwise, just use what we can find in the TLE.
@@ -4688,6 +4723,10 @@ get_setop_query(Node *setOp, Query *query, deparse_context *context,
 	StringInfo	buf = context->buf;
 	bool		need_paren;
 
+	/* Guard against excessively long or deeply-nested queries */
+	CHECK_FOR_INTERRUPTS();
+	check_stack_depth();
+
 	if (IsA(setOp, RangeTblRef))
 	{
 		RangeTblRef *rtr = (RangeTblRef *) setOp;
@@ -4713,42 +4752,59 @@ get_setop_query(Node *setOp, Query *query, deparse_context *context,
 	else if (IsA(setOp, SetOperationStmt))
 	{
 		SetOperationStmt *op = (SetOperationStmt *) setOp;
-
-		if (PRETTY_INDENT(context))
-		{
-			context->indentLevel += PRETTYINDENT_STD;
-			appendStringInfoSpaces(buf, PRETTYINDENT_STD);
-		}
+		int			subindent;
 
 		/*
-		 * We force parens whenever nesting two SetOperationStmts. There are
-		 * some cases in which parens are needed around a leaf query too, but
-		 * those are more easily handled at the next level down (see code
-		 * above).
+		 * We force parens when nesting two SetOperationStmts, except when the
+		 * lefthand input is another setop of the same kind.  Syntactically,
+		 * we could omit parens in rather more cases, but it seems best to use
+		 * parens to flag cases where the setop operator changes.  If we use
+		 * parens, we also increase the indentation level for the child query.
+		 *
+		 * There are some cases in which parens are needed around a leaf query
+		 * too, but those are more easily handled at the next level down (see
+		 * code above).
 		 */
-		need_paren = !IsA(op->larg, RangeTblRef);
+		if (IsA(op->larg, SetOperationStmt))
+		{
+			SetOperationStmt *lop = (SetOperationStmt *) op->larg;
+
+			if (op->op == lop->op && op->all == lop->all)
+				need_paren = false;
+			else
+				need_paren = true;
+		}
+		else
+			need_paren = false;
 
 		if (need_paren)
+		{
 			appendStringInfoChar(buf, '(');
-		get_setop_query(op->larg, query, context, resultDesc);
-		if (need_paren)
-			appendStringInfoChar(buf, ')');
+			subindent = PRETTYINDENT_STD;
+			appendContextKeyword(context, "", subindent, 0, 0);
+		}
+		else
+			subindent = 0;
 
-		if (!PRETTY_INDENT(context))
+		get_setop_query(op->larg, query, context, resultDesc);
+
+		if (need_paren)
+			appendContextKeyword(context, ") ", -subindent, 0, 0);
+		else if (PRETTY_INDENT(context))
+			appendContextKeyword(context, "", -subindent, 0, 0);
+		else
 			appendStringInfoChar(buf, ' ');
+
 		switch (op->op)
 		{
 			case SETOP_UNION:
-				appendContextKeyword(context, "UNION ",
-									 -PRETTYINDENT_STD, PRETTYINDENT_STD, 0);
+				appendStringInfoString(buf, "UNION ");
 				break;
 			case SETOP_INTERSECT:
-				appendContextKeyword(context, "INTERSECT ",
-									 -PRETTYINDENT_STD, PRETTYINDENT_STD, 0);
+				appendStringInfoString(buf, "INTERSECT ");
 				break;
 			case SETOP_EXCEPT:
-				appendContextKeyword(context, "EXCEPT ",
-									 -PRETTYINDENT_STD, PRETTYINDENT_STD, 0);
+				appendStringInfoString(buf, "EXCEPT ");
 				break;
 			default:
 				elog(ERROR, "unrecognized set op: %d",
@@ -4757,19 +4813,29 @@ get_setop_query(Node *setOp, Query *query, deparse_context *context,
 		if (op->all)
 			appendStringInfoString(buf, "ALL ");
 
-		if (PRETTY_INDENT(context))
-			appendContextKeyword(context, "", 0, 0, 0);
+		/* Always parenthesize if RHS is another setop */
+		need_paren = IsA(op->rarg, SetOperationStmt);
 
-		need_paren = !IsA(op->rarg, RangeTblRef);
-
+		/*
+		 * The indentation code here is deliberately a bit different from that
+		 * for the lefthand input, because we want the line breaks in
+		 * different places.
+		 */
 		if (need_paren)
+		{
 			appendStringInfoChar(buf, '(');
+			subindent = PRETTYINDENT_STD;
+		}
+		else
+			subindent = 0;
+		appendContextKeyword(context, "", subindent, 0, 0);
+
 		get_setop_query(op->rarg, query, context, resultDesc);
-		if (need_paren)
-			appendStringInfoChar(buf, ')');
 
 		if (PRETTY_INDENT(context))
-			context->indentLevel -= PRETTYINDENT_STD;
+			context->indentLevel -= subindent;
+		if (need_paren)
+			appendContextKeyword(context, ")", 0, 0, 0);
 	}
 	else
 	{
@@ -4799,7 +4865,7 @@ get_rule_sortgroupclause(SortGroupClause *srt, List *tlist, bool force_colno,
 	 * expression is a constant, force it to be dumped with an explicit cast
 	 * as decoration --- this is because a simple integer constant is
 	 * ambiguous (and will be misinterpreted by findTargetlistEntry()) if we
-	 * dump it without any decoration.	Otherwise, just dump the expression
+	 * dump it without any decoration.  Otherwise, just dump the expression
 	 * normally.
 	 */
 	if (force_colno)
@@ -5494,8 +5560,8 @@ get_variable(Var *var, int levelsup, bool istoplevel, deparse_context *context)
 	/*
 	 * If it's an unnamed join, look at the expansion of the alias variable.
 	 * If it's a simple reference to one of the input vars, then recursively
-	 * print the name of that var instead.	When it's not a simple reference,
-	 * we have to just print the unqualified join column name.	(This can only
+	 * print the name of that var instead.  When it's not a simple reference,
+	 * we have to just print the unqualified join column name.  (This can only
 	 * happen with "dangerous" merged columns in a JOIN USING; we took pains
 	 * previously to make the unqualified column name unique in such cases.)
 	 *
@@ -5523,7 +5589,7 @@ get_variable(Var *var, int levelsup, bool istoplevel, deparse_context *context)
 		/*
 		 * Unnamed join has no refname.  (Note: since it's unnamed, there is
 		 * no way the user could have referenced it to create a whole-row Var
-		 * for it.	So we don't have to cover that case below.)
+		 * for it.  So we don't have to cover that case below.)
 		 */
 		Assert(refname == NULL);
 	}
@@ -5564,7 +5630,7 @@ get_variable(Var *var, int levelsup, bool istoplevel, deparse_context *context)
 
 
 /*
- * Get the name of a field of an expression of composite type.	The
+ * Get the name of a field of an expression of composite type.  The
  * expression is usually a Var, but we handle other cases too.
  *
  * levelsup is an extra offset to interpret the Var's varlevelsup correctly.
@@ -5574,7 +5640,7 @@ get_variable(Var *var, int levelsup, bool istoplevel, deparse_context *context)
  * could also be RECORD.  Since no actual table or view column is allowed to
  * have type RECORD, a Var of type RECORD must refer to a JOIN or FUNCTION RTE
  * or to a subquery output.  We drill down to find the ultimate defining
- * expression and attempt to infer the field name from it.	We ereport if we
+ * expression and attempt to infer the field name from it.  We ereport if we
  * can't determine the name.
  *
  * Similarly, a PARAM of type RECORD has to refer to some expression of
@@ -5939,7 +6005,7 @@ get_name_for_var_field(Var *var, int fieldno,
 
 	/*
 	 * We now have an expression we can't expand any more, so see if
-	 * get_expr_result_type() can do anything with it.	If not, pass to
+	 * get_expr_result_type() can do anything with it.  If not, pass to
 	 * lookup_rowtype_tupdesc() which will probably fail, but will give an
 	 * appropriate error message while failing.
 	 */
@@ -5957,7 +6023,7 @@ get_name_for_var_field(Var *var, int fieldno,
  * reference a parameter supplied by an upper NestLoop or SubPlan plan node.
  *
  * If successful, return the expression and set *dpns_p and *ancestor_cell_p
- * appropriately for calling push_ancestor_plan().	If no referent can be
+ * appropriately for calling push_ancestor_plan().  If no referent can be
  * found, return NULL.
  */
 static Node *
@@ -6089,7 +6155,7 @@ get_parameter(Param *param, deparse_context *context)
 
 	/*
 	 * If it's a PARAM_EXEC parameter, try to locate the expression from which
-	 * the parameter was computed.	Note that failing to find a referent isn't
+	 * the parameter was computed.  Note that failing to find a referent isn't
 	 * an error, since the Param might well be a subplan output rather than an
 	 * input.
 	 */
@@ -6392,14 +6458,36 @@ appendContextKeyword(deparse_context *context, const char *str,
 
 	if (PRETTY_INDENT(context))
 	{
+		int			indentAmount;
+
 		context->indentLevel += indentBefore;
 
 		/* remove any trailing spaces currently in the buffer ... */
 		removeStringInfoSpaces(buf);
 		/* ... then add a newline and some spaces */
 		appendStringInfoChar(buf, '\n');
-		appendStringInfoSpaces(buf,
-							   Max(context->indentLevel, 0) + indentPlus);
+
+		if (context->indentLevel < PRETTYINDENT_LIMIT)
+			indentAmount = Max(context->indentLevel, 0) + indentPlus;
+		else
+		{
+			/*
+			 * If we're indented more than PRETTYINDENT_LIMIT characters, try
+			 * to conserve horizontal space by reducing the per-level
+			 * indentation.  For best results the scale factor here should
+			 * divide all the indent amounts that get added to indentLevel
+			 * (PRETTYINDENT_STD, etc).  It's important that the indentation
+			 * not grow unboundedly, else deeply-nested trees use O(N^2)
+			 * whitespace; so we also wrap modulo PRETTYINDENT_LIMIT.
+			 */
+			indentAmount = PRETTYINDENT_LIMIT +
+				(context->indentLevel - PRETTYINDENT_LIMIT) /
+				(PRETTYINDENT_STD / 2);
+			indentAmount %= PRETTYINDENT_LIMIT;
+			/* scale/wrap logic affects indentLevel, but not indentPlus */
+			indentAmount += indentPlus;
+		}
+		appendStringInfoSpaces(buf, indentAmount);
 
 		appendStringInfoString(buf, str);
 
@@ -6476,6 +6564,10 @@ get_rule_expr(Node *node, deparse_context *context,
 	if (node == NULL)
 		return;
 
+	/* Guard against excessively long or deeply-nested queries */
+	CHECK_FOR_INTERRUPTS();
+	check_stack_depth();
+
 	/*
 	 * Each level of get_rule_expr must emit an indivisible term
 	 * (parenthesized if necessary) to ensure result is reparsed into the same
@@ -6541,10 +6633,10 @@ get_rule_expr(Node *node, deparse_context *context,
 
 				/*
 				 * If there's a refassgnexpr, we want to print the node in the
-				 * format "array[subscripts] := refassgnexpr".	This is not
+				 * format "array[subscripts] := refassgnexpr".  This is not
 				 * legal SQL, so decompilation of INSERT or UPDATE statements
 				 * should always use processIndirection as part of the
-				 * statement-level syntax.	We should only see this when
+				 * statement-level syntax.  We should only see this when
 				 * EXPLAIN tries to print the targetlist of a plan resulting
 				 * from such a statement.
 				 */
@@ -6703,7 +6795,7 @@ get_rule_expr(Node *node, deparse_context *context,
 
 				/*
 				 * We cannot see an already-planned subplan in rule deparsing,
-				 * only while EXPLAINing a query plan.	We don't try to
+				 * only while EXPLAINing a query plan.  We don't try to
 				 * reconstruct the original SQL, just reference the subplan
 				 * that appears elsewhere in EXPLAIN's result.
 				 */
@@ -6776,14 +6868,14 @@ get_rule_expr(Node *node, deparse_context *context,
 				 * There is no good way to represent a FieldStore as real SQL,
 				 * so decompilation of INSERT or UPDATE statements should
 				 * always use processIndirection as part of the
-				 * statement-level syntax.	We should only get here when
+				 * statement-level syntax.  We should only get here when
 				 * EXPLAIN tries to print the targetlist of a plan resulting
 				 * from such a statement.  The plan case is even harder than
 				 * ordinary rules would be, because the planner tries to
 				 * collapse multiple assignments to the same field or subfield
 				 * into one FieldStore; so we can see a list of target fields
 				 * not just one, and the arguments could be FieldStores
-				 * themselves.	We don't bother to try to print the target
+				 * themselves.  We don't bother to try to print the target
 				 * field names; we just print the source arguments, with a
 				 * ROW() around them if there's more than one.  This isn't
 				 * terribly complete, but it's probably good enough for
@@ -7578,7 +7670,7 @@ get_agg_expr(Aggref *aggref, deparse_context *context)
 	{
 		/*
 		 * Ordered-set aggregates do not use "*" syntax.  Also, we needn't
-		 * worry about inserting VARIADIC.	So we can just dump the direct
+		 * worry about inserting VARIADIC.  So we can just dump the direct
 		 * args as-is.
 		 */
 		Assert(!aggref->aggvariadic);
@@ -7720,7 +7812,7 @@ get_coercion_expr(Node *arg, deparse_context *context,
 	 * Since parse_coerce.c doesn't immediately collapse application of
 	 * length-coercion functions to constants, what we'll typically see in
 	 * such cases is a Const with typmod -1 and a length-coercion function
-	 * right above it.	Avoid generating redundant output. However, beware of
+	 * right above it.  Avoid generating redundant output. However, beware of
 	 * suppressing casts when the user actually wrote something like
 	 * 'foo'::text::char(3).
 	 */
@@ -7802,7 +7894,7 @@ get_const_expr(Const *constval, deparse_context *context, int showtype)
 				/*
 				 * These types are printed without quotes unless they contain
 				 * values that aren't accepted by the scanner unquoted (e.g.,
-				 * 'NaN').	Note that strtod() and friends might accept NaN,
+				 * 'NaN').  Note that strtod() and friends might accept NaN,
 				 * so we can't use that to test.
 				 *
 				 * In reality we only need to defend against infinity and NaN,
@@ -8326,7 +8418,7 @@ get_from_clause_item(Node *jtnode, Query *query, deparse_context *context)
 		else if (rte->rtekind == RTE_FUNCTION)
 		{
 			/*
-			 * For a function RTE, always print alias.	This covers possible
+			 * For a function RTE, always print alias.  This covers possible
 			 * renaming of the function and/or instability of the
 			 * FigureColname rules for things that aren't simple functions.
 			 * Note we'd need to force it anyway for the columndef list case.
@@ -8378,27 +8470,32 @@ get_from_clause_item(Node *jtnode, Query *query, deparse_context *context)
 			case JOIN_INNER:
 				if (j->quals)
 					appendContextKeyword(context, " JOIN ",
-										 -PRETTYINDENT_JOIN,
-										 PRETTYINDENT_JOIN, 2);
+										 -PRETTYINDENT_STD,
+										 PRETTYINDENT_STD,
+										 PRETTYINDENT_JOIN);
 				else
 					appendContextKeyword(context, " CROSS JOIN ",
-										 -PRETTYINDENT_JOIN,
-										 PRETTYINDENT_JOIN, 1);
+										 -PRETTYINDENT_STD,
+										 PRETTYINDENT_STD,
+										 PRETTYINDENT_JOIN);
 				break;
 			case JOIN_LEFT:
 				appendContextKeyword(context, " LEFT JOIN ",
-									 -PRETTYINDENT_JOIN,
-									 PRETTYINDENT_JOIN, 2);
+									 -PRETTYINDENT_STD,
+									 PRETTYINDENT_STD,
+									 PRETTYINDENT_JOIN);
 				break;
 			case JOIN_FULL:
 				appendContextKeyword(context, " FULL JOIN ",
-									 -PRETTYINDENT_JOIN,
-									 PRETTYINDENT_JOIN, 2);
+									 -PRETTYINDENT_STD,
+									 PRETTYINDENT_STD,
+									 PRETTYINDENT_JOIN);
 				break;
 			case JOIN_RIGHT:
 				appendContextKeyword(context, " RIGHT JOIN ",
-									 -PRETTYINDENT_JOIN,
-									 PRETTYINDENT_JOIN, 2);
+									 -PRETTYINDENT_STD,
+									 PRETTYINDENT_STD,
+									 PRETTYINDENT_JOIN);
 				break;
 			default:
 				elog(ERROR, "unrecognized join type: %d",
@@ -8410,8 +8507,6 @@ get_from_clause_item(Node *jtnode, Query *query, deparse_context *context)
 		get_from_clause_item(j->rarg, query, context);
 		if (need_paren_on_right)
 			appendStringInfoChar(buf, ')');
-
-		context->indentLevel -= PRETTYINDENT_JOIN_ON;
 
 		if (j->usingClause)
 		{
@@ -8579,7 +8674,7 @@ get_opclass_name(Oid opclass, Oid actual_datatype,
 	if (!OidIsValid(actual_datatype) ||
 		GetDefaultOpClass(actual_datatype, opcrec->opcmethod) != opclass)
 	{
-		/* Okay, we need the opclass name.	Do we need to qualify it? */
+		/* Okay, we need the opclass name.  Do we need to qualify it? */
 		opcname = NameStr(opcrec->opcname);
 		if (OpclassIsVisible(opclass))
 			appendStringInfo(buf, " %s", quote_identifier(opcname));
@@ -8874,13 +8969,13 @@ generate_relation_name(Oid relid, List *namespaces)
  * generate_function_name
  *		Compute the name to display for a function specified by OID,
  *		given that it is being called with the specified actual arg names and
- *		types.	(Those matter because of ambiguous-function resolution rules.)
+ *		types.  (Those matter because of ambiguous-function resolution rules.)
  *
  * If we're dealing with a potentially variadic function (in practice, this
  * means a FuncExpr or Aggref, not some other way of calling a function), then
  * has_variadic must specify whether variadic arguments have been merged,
  * and *use_variadic_p will be set to indicate whether to print VARIADIC in
- * the output.	For non-FuncExpr cases, has_variadic should be FALSE and
+ * the output.  For non-FuncExpr cases, has_variadic should be FALSE and
  * use_variadic_p can be NULL.
  *
  * The result includes all necessary quoting and schema-prefixing.

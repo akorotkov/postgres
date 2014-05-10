@@ -1,5 +1,6 @@
 # -*-makefile-*-
 # src/Makefile.global.in
+# @configure_input@
 
 #------------------------------------------------------------------------------
 # All PostgreSQL makefiles include this file and use the variables it sets,
@@ -292,6 +293,22 @@ XGETTEXT = @XGETTEXT@
 GZIP	= gzip
 BZIP2	= bzip2
 
+# Testing
+
+PROVE = @PROVE@
+PG_PROVE_FLAGS = --ext='.pl' -I $(top_srcdir)/src/test/perl/
+PROVE_FLAGS = --verbose
+
+define prove_installcheck
+PATH="$(bindir):$$PATH" PGPORT='6$(DEF_PGPORT)' $(PROVE) $(PG_PROVE_FLAGS) $(PROVE_FLAGS)
+endef
+
+define prove_check
+$(MKDIR_P) tmp_check/log
+$(MAKE) -C $(top_builddir) DESTDIR=$(CURDIR)/tmp_check/install install >$(CURDIR)/tmp_check/log/install.log 2>&1
+PATH="$(CURDIR)/tmp_check/install$(bindir):$$PATH" PGPORT='6$(DEF_PGPORT)' $(PROVE) $(PG_PROVE_FLAGS) $(PROVE_FLAGS)
+endef
+
 # Installation.
 
 install_bin = @install_bin@
@@ -468,8 +485,8 @@ pg_regress_installcheck = $(top_builddir)/src/test/regress/pg_regress --inputdir
 
 pg_regress_clean_files = results/ regression.diffs regression.out tmp_check/ log/
 
-pg_isolation_regress_check = $(top_builddir)/src/test/isolation/pg_isolation_regress --inputdir=$(srcdir) --temp-install=./tmp_check --top-builddir=$(top_builddir) $(pg_regress_locale_flags)
-pg_isolation_regress_installcheck = $(top_builddir)/src/test/isolation/pg_isolation_regress --inputdir=$(srcdir) --top-builddir=$(top_builddir) $(pg_regress_locale_flags)
+pg_isolation_regress_check = $(top_builddir)/src/test/isolation/pg_isolation_regress --inputdir=$(srcdir) --temp-install=./tmp_check --top-builddir=$(top_builddir) $(pg_regress_locale_flags) $(EXTRA_REGRESS_OPTS)
+pg_isolation_regress_installcheck = $(top_builddir)/src/test/isolation/pg_isolation_regress --inputdir=$(srcdir) --top-builddir=$(top_builddir) $(pg_regress_locale_flags) $(EXTRA_REGRESS_OPTS)
 
 ##########################################################################
 #
@@ -762,7 +779,7 @@ gcda_files := $(wildcard *.gcda)
 
 lcov.info: $(gcda_files)
 	rm -f *.gcov
-	$(if $^,$(LCOV) -d . -c -o $@ $(LCOVFLAGS))
+	$(if $^,$(LCOV) -d . -c -o $@ $(LCOVFLAGS) --gcov-tool $(GCOV))
 
 %.c.gcov: %.gcda | lcov.info
 	$(GCOV) -b -f -p -o . $(GCOVFLAGS) $*.c >$*.c.gcov.out

@@ -27,10 +27,6 @@
 PG_MODULE_MAGIC;
 
 
-/* forward declarations */
-Datum		triggered_change_notification(PG_FUNCTION_ARGS);
-
-
 /*
  * Copy from s (for source) to r (for result), wrapping with q (quote)
  * characters and doubling any quote characters found.
@@ -53,7 +49,7 @@ strcpy_quoted(StringInfo r, const char *s, const char q)
  * triggered_change_notification
  *
  * This trigger function will send a notification of data modification with
- * primary key values.	The channel will be "tcn" unless the trigger is
+ * primary key values.  The channel will be "tcn" unless the trigger is
  * created with a parameter, in which case that parameter will be used.
  */
 PG_FUNCTION_INFO_V1(triggered_change_notification);

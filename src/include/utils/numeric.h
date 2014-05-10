@@ -75,7 +75,7 @@ extern char *numeric_normalize(Numeric num);
  * Numeric values are represented in a base-NBASE floating point format.
  * Each "digit" ranges from 0 to NBASE-1.  The type NumericDigit is signed
  * and wide enough to store a digit.  We assume that NBASE*NBASE can fit in
- * an int.	Although the purely calculational routines could handle any even
+ * an int.  Although the purely calculational routines could handle any even
  * NBASE that's less than sqrt(INT_MAX), in practice we are only interested
  * in NBASE a power of ten, so that I/O conversions and decimal rounding
  * are easy.  Also, it's actually more efficient if NBASE is rather less than
@@ -120,11 +120,11 @@ typedef int16 NumericDigit;
  * If the high bits of the first word of a NumericChoice (n_header, or
  * n_short.n_header, or n_long.n_sign_dscale) are NUMERIC_SHORT, then the
  * numeric follows the NumericShort format; if they are NUMERIC_POS or
- * NUMERIC_NEG, it follows the NumericLong format.	If they are NUMERIC_NAN,
+ * NUMERIC_NEG, it follows the NumericLong format.  If they are NUMERIC_NAN,
  * it is a NaN.  We currently always store a NaN using just two bytes (i.e.
  * only n_header), but previous releases used only the NumericLong format,
  * so we might find 4-byte NaNs on disk if a database has been migrated using
- * pg_upgrade.	In either case, when the high bits indicate a NaN, the
+ * pg_upgrade.  In either case, when the high bits indicate a NaN, the
  * remaining bits are never examined.  Currently, we always initialize these
  * to zero, but it might be possible to use them for some other purpose in
  * the future.
@@ -232,19 +232,19 @@ struct NumericData
 	: ((n)->choice.n_long.n_weight))
 
 /* ----------
- * NumericVar is the format we use for arithmetic.	The digit-array part
+ * NumericVar is the format we use for arithmetic.  The digit-array part
  * is the same as the NumericData storage format, but the header is more
  * complex.
  *
  * The value represented by a NumericVar is determined by the sign, weight,
  * ndigits, and digits[] array.
  * Note: the first digit of a NumericVar's value is assumed to be multiplied
- * by NBASE ** weight.	Another way to say it is that there are weight+1
+ * by NBASE ** weight.  Another way to say it is that there are weight+1
  * digits before the decimal point.  It is possible to have weight < 0.
  *
  * buf points at the physical start of the palloc'd digit buffer for the
- * NumericVar.	digits points at the first digit in actual use (the one
- * with the specified weight).	We normally leave an unused digit or two
+ * NumericVar.  digits points at the first digit in actual use (the one
+ * with the specified weight).  We normally leave an unused digit or two
  * (preset to zeroes) between buf and digits, so that there is room to store
  * a carry out of the top digit without reallocating space.  We just need to
  * decrement digits (and increment weight) to make room for the carry digit.
@@ -285,8 +285,7 @@ typedef struct NumericVar
 } NumericVar;
 
 #define NUMERIC_DIGITS(num) (NUMERIC_IS_SHORT(num) ? \
-	(num)->choice.n_short.n_data : (num)->choice.n_long.n_data)
+      (num)->choice.n_short.n_data : (num)->choice.n_long.n_data)
 #define NUMERIC_NDIGITS(num) \
-	((VARSIZE(num) - NUMERIC_HEADER_SIZE(num)) / sizeof(NumericDigit))
-
+      ((VARSIZE(num) - NUMERIC_HEADER_SIZE(num)) / sizeof(NumericDigit))
 #endif   /* _PG_NUMERIC_H_ */

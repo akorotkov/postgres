@@ -20,9 +20,11 @@
 #include "postmaster/bgworker_internals.h"
 #include "postmaster/postmaster.h"
 #include "storage/barrier.h"
+#include "storage/dsm.h"
 #include "storage/ipc.h"
 #include "storage/latch.h"
 #include "storage/lwlock.h"
+#include "storage/pg_shmem.h"
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
 #include "storage/procsignal.h"
@@ -35,7 +37,7 @@
 /*
  * The postmaster's list of registered background workers, in private memory.
  */
-slist_head BackgroundWorkerList = SLIST_STATIC_INIT(BackgroundWorkerList);
+slist_head	BackgroundWorkerList = SLIST_STATIC_INIT(BackgroundWorkerList);
 
 /*
  * BackgroundWorkerSlots exist in shared memory and can be accessed (via
@@ -71,23 +73,23 @@ slist_head BackgroundWorkerList = SLIST_STATIC_INIT(BackgroundWorkerList);
  */
 typedef struct BackgroundWorkerSlot
 {
-	bool	in_use;
-	bool	terminate;
-	pid_t	pid;				/* InvalidPid = not started yet; 0 = dead */
-	uint64	generation;			/* incremented when slot is recycled */
+	bool		in_use;
+	bool		terminate;
+	pid_t		pid;			/* InvalidPid = not started yet; 0 = dead */
+	uint64		generation;		/* incremented when slot is recycled */
 	BackgroundWorker worker;
 } BackgroundWorkerSlot;
 
 typedef struct BackgroundWorkerArray
 {
-	int		total_slots;
+	int			total_slots;
 	BackgroundWorkerSlot slot[FLEXIBLE_ARRAY_MEMBER];
 } BackgroundWorkerArray;
 
 struct BackgroundWorkerHandle
 {
-	int		slot;
-	uint64	generation;
+	int			slot;
+	uint64		generation;
 };
 
 static BackgroundWorkerArray *BackgroundWorkerData;
@@ -127,10 +129,10 @@ BackgroundWorkerShmemInit(void)
 		BackgroundWorkerData->total_slots = max_worker_processes;
 
 		/*
-		 * Copy contents of worker list into shared memory.  Record the
-		 * shared memory slot assigned to each worker.  This ensures
-		 * a 1-to-1 correspondence betwen the postmaster's private list and
-		 * the array in shared memory.
+		 * Copy contents of worker list into shared memory.  Record the shared
+		 * memory slot assigned to each worker.  This ensures a 1-to-1
+		 * correspondence betwen the postmaster's private list and the array
+		 * in shared memory.
 		 */
 		slist_foreach(siter, &BackgroundWorkerList)
 		{
@@ -144,7 +146,7 @@ BackgroundWorkerShmemInit(void)
 			slot->pid = InvalidPid;
 			slot->generation = 0;
 			rw->rw_shmem_slot = slotno;
-			rw->rw_worker.bgw_notify_pid = 0; /* might be reinit after crash */
+			rw->rw_worker.bgw_notify_pid = 0;	/* might be reinit after crash */
 			memcpy(&slot->worker, &rw->rw_worker, sizeof(BackgroundWorker));
 			++slotno;
 		}
@@ -194,27 +196,27 @@ FindRegisteredWorkerBySlotNumber(int slotno)
 void
 BackgroundWorkerStateChange(void)
 {
-	int		slotno;
+	int			slotno;
 
 	/*
 	 * The total number of slots stored in shared memory should match our
 	 * notion of max_worker_processes.  If it does not, something is very
 	 * wrong.  Further down, we always refer to this value as
-	 * max_worker_processes, in case shared memory gets corrupted while
-	 * we're looping.
+	 * max_worker_processes, in case shared memory gets corrupted while we're
+	 * looping.
 	 */
 	if (max_worker_processes != BackgroundWorkerData->total_slots)
 	{
 		elog(LOG,
 			 "inconsistent background worker state (max_worker_processes=%d, total_slots=%d",
-			max_worker_processes,
-			BackgroundWorkerData->total_slots);
+			 max_worker_processes,
+			 BackgroundWorkerData->total_slots);
 		return;
 	}
 
 	/*
-	 * Iterate through slots, looking for newly-registered workers or
-	 * workers who must die.
+	 * Iterate through slots, looking for newly-registered workers or workers
+	 * who must die.
 	 */
 	for (slotno = 0; slotno < max_worker_processes; ++slotno)
 	{
@@ -267,8 +269,8 @@ BackgroundWorkerStateChange(void)
 		}
 
 		/*
-		 * Copy strings in a paranoid way.  If shared memory is corrupted,
-		 * the source data might not even be NUL-terminated.
+		 * Copy strings in a paranoid way.  If shared memory is corrupted, the
+		 * source data might not even be NUL-terminated.
 		 */
 		ascii_safe_strlcpy(rw->rw_worker.bgw_name,
 						   slot->worker.bgw_name, BGW_MAXLEN);
@@ -280,10 +282,10 @@ BackgroundWorkerStateChange(void)
 		/*
 		 * Copy various fixed-size fields.
 		 *
-		 * flags, start_time, and restart_time are examined by the
-		 * postmaster, but nothing too bad will happen if they are
-		 * corrupted.  The remaining fields will only be examined by the
-		 * child process.  It might crash, but we won't.
+		 * flags, start_time, and restart_time are examined by the postmaster,
+		 * but nothing too bad will happen if they are corrupted.  The
+		 * remaining fields will only be examined by the child process.  It
+		 * might crash, but we won't.
 		 */
 		rw->rw_worker.bgw_flags = slot->worker.bgw_flags;
 		rw->rw_worker.bgw_start_time = slot->worker.bgw_start_time;
@@ -292,13 +294,13 @@ BackgroundWorkerStateChange(void)
 		rw->rw_worker.bgw_main_arg = slot->worker.bgw_main_arg;
 
 		/*
-		 * Copy the PID to be notified about state changes, but only if
-		 * the postmaster knows about a backend with that PID.  It isn't
-		 * an error if the postmaster doesn't know about the PID, because
-		 * the backend that requested the worker could have died (or been
-		 * killed) just after doing so.  Nonetheless, at least until we get
-		 * some experience with how this plays out in the wild, log a message
-		 * at a relative high debug level.
+		 * Copy the PID to be notified about state changes, but only if the
+		 * postmaster knows about a backend with that PID.  It isn't an error
+		 * if the postmaster doesn't know about the PID, because the backend
+		 * that requested the worker could have died (or been killed) just
+		 * after doing so.  Nonetheless, at least until we get some experience
+		 * with how this plays out in the wild, log a message at a relative
+		 * high debug level.
 		 */
 		rw->rw_worker.bgw_notify_pid = slot->worker.bgw_notify_pid;
 		if (!PostmasterMarkPIDForWorkerNotify(rw->rw_worker.bgw_notify_pid))
@@ -319,7 +321,7 @@ BackgroundWorkerStateChange(void)
 		/* Log it! */
 		ereport(LOG,
 				(errmsg("registering background worker \"%s\"",
-					rw->rw_worker.bgw_name)));
+						rw->rw_worker.bgw_name)));
 
 		slist_push_head(&BackgroundWorkerList, &rw->rw_lnode);
 	}
@@ -348,7 +350,7 @@ ForgetBackgroundWorker(slist_mutable_iter *cur)
 
 	ereport(LOG,
 			(errmsg("unregistering background worker \"%s\"",
-				rw->rw_worker.bgw_name)));
+					rw->rw_worker.bgw_name)));
 
 	slist_delete_current(cur);
 	free(rw);
@@ -392,6 +394,27 @@ BackgroundWorkerStopNotifications(pid_t pid)
 	}
 }
 
+/*
+ * Reset background worker crash state.
+ *
+ * We assume that, after a crash-and-restart cycle, background workers should
+ * be restarted immediately, instead of waiting for bgw_restart_time to
+ * elapse.
+ */
+void
+ResetBackgroundWorkerCrashTimes(void)
+{
+	slist_mutable_iter	iter;
+
+	slist_foreach_modify(iter, &BackgroundWorkerList)
+	{
+		RegisteredBgWorker *rw;
+
+		rw = slist_container(RegisteredBgWorker, rw_lnode, iter.cur);
+		rw->rw_crashed_at = 0;
+	}
+}
+
 #ifdef EXEC_BACKEND
 /*
  * In EXEC_BACKEND mode, workers use this to retrieve their details from
@@ -400,12 +423,16 @@ BackgroundWorkerStopNotifications(pid_t pid)
 BackgroundWorker *
 BackgroundWorkerEntry(int slotno)
 {
+	static BackgroundWorker myEntry;
 	BackgroundWorkerSlot *slot;
 
 	Assert(slotno < BackgroundWorkerData->total_slots);
 	slot = &BackgroundWorkerData->slot[slotno];
 	Assert(slot->in_use);
-	return &slot->worker;		/* can't become free while we're still here */
+
+	/* must copy this in case we don't intend to retain shmem access */
+	memcpy(&myEntry, &slot->worker, sizeof myEntry);
+	return &myEntry;
 }
 #endif
 
@@ -458,7 +485,7 @@ SanityCheckBackgroundWorker(BackgroundWorker *worker, int elevel)
 static void
 bgworker_quickdie(SIGNAL_ARGS)
 {
-	sigaddset(&BlockSig, SIGQUIT);      /* prevent nested calls */
+	sigaddset(&BlockSig, SIGQUIT);		/* prevent nested calls */
 	PG_SETMASK(&BlockSig);
 
 	/*
@@ -472,13 +499,14 @@ bgworker_quickdie(SIGNAL_ARGS)
 	on_exit_reset();
 
 	/*
-	 * Note we do exit(0) here, not exit(2) like quickdie.  The reason is that
-	 * we don't want to be seen this worker as independently crashed, because
-	 * then postmaster would delay restarting it again afterwards.  If some
-	 * idiot DBA manually sends SIGQUIT to a random bgworker, the "dead man
-	 * switch" will ensure that postmaster sees this as a crash.
+	 * Note we do exit(2) not exit(0).  This is to force the postmaster into a
+	 * system reset cycle if some idiot DBA sends a manual SIGQUIT to a random
+	 * backend.  This is necessary precisely because we don't clean up our
+	 * shared memory state.  (The "dead man switch" mechanism in pmsignal.c
+	 * should ensure the postmaster sees this as a crash, too, but no harm in
+	 * being doubly sure.)
 	 */
-	exit(0);
+	exit(2);
 }
 
 /*
@@ -504,7 +532,7 @@ bgworker_die(SIGNAL_ARGS)
 static void
 bgworker_sigusr1_handler(SIGNAL_ARGS)
 {
-	int         save_errno = errno;
+	int			save_errno = errno;
 
 	latch_sigusr1_handler();
 
@@ -541,6 +569,20 @@ StartBackgroundWorker(void)
 	/* Identify myself via ps */
 	snprintf(buf, MAXPGPATH, "bgworker: %s", worker->bgw_name);
 	init_ps_display(buf, "", "", "");
+
+	/*
+	 * If we're not supposed to have shared memory access, then detach from
+	 * shared memory.  If we didn't request shared memory access, the
+	 * postmaster won't force a cluster-wide restart if we exit unexpectedly,
+	 * so we'd better make sure that we don't mess anything up that would
+	 * require that sort of cleanup.
+	 */
+	if ((worker->bgw_flags & BGWORKER_SHMEM_ACCESS) == 0)
+	{
+		on_exit_reset();
+		dsm_detach_all();
+		PGSharedMemoryDetach();
+	}
 
 	SetProcessingMode(InitProcessing);
 
@@ -581,7 +623,7 @@ StartBackgroundWorker(void)
 	pqsignal(SIGHUP, SIG_IGN);
 
 	pqsignal(SIGQUIT, bgworker_quickdie);
-	InitializeTimeouts();       /* establishes SIGALRM handler */
+	InitializeTimeouts();		/* establishes SIGALRM handler */
 
 	pqsignal(SIGPIPE, SIG_IGN);
 	pqsignal(SIGUSR2, SIG_IGN);
@@ -616,28 +658,38 @@ StartBackgroundWorker(void)
 	/* We can now handle ereport(ERROR) */
 	PG_exception_stack = &local_sigjmp_buf;
 
-	/* Early initialization */
-	BaseInit();
-
 	/*
-	 * If necessary, create a per-backend PGPROC struct in shared memory,
-	 * except in the EXEC_BACKEND case where this was done in
-	 * SubPostmasterMain. We must do this before we can use LWLocks (and in
-	 * the EXEC_BACKEND case we already had to do some stuff with LWLocks).
+	 * If the background worker request shared memory access, set that up now;
+	 * else, detach all shared memory segments.
 	 */
-#ifndef EXEC_BACKEND
 	if (worker->bgw_flags & BGWORKER_SHMEM_ACCESS)
+	{
+		/*
+		 * Early initialization.  Some of this could be useful even for
+		 * background workers that aren't using shared memory, but they can
+		 * call the individual startup routines for those subsystems if needed.
+		 */
+		BaseInit();
+
+		/*
+		 * Create a per-backend PGPROC struct in shared memory, except in the
+		 * EXEC_BACKEND case where this was done in SubPostmasterMain. We must
+		 * do this before we can use LWLocks (and in the EXEC_BACKEND case we
+		 * already had to do some stuff with LWLocks).
+		 */
+#ifndef EXEC_BACKEND
 		InitProcess();
 #endif
+	}
 
 	/*
 	 * If bgw_main is set, we use that value as the initial entrypoint.
 	 * However, if the library containing the entrypoint wasn't loaded at
-	 * postmaster startup time, passing it as a direct function pointer is
-	 * not possible.  To work around that, we allow callers for whom a
-	 * function pointer is not available to pass a library name (which will
-	 * be loaded, if necessary) and a function name (which will be looked up
-	 * in the named library).
+	 * postmaster startup time, passing it as a direct function pointer is not
+	 * possible.  To work around that, we allow callers for whom a function
+	 * pointer is not available to pass a library name (which will be loaded,
+	 * if necessary) and a function name (which will be looked up in the named
+	 * library).
 	 */
 	if (worker->bgw_main != NULL)
 		entrypt = worker->bgw_main;
@@ -677,7 +729,7 @@ RegisterBackgroundWorker(BackgroundWorker *worker)
 
 	if (!IsUnderPostmaster)
 		ereport(LOG,
-			(errmsg("registering background worker \"%s\"", worker->bgw_name)));
+		 (errmsg("registering background worker \"%s\"", worker->bgw_name)));
 
 	if (!process_shared_preload_libraries_in_progress)
 	{
@@ -697,7 +749,7 @@ RegisterBackgroundWorker(BackgroundWorker *worker)
 		ereport(LOG,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("background worker \"%s\": only dynamic background workers can request notification",
-					worker->bgw_name)));
+						worker->bgw_name)));
 		return;
 	}
 
@@ -756,17 +808,17 @@ bool
 RegisterDynamicBackgroundWorker(BackgroundWorker *worker,
 								BackgroundWorkerHandle **handle)
 {
-	int		slotno;
-	bool	success = false;
-	uint64	generation = 0;
+	int			slotno;
+	bool		success = false;
+	uint64		generation = 0;
 
 	/*
-	 * We can't register dynamic background workers from the postmaster.
-	 * If this is a standalone backend, we're the only process and can't
-	 * start any more.  In a multi-process environement, it might be
-	 * theoretically possible, but we don't currently support it due to
-	 * locking considerations; see comments on the BackgroundWorkerSlot
-	 * data structure.
+	 * We can't register dynamic background workers from the postmaster. If
+	 * this is a standalone backend, we're the only process and can't start
+	 * any more.  In a multi-process environement, it might be theoretically
+	 * possible, but we don't currently support it due to locking
+	 * considerations; see comments on the BackgroundWorkerSlot data
+	 * structure.
 	 */
 	if (!IsUnderPostmaster)
 		return false;
@@ -792,8 +844,8 @@ RegisterDynamicBackgroundWorker(BackgroundWorker *worker,
 			generation = slot->generation;
 
 			/*
-			 * Make sure postmaster doesn't see the slot as in use before
-			 * it sees the new contents.
+			 * Make sure postmaster doesn't see the slot as in use before it
+			 * sees the new contents.
 			 */
 			pg_write_barrier();
 
@@ -832,23 +884,23 @@ RegisterDynamicBackgroundWorker(BackgroundWorker *worker,
  * running but is no longer.
  *
  * In the latter case, the worker may be stopped temporarily (if it is
- * configured for automatic restart, or if it exited with code 0) or gone
- * for good (if it is configured not to restart and exited with code 1).
+ * configured for automatic restart and exited non-zero) or gone for
+ * good (if it exited with code 0 or if it is configured not to restart).
  */
 BgwHandleStatus
 GetBackgroundWorkerPid(BackgroundWorkerHandle *handle, pid_t *pidp)
 {
 	BackgroundWorkerSlot *slot;
-	pid_t	pid;
+	pid_t		pid;
 
 	Assert(handle->slot < max_worker_processes);
 	slot = &BackgroundWorkerData->slot[handle->slot];
 
 	/*
-	 * We could probably arrange to synchronize access to data using
-	 * memory barriers only, but for now, let's just keep it simple and
-	 * grab the lock.  It seems unlikely that there will be enough traffic
-	 * here to result in meaningful contention.
+	 * We could probably arrange to synchronize access to data using memory
+	 * barriers only, but for now, let's just keep it simple and grab the
+	 * lock.  It seems unlikely that there will be enough traffic here to
+	 * result in meaningful contention.
 	 */
 	LWLockAcquire(BackgroundWorkerLock, LW_SHARED);
 
@@ -887,9 +939,9 @@ GetBackgroundWorkerPid(BackgroundWorkerHandle *handle, pid_t *pidp)
 BgwHandleStatus
 WaitForBackgroundWorkerStartup(BackgroundWorkerHandle *handle, pid_t *pidp)
 {
-	BgwHandleStatus	status;
-	int		rc;
-	bool	save_set_latch_on_sigusr1;
+	BgwHandleStatus status;
+	int			rc;
+	bool		save_set_latch_on_sigusr1;
 
 	save_set_latch_on_sigusr1 = set_latch_on_sigusr1;
 	set_latch_on_sigusr1 = true;
@@ -898,7 +950,7 @@ WaitForBackgroundWorkerStartup(BackgroundWorkerHandle *handle, pid_t *pidp)
 	{
 		for (;;)
 		{
-			pid_t	pid;
+			pid_t		pid;
 
 			CHECK_FOR_INTERRUPTS();
 
@@ -942,7 +994,7 @@ void
 TerminateBackgroundWorker(BackgroundWorkerHandle *handle)
 {
 	BackgroundWorkerSlot *slot;
-	bool	signal_postmaster = false;
+	bool		signal_postmaster = false;
 
 	Assert(handle->slot < max_worker_processes);
 	slot = &BackgroundWorkerData->slot[handle->slot];

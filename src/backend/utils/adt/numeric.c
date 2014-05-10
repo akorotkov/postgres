@@ -368,7 +368,7 @@ numeric_maximum_size(int32 typmod)
 	 * In most cases, the size of a numeric will be smaller than the value
 	 * computed below, because the varlena header will typically get toasted
 	 * down to a single byte before being stored on disk, and it may also be
-	 * possible to use a short numeric header.	But our job here is to compute
+	 * possible to use a short numeric header.  But our job here is to compute
 	 * the worst case.
 	 */
 	return NUMERIC_HDRSZ + (numeric_digits * sizeof(NumericDigit));
@@ -408,7 +408,8 @@ numeric_normalize(Numeric num)
 {
 	NumericVar	x;
 	char	   *str;
-	int			orig, last;
+	int			orig,
+				last;
 
 	/*
 	 * Handle NaN
@@ -526,7 +527,7 @@ numeric_send(PG_FUNCTION_ARGS)
  *
  * Flatten calls to numeric's length coercion function that solely represent
  * increases in allowable precision.  Scale changes mutate every datum, so
- * they are unoptimizable.	Some values, e.g. 1E-1001, can only fit into an
+ * they are unoptimizable.  Some values, e.g. 1E-1001, can only fit into an
  * unconstrained numeric, so a change from an unconstrained numeric to any
  * constrained numeric is also unoptimizable.
  */
@@ -556,7 +557,7 @@ numeric_transform(PG_FUNCTION_ARGS)
 		 * If new_typmod < VARHDRSZ, the destination is unconstrained; that's
 		 * always OK.  If old_typmod >= VARHDRSZ, the source is constrained,
 		 * and we're OK if the scale is unchanged and the precision is not
-		 * decreasing.	See further notes in function header comment.
+		 * decreasing.  See further notes in function header comment.
 		 */
 		if (new_typmod < (int32) VARHDRSZ ||
 			(old_typmod >= (int32) VARHDRSZ &&
@@ -768,7 +769,7 @@ numeric_uminus(PG_FUNCTION_ARGS)
 
 	/*
 	 * The packed format is known to be totally zero digit trimmed always. So
-	 * we can identify a ZERO by the fact that there are no digits at all.	Do
+	 * we can identify a ZERO by the fact that there are no digits at all.  Do
 	 * nothing to a zero.
 	 */
 	if (NUMERIC_NDIGITS(num) != 0)
@@ -1744,7 +1745,7 @@ numeric_sqrt(PG_FUNCTION_ARGS)
 		PG_RETURN_NUMERIC(make_result(&const_nan));
 
 	/*
-	 * Unpack the argument and determine the result scale.	We choose a scale
+	 * Unpack the argument and determine the result scale.  We choose a scale
 	 * to give at least NUMERIC_MIN_SIG_DIGITS significant digits; but in any
 	 * case not less than the input's dscale.
 	 */
@@ -1795,7 +1796,7 @@ numeric_exp(PG_FUNCTION_ARGS)
 		PG_RETURN_NUMERIC(make_result(&const_nan));
 
 	/*
-	 * Unpack the argument and determine the result scale.	We choose a scale
+	 * Unpack the argument and determine the result scale.  We choose a scale
 	 * to give at least NUMERIC_MIN_SIG_DIGITS significant digits; but in any
 	 * case not less than the input's dscale.
 	 */
@@ -2289,7 +2290,7 @@ typedef struct NumericAggState
 	NumericVar	sumX;			/* sum of processed numbers */
 	NumericVar	sumX2;			/* sum of squares of processed numbers */
 	int			maxScale;		/* maximum scale seen so far */
-	int64		maxScaleCount;  /* number of values seen with maximum scale */
+	int64		maxScaleCount;	/* number of values seen with maximum scale */
 	int64		NaNcount;		/* count of NaN values (not included in N!) */
 } NumericAggState;
 
@@ -2424,8 +2425,8 @@ do_numeric_discard(NumericAggState *state, Numeric newval)
 		if (state->maxScaleCount > 1 || state->maxScale == 0)
 		{
 			/*
-			 * Some remaining inputs have same dscale, or dscale hasn't
-			 * gotten above zero anyway
+			 * Some remaining inputs have same dscale, or dscale hasn't gotten
+			 * above zero anyway
 			 */
 			state->maxScaleCount--;
 		}
@@ -2539,9 +2540,9 @@ numeric_accum_inv(PG_FUNCTION_ARGS)
 
 /*
  * Integer data types all use Numeric accumulators to share code and
- * avoid risk of overflow.	For int2 and int4 inputs, Numeric accumulation
+ * avoid risk of overflow.  For int2 and int4 inputs, Numeric accumulation
  * is overkill for the N and sum(X) values, but definitely not overkill
- * for the sum(X*X) value.	Hence, we use int2_accum and int4_accum only
+ * for the sum(X*X) value.  Hence, we use int2_accum and int4_accum only
  * for stddev/variance --- there are faster special-purpose accumulator
  * routines for SUM and AVG of these datatypes.
  */
@@ -2737,7 +2738,7 @@ numeric_avg(PG_FUNCTION_ARGS)
 	if (state == NULL || (state->N + state->NaNcount) == 0)
 		PG_RETURN_NULL();
 
-	if (state->NaNcount > 0)		/* there was at least one NaN input */
+	if (state->NaNcount > 0)	/* there was at least one NaN input */
 		PG_RETURN_NUMERIC(make_result(&const_nan));
 
 	N_datum = DirectFunctionCall1(int8_numeric, Int64GetDatum(state->N));
@@ -2757,7 +2758,7 @@ numeric_sum(PG_FUNCTION_ARGS)
 	if (state == NULL || (state->N + state->NaNcount) == 0)
 		PG_RETURN_NULL();
 
-	if (state->NaNcount > 0)		/* there was at least one NaN input */
+	if (state->NaNcount > 0)	/* there was at least one NaN input */
 		PG_RETURN_NUMERIC(make_result(&const_nan));
 
 	PG_RETURN_NUMERIC(make_result(&(state->sumX)));
@@ -2939,7 +2940,7 @@ numeric_stddev_pop(PG_FUNCTION_ARGS)
  * the initial condition of the transition data value needs to be NULL. This
  * means we can't rely on ExecAgg to automatically insert the first non-null
  * data value into the transition data: it doesn't know how to do the type
- * conversion.	The upshot is that these routines have to be marked non-strict
+ * conversion.  The upshot is that these routines have to be marked non-strict
  * and handle substitution of the first non-null input themselves.
  *
  * Note: these functions are used only in plain aggregation mode.
@@ -3425,7 +3426,7 @@ set_var_from_str(const char *str, const char *cp, NumericVar *dest)
 
 	/*
 	 * We first parse the string to extract decimal digits and determine the
-	 * correct decimal weight.	Then convert to NBASE representation.
+	 * correct decimal weight.  Then convert to NBASE representation.
 	 */
 	switch (*cp)
 	{
@@ -4033,7 +4034,7 @@ apply_typmod(NumericVar *var, int32 typmod)
 /*
  * Convert numeric to int8, rounding if needed.
  *
- * If overflow, return FALSE (no error is raised).	Return TRUE if okay.
+ * If overflow, return FALSE (no error is raised).  Return TRUE if okay.
  */
 static bool
 numericvar_to_int8(NumericVar *var, int64 *result)
@@ -4504,7 +4505,7 @@ sub_var(NumericVar *var1, NumericVar *var2, NumericVar *result)
  * mul_var() -
  *
  *	Multiplication on variable level. Product of var1 * var2 is stored
- *	in result.	Result is rounded to no more than rscale fractional digits.
+ *	in result.  Result is rounded to no more than rscale fractional digits.
  */
 static void
 mul_var(NumericVar *var1, NumericVar *var2, NumericVar *result,
@@ -4548,7 +4549,7 @@ mul_var(NumericVar *var1, NumericVar *var2, NumericVar *result,
 	/*
 	 * Determine number of result digits to compute.  If the exact result
 	 * would have more than rscale fractional digits, truncate the computation
-	 * with MUL_GUARD_DIGITS guard digits.	We do that by pretending that one
+	 * with MUL_GUARD_DIGITS guard digits.  We do that by pretending that one
 	 * or both inputs have fewer digits than they really do.
 	 */
 	res_ndigits = var1ndigits + var2ndigits + 1;
@@ -4791,7 +4792,7 @@ div_var(NumericVar *var1, NumericVar *var2, NumericVar *result,
 		 *
 		 * We need the first divisor digit to be >= NBASE/2.  If it isn't,
 		 * make it so by scaling up both the divisor and dividend by the
-		 * factor "d".	(The reason for allocating dividend[0] above is to
+		 * factor "d".  (The reason for allocating dividend[0] above is to
 		 * leave room for possible carry here.)
 		 */
 		if (divisor[1] < HALF_NBASE)
@@ -4835,7 +4836,7 @@ div_var(NumericVar *var1, NumericVar *var2, NumericVar *result,
 
 			/*
 			 * If next2digits are 0, then quotient digit must be 0 and there's
-			 * no need to adjust the working dividend.	It's worth testing
+			 * no need to adjust the working dividend.  It's worth testing
 			 * here to fall out ASAP when processing trailing zeroes in a
 			 * dividend.
 			 */
@@ -4853,7 +4854,7 @@ div_var(NumericVar *var1, NumericVar *var2, NumericVar *result,
 			/*
 			 * Adjust quotient digit if it's too large.  Knuth proves that
 			 * after this step, the quotient digit will be either correct or
-			 * just one too large.	(Note: it's OK to use dividend[j+2] here
+			 * just one too large.  (Note: it's OK to use dividend[j+2] here
 			 * because we know the divisor length is at least 2.)
 			 */
 			while (divisor2 * qhat >
@@ -5028,7 +5029,7 @@ div_var_fast(NumericVar *var1, NumericVar *var2, NumericVar *result,
 	 * dividend's digits (plus appended zeroes to reach the desired precision
 	 * including guard digits).  Each step of the main loop computes an
 	 * (approximate) quotient digit and stores it into div[], removing one
-	 * position of dividend space.	A final pass of carry propagation takes
+	 * position of dividend space.  A final pass of carry propagation takes
 	 * care of any mistaken quotient digits.
 	 */
 	div = (int *) palloc0((div_ndigits + 1) * sizeof(int));
@@ -5878,7 +5879,7 @@ power_var_int(NumericVar *base, int exp, NumericVar *result, int rscale)
 
 	/*
 	 * The general case repeatedly multiplies base according to the bit
-	 * pattern of exp.	We do the multiplications with some extra precision.
+	 * pattern of exp.  We do the multiplications with some extra precision.
 	 */
 	neg = (exp < 0);
 	exp = Abs(exp);

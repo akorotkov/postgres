@@ -227,12 +227,13 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="PARAMETER">name</replaceable>
    </varlistentry>
 
    <varlistentry>
-    <indexterm>
-     <primary>TOAST</primary>
-     <secondary>per-column storage settings</secondary>
-    </indexterm>
-
-    <term><literal>SET STORAGE</literal></term>
+    <term>
+     <literal>SET STORAGE</literal>
+     <indexterm>
+      <primary>TOAST</primary>
+      <secondary>per-column storage settings</secondary>
+     </indexterm>
+    </term>
     <listitem>
      <para>
       This form sets the storage mode for a column. This controls whether this
@@ -582,8 +583,8 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="PARAMETER">name</replaceable>
     <term><literal>OWNER</literal></term>
     <listitem>
      <para>
-      This form changes the owner of the table, sequence, or view to the
-      specified user.
+      This form changes the owner of the table, sequence, view, materialized view,
+      or foreign table to the specified user.
      </para>
     </listitem>
    </varlistentry>
@@ -608,12 +609,14 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="PARAMETER">name</replaceable>
      <para>
       This form changes the information which is written to the write-ahead log
       to identify rows which are updated or deleted.  This option has no effect
-      except when logical replication is in use.  <literal>DEFAULT</> records the 
+      except when logical replication is in use.  <literal>DEFAULT</>
+      (the default for non-system tables) records the 
       old values of the columns of the primary key, if any.  <literal>USING INDEX</>
       records the old values of the columns covered by the named index, which
       must be unique, not partial, not deferrable, and include only columns marked
       <literal>NOT NULL</>.  <literal>FULL</> records the old values of all columns
       in the row.  <literal>NOTHING</> records no information about the old row.
+      (This is the default for system tables.)
       In all cases, no old values are logged unless at least one of the columns
       that would be logged differs between the old and new versions of the row.
      </para>
@@ -625,8 +628,9 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="PARAMETER">name</replaceable>
     <listitem>
      <para>
       The <literal>RENAME</literal> forms change the name of a table
-      (or an index, sequence, or view), the name of an individual column in
-      a table, or the name of a constraint of the table. There is no effect on the stored data.
+      (or an index, sequence, view, materialized view, or foreign table), the name
+      of an individual column in a table, or the name of a constraint of the table.
+      There is no effect on the stored data.
      </para>
     </listitem>
    </varlistentry>
@@ -717,7 +721,7 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="PARAMETER">name</replaceable>
      </varlistentry>
 
      <varlistentry>
-      <term><replaceable class="PARAMETER">type</replaceable></term>
+      <term><replaceable class="PARAMETER">data_type</replaceable></term>
       <listitem>
        <para>
         Data type of the new column, or new data type for an existing
@@ -739,7 +743,7 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="PARAMETER">name</replaceable>
       <term><replaceable class="PARAMETER">constraint_name</replaceable></term>
       <listitem>
        <para>
-        Name of an existing constraint to drop.
+        Name of a new or existing constraint.
        </para>
       </listitem>
      </varlistentry>
@@ -802,7 +806,7 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="PARAMETER">name</replaceable>
       <term><replaceable class="PARAMETER">index_name</replaceable></term>
       <listitem>
        <para>
-        The index name on which the table should be marked for clustering.
+        The name of an existing index.
        </para>
       </listitem>
      </varlistentry>

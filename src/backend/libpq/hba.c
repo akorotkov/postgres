@@ -1041,7 +1041,7 @@ parse_hba_line(List *line, int line_num, char *raw_line)
 
 			/* Get the IP address either way */
 			hints.ai_flags = AI_NUMERICHOST;
-			hints.ai_family = PF_UNSPEC;
+			hints.ai_family = AF_UNSPEC;
 			hints.ai_socktype = 0;
 			hints.ai_protocol = 0;
 			hints.ai_addrlen = 0;
@@ -1758,7 +1758,7 @@ check_hba(hbaPort *port)
  * Read the config file and create a List of HbaLine records for the contents.
  *
  * The configuration is read into a temporary list, and if any parse error
- * occurs the old list is kept in place and false is returned.	Only if the
+ * occurs the old list is kept in place and false is returned.  Only if the
  * whole file parses OK is the list replaced, and the function returns true.
  *
  * On a false result, caller will take care of reporting a FATAL error in case
@@ -2244,7 +2244,7 @@ load_ident(void)
 
 /*
  *	Determine what authentication method should be used when accessing database
- *	"database" from frontend "raddr", user "user".	Return the method and
+ *	"database" from frontend "raddr", user "user".  Return the method and
  *	an optional argument (stored in fields of *port), and STATUS_OK.
  *
  *	If the file does not contain any entry matching the request, we return

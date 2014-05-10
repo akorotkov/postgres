@@ -47,7 +47,6 @@ PG_FUNCTION_INFO_V1(worker_spi_launch);
 
 void		_PG_init(void);
 void		worker_spi_main(Datum);
-Datum		worker_spi_launch(PG_FUNCTION_ARGS);
 
 /* flags set by signal handlers */
 static volatile sig_atomic_t got_sighup = false;
@@ -189,7 +188,7 @@ worker_spi_main(Datum main_arg)
 	initialize_worker_spi(table);
 
 	/*
-	 * Quote identifiers passed to us.	Note that this must be done after
+	 * Quote identifiers passed to us.  Note that this must be done after
 	 * initialize_worker_spi, because that routine assumes the names are not
 	 * quoted.
 	 *
@@ -251,7 +250,7 @@ worker_spi_main(Datum main_arg)
 		 * StartTransactionCommand() call should be preceded by a
 		 * SetCurrentStatementStartTimestamp() call, which sets both the time
 		 * for the statement we're about the run, and also the transaction
-		 * start time.	Also, each other query sent to SPI should probably be
+		 * start time.  Also, each other query sent to SPI should probably be
 		 * preceded by SetCurrentStatementStartTimestamp(), so that statement
 		 * start time is always up to date.
 		 *
@@ -371,7 +370,7 @@ worker_spi_launch(PG_FUNCTION_ARGS)
 	int32		i = PG_GETARG_INT32(0);
 	BackgroundWorker worker;
 	BackgroundWorkerHandle *handle;
-	BgwHandleStatus	status;
+	BgwHandleStatus status;
 	pid_t		pid;
 
 	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |
@@ -395,11 +394,11 @@ worker_spi_launch(PG_FUNCTION_ARGS)
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_RESOURCES),
 				 errmsg("could not start background process"),
-				 errhint("More details may be available in the server log.")));
+			   errhint("More details may be available in the server log.")));
 	if (status == BGWH_POSTMASTER_DIED)
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_RESOURCES),
-				 errmsg("cannot start background processes without postmaster"),
+			  errmsg("cannot start background processes without postmaster"),
 				 errhint("Kill all remaining database processes and restart the database.")));
 	Assert(status == BGWH_STARTED);
 

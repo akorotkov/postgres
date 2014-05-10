@@ -15,19 +15,26 @@
  */
 
 #ifndef FRONTEND
+
 #include "postgres.h"
-#else
-#include "postgres_fe.h"
-#endif
 
 #include "utils/memutils.h"
+
+#else
+
+#include "postgres_fe.h"
+
+/* It's possible we could use a different value for this in frontend code */
+#define MaxAllocSize	((Size) 0x3fffffff)		/* 1 gigabyte - 1 */
+
+#endif
 
 
 /*
  * psprintf
  *
  * Format text data under the control of fmt (an sprintf-style format string)
- * and return it in an allocated-on-demand buffer.	The buffer is allocated
+ * and return it in an allocated-on-demand buffer.  The buffer is allocated
  * with palloc in the backend, or malloc in frontend builds.  Caller is
  * responsible to free the buffer when no longer needed, if appropriate.
  *
@@ -47,7 +54,7 @@ psprintf(const char *fmt,...)
 		size_t		newlen;
 
 		/*
-		 * Allocate result buffer.	Note that in frontend this maps to malloc
+		 * Allocate result buffer.  Note that in frontend this maps to malloc
 		 * with exit-on-error.
 		 */
 		result = (char *) palloc(len);
@@ -145,13 +152,14 @@ pvsnprintf(char *buf, size_t len, const char *fmt, va_list args)
 	{
 		/*
 		 * This appears to be a C99-compliant vsnprintf, so believe its
-		 * estimate of the required space.	(If it's wrong, the logic will
+		 * estimate of the required space.  (If it's wrong, the logic will
 		 * still work, but we may loop multiple times.)  Note that the space
 		 * needed should be only nprinted+1 bytes, but we'd better allocate
 		 * one more than that so that the test above will succeed next time.
 		 *
 		 * In the corner case where the required space just barely overflows,
-		 * fall through so that we'll error out below (possibly after looping).
+		 * fall through so that we'll error out below (possibly after
+		 * looping).
 		 */
 		if ((size_t) nprinted <= MaxAllocSize - 2)
 			return nprinted + 2;

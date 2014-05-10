@@ -86,7 +86,7 @@ typedef struct SchemaQuery
 
 	/*
 	 * Selection condition --- only rows meeting this condition are candidates
-	 * to display.	If catname mentions multiple tables, include the necessary
+	 * to display.  If catname mentions multiple tables, include the necessary
 	 * join condition here.  For example, "c.relkind = 'r'". Write NULL (not
 	 * an empty string) if not needed.
 	 */
@@ -481,7 +481,7 @@ static const SchemaQuery Query_for_list_of_matviews = {
  * restricted to names matching a partially entered name.  In these queries,
  * the first %s will be replaced by the text entered so far (suitably escaped
  * to become a SQL literal string).  %d will be replaced by the length of the
- * string (in unescaped form).	A second and third %s, if present, will be
+ * string (in unescaped form).  A second and third %s, if present, will be
  * replaced by a suitably-escaped version of the string provided in
  * completion_info_charp.  A fourth and fifth %s are similarly replaced by
  * completion_info_charp2.
@@ -714,6 +714,11 @@ static const SchemaQuery Query_for_list_of_matviews = {
 "   FROM pg_catalog.pg_prepared_statements "\
 "  WHERE substring(pg_catalog.quote_ident(name),1,%d)='%s'"
 
+#define Query_for_list_of_event_triggers \
+" SELECT pg_catalog.quote_ident(evtname) "\
+"   FROM pg_catalog.pg_event_trigger "\
+"  WHERE substring(pg_catalog.quote_ident(evtname),1,%d)='%s'"
+
 /*
  * This is a list of all "things" in Pgsql, which can show up after CREATE or
  * DROP; and there is also a query to get a list of them.
@@ -746,6 +751,7 @@ static const pgsql_thing_t words_after_create[] = {
 	{"DATABASE", Query_for_list_of_databases},
 	{"DICTIONARY", Query_for_list_of_ts_dictionaries, NULL, THING_NO_SHOW},
 	{"DOMAIN", NULL, &Query_for_list_of_domains},
+	{"EVENT TRIGGER", NULL, NULL},
 	{"EXTENSION", Query_for_list_of_extensions},
 	{"FOREIGN DATA WRAPPER", NULL, NULL},
 	{"FOREIGN TABLE", NULL, NULL},
@@ -934,9 +940,9 @@ psql_completion(const char *text, int start, int end)
 	{
 		static const char *const list_ALTER[] =
 		{"AGGREGATE", "COLLATION", "CONVERSION", "DATABASE", "DEFAULT PRIVILEGES", "DOMAIN",
-			"EXTENSION", "FOREIGN DATA WRAPPER", "FOREIGN TABLE", "FUNCTION",
+			"EVENT TRIGGER", "EXTENSION", "FOREIGN DATA WRAPPER", "FOREIGN TABLE", "FUNCTION",
 			"GROUP", "INDEX", "LANGUAGE", "LARGE OBJECT", "MATERIALIZED VIEW", "OPERATOR",
-			 "ROLE", "RULE", "SCHEMA", "SERVER", "SEQUENCE", "SYSTEM SET", "TABLE",
+			"ROLE", "RULE", "SCHEMA", "SERVER", "SEQUENCE", "SYSTEM SET", "TABLE",
 			"TABLESPACE", "TEXT SEARCH", "TRIGGER", "TYPE",
 		"USER", "USER MAPPING FOR", "VIEW", NULL};
 
@@ -1001,6 +1007,37 @@ psql_completion(const char *text, int start, int end)
 		{"RESET", "SET", "OWNER TO", "RENAME TO", "CONNECTION LIMIT", NULL};
 
 		COMPLETE_WITH_LIST(list_ALTERDATABASE);
+	}
+
+	/* ALTER EVENT TRIGGER */
+	else if (pg_strcasecmp(prev3_wd, "ALTER") == 0 &&
+			 pg_strcasecmp(prev2_wd, "EVENT") == 0 &&
+			 pg_strcasecmp(prev_wd, "TRIGGER") == 0)
+	{
+		COMPLETE_WITH_QUERY(Query_for_list_of_event_triggers);
+	}
+
+	/* ALTER EVENT TRIGGER <name> */
+	else if (pg_strcasecmp(prev4_wd, "ALTER") == 0 &&
+			 pg_strcasecmp(prev3_wd, "EVENT") == 0 &&
+			 pg_strcasecmp(prev2_wd, "TRIGGER") == 0)
+	{
+		static const char *const list_ALTER_EVENT_TRIGGER[] =
+		{"DISABLE", "ENABLE", "OWNER TO", "RENAME TO", NULL};
+
+		COMPLETE_WITH_LIST(list_ALTER_EVENT_TRIGGER);
+	}
+
+	/* ALTER EVENT TRIGGER <name> ENABLE */
+	else if (pg_strcasecmp(prev5_wd, "ALTER") == 0 &&
+			 pg_strcasecmp(prev4_wd, "EVENT") == 0 &&
+			 pg_strcasecmp(prev3_wd, "TRIGGER") == 0 &&
+			 pg_strcasecmp(prev_wd, "ENABLE") == 0)
+	{
+		static const char *const list_ALTER_EVENT_TRIGGER_ENABLE[] =
+		{"REPLICA", "ALWAYS", NULL};
+
+		COMPLETE_WITH_LIST(list_ALTER_EVENT_TRIGGER_ENABLE);
 	}
 
 	/* ALTER EXTENSION <name> */
@@ -1334,7 +1371,8 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tables, NULL);
 
 	/* ALTER TRIGGER <name> ON <name> */
-	else if (pg_strcasecmp(prev4_wd, "TRIGGER") == 0 &&
+	else if (pg_strcasecmp(prev5_wd, "ALTER") == 0 &&
+			 pg_strcasecmp(prev4_wd, "TRIGGER") == 0 &&
 			 pg_strcasecmp(prev2_wd, "ON") == 0)
 		COMPLETE_WITH_CONST("RENAME TO");
 
@@ -1347,7 +1385,7 @@ psql_completion(const char *text, int start, int end)
 		static const char *const list_ALTER2[] =
 		{"ADD", "ALTER", "CLUSTER ON", "DISABLE", "DROP", "ENABLE", "INHERIT",
 			"NO INHERIT", "RENAME", "RESET", "OWNER TO", "SET",
-		 "VALIDATE CONSTRAINT", "REPLICA IDENTITY", NULL};
+		"VALIDATE CONSTRAINT", "REPLICA IDENTITY", NULL};
 
 		COMPLETE_WITH_LIST(list_ALTER2);
 	}
@@ -1876,7 +1914,7 @@ psql_completion(const char *text, int start, int end)
 			 pg_strcasecmp(prev_wd, "ON") == 0)
 	{
 		static const char *const list_COMMENT[] =
-		{"CAST", "COLLATION", "CONVERSION", "DATABASE", "EXTENSION",
+		{"CAST", "COLLATION", "CONVERSION", "DATABASE", "EVENT TRIGGER", "EXTENSION",
 			"FOREIGN DATA WRAPPER", "FOREIGN TABLE",
 			"SERVER", "INDEX", "LANGUAGE", "RULE", "SCHEMA", "SEQUENCE",
 			"TABLE", "TYPE", "VIEW", "MATERIALIZED VIEW", "COLUMN", "AGGREGATE", "FUNCTION",
@@ -1930,6 +1968,13 @@ psql_completion(const char *text, int start, int end)
 			 pg_strcasecmp(prev_wd, "VIEW") == 0)
 	{
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_matviews, NULL);
+	}
+	else if (pg_strcasecmp(prev4_wd, "COMMENT") == 0 &&
+			 pg_strcasecmp(prev3_wd, "ON") == 0 &&
+			 pg_strcasecmp(prev2_wd, "EVENT") == 0 &&
+			 pg_strcasecmp(prev_wd, "TRIGGER") == 0)
+	{
+		COMPLETE_WITH_QUERY(Query_for_list_of_event_triggers);
 	}
 	else if ((pg_strcasecmp(prev4_wd, "COMMENT") == 0 &&
 			  pg_strcasecmp(prev3_wd, "ON") == 0) ||
@@ -2354,6 +2399,27 @@ psql_completion(const char *text, int start, int end)
 			 pg_strcasecmp(prev_wd, "AS") == 0)
 		COMPLETE_WITH_CONST("SELECT");
 
+/* CREATE EVENT TRIGGER */
+	else if (pg_strcasecmp(prev2_wd, "CREATE") == 0 &&
+			 pg_strcasecmp(prev_wd, "EVENT") == 0)
+		COMPLETE_WITH_CONST("TRIGGER");
+	/* Complete CREATE EVENT TRIGGER <name> with ON */
+	else if (pg_strcasecmp(prev4_wd, "CREATE") == 0 &&
+			 pg_strcasecmp(prev3_wd, "EVENT") == 0 &&
+			 pg_strcasecmp(prev2_wd, "TRIGGER") == 0)
+		COMPLETE_WITH_CONST("ON");
+	/* Complete CREATE EVENT TRIGGER <name> ON with event_type */
+	else if (pg_strcasecmp(prev5_wd, "CREATE") == 0 &&
+			 pg_strcasecmp(prev4_wd, "EVENT") == 0 &&
+			 pg_strcasecmp(prev3_wd, "TRIGGER") == 0 &&
+			 pg_strcasecmp(prev_wd, "ON") == 0)
+	{
+		static const char *const list_CREATE_EVENT_TRIGGER_ON[] =
+		{"ddl_command_start", "ddl_command_end", "sql_drop", NULL};
+
+		COMPLETE_WITH_LIST(list_CREATE_EVENT_TRIGGER_ON);
+	}
+
 /* DECLARE */
 	else if (pg_strcasecmp(prev2_wd, "DECLARE") == 0)
 	{
@@ -2446,6 +2512,9 @@ psql_completion(const char *text, int start, int end)
 			 (pg_strcasecmp(prev4_wd, "DROP") == 0 &&
 			  pg_strcasecmp(prev3_wd, "AGGREGATE") == 0 &&
 			  prev_wd[strlen(prev_wd) - 1] == ')') ||
+			 (pg_strcasecmp(prev4_wd, "DROP") == 0 &&
+			  pg_strcasecmp(prev3_wd, "EVENT") == 0 &&
+			  pg_strcasecmp(prev2_wd, "TRIGGER") == 0) ||
 			 (pg_strcasecmp(prev5_wd, "DROP") == 0 &&
 			  pg_strcasecmp(prev4_wd, "FOREIGN") == 0 &&
 			  pg_strcasecmp(prev3_wd, "DATA") == 0 &&
@@ -2516,6 +2585,19 @@ psql_completion(const char *text, int start, int end)
 		{"CONFIGURATION", "DICTIONARY", "PARSER", "TEMPLATE", NULL};
 
 		COMPLETE_WITH_LIST(list_ALTERTEXTSEARCH);
+	}
+
+	/* DROP EVENT TRIGGER */
+	else if (pg_strcasecmp(prev2_wd, "DROP") == 0 &&
+			 pg_strcasecmp(prev_wd, "EVENT") == 0)
+	{
+		COMPLETE_WITH_CONST("TRIGGER");
+	}
+	else if (pg_strcasecmp(prev3_wd, "DROP") == 0 &&
+			 pg_strcasecmp(prev2_wd, "EVENT") == 0 &&
+			 pg_strcasecmp(prev_wd, "TRIGGER") == 0)
+	{
+		COMPLETE_WITH_QUERY(Query_for_list_of_event_triggers);
 	}
 
 /* EXECUTE, but not EXECUTE embedded in other commands */
@@ -3369,9 +3451,9 @@ psql_completion(const char *text, int start, int end)
 	{
 		static const char *const my_list[] =
 		{"border", "columns", "expanded", "fieldsep", "fieldsep_zero",
-		 "footer", "format", "linestyle", "null", "numericlocale",
-		 "pager", "recordsep", "recordsep_zero", "tableattr", "title",
-		 "tuples_only", NULL};
+			"footer", "format", "linestyle", "null", "numericlocale",
+			"pager", "recordsep", "recordsep_zero", "tableattr", "title",
+		"tuples_only", NULL};
 
 		COMPLETE_WITH_LIST_CS(my_list);
 	}
@@ -3639,7 +3721,7 @@ _complete_from_query(int is_schema_query, const char *text, int state)
 
 			/*
 			 * When fetching relation names, suppress system catalogs unless
-			 * the input-so-far begins with "pg_".	This is a compromise
+			 * the input-so-far begins with "pg_".  This is a compromise
 			 * between not offering system catalogs for completion at all, and
 			 * having them swamp the result when the input is just "p".
 			 */
@@ -4012,7 +4094,7 @@ exec_query(const char *query)
 
 
 /*
- * Return the nwords word(s) before point.	Words are returned right to left,
+ * Return the nwords word(s) before point.  Words are returned right to left,
  * that is, previous_words[0] gets the last word before point.
  * If we run out of words, remaining array elements are set to empty strings.
  * Each array element is filled with a malloc'd string.
