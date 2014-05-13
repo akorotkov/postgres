@@ -233,6 +233,7 @@ placeNewPostingList(VodkaState *vodkastate, VodkaPostingList *postinglist)
 		elog(ERROR, "failed to add item to index page in \"%s\"",
 			 RelationGetRelationName(vodkastate->index));
 
+	pfree(postinglist);
 	updatePostingListLUP(vodkastate, blkno, PageGetExactFreeSpace(page));
 
 	MarkBufferDirty(buffer);
@@ -338,14 +339,16 @@ updatePostingList(VodkaState *vodkastate, ItemPointer iptr,
 	newItems = vodkaMergeItemPointers(items, nitem,
 										oldItems, oldNPosting,
 										&newNPosting);
+	pfree(oldItems);
 	postinglist = vodkaCompressPostingList(newItems, newNPosting,
 											VodkaMaxItemSize, &nwritten);
 	if (nwritten < newNPosting)
 	{
-		pfree(postinglist);
 		PageIndexTupleDelete(page, offset);
 		replacePostingList(vodkastate, buffer, page, offset,
 				newItems, newNPosting, buildStats);
+		pfree(postinglist);
+		pfree(newItems);
 		return;
 	}
 
@@ -356,11 +359,14 @@ updatePostingList(VodkaState *vodkastate, ItemPointer iptr,
 						 offset, false, false);
 	if (placed != offset)
 	{
-		pfree(postinglist);
 		replacePostingList(vodkastate, buffer, page, offset,
 				newItems, newNPosting, buildStats);
+		pfree(postinglist);
+		pfree(newItems);
 		return;
 	}
+	pfree(postinglist);
+	pfree(newItems);
 
 #ifdef DEBUG_LOG
 	elog(NOTICE, "update posting list");
@@ -453,8 +459,8 @@ vodkaEntryInsert(VodkaState *vodkastate,
 
 	equalScan = vodkastate->entryScan;
 
-	if (vodkastate->funcCtx)
-		ctx = MemoryContextSwitchTo(vodkastate->funcCtx);
+	/*if (vodkastate->funcCtx)
+		ctx = MemoryContextSwitchTo(vodkastate->funcCtx);*/
 
 	found =	DatumGetBool(OidFunctionCall2(vodkastate->entryTree.rd_am->amgettuple,
 						 PointerGetDatum(equalScan),
@@ -525,11 +531,11 @@ vodkaEntryInsert(VodkaState *vodkastate,
 						 PointerGetDatum(&iptr));
 	}
 
-	if (vodkastate->funcCtx)
+	/*if (vodkastate->funcCtx)
 	{
 		MemoryContextSwitchTo(ctx);
 		MemoryContextReset(vodkastate->funcCtx);
-	}
+	}*/
 
 	/*pfree(itup);*/
 }
@@ -737,7 +743,7 @@ vodkabuild(PG_FUNCTION_ARGS)
 
 	buildstate.accum.vodkastate = buildstate.vodkastate;
 	vodkaInitBA(&buildstate.accum);
-	out = fopen("/tmp/vodka.txt", "wt");
+	//out = fopen("/tmp/vodka.txt", "wt");
 
 	/*
 	 * Do the heap scan.  We disallow sync scan here because dataPlaceToPage
