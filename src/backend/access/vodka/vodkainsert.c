@@ -370,7 +370,6 @@ vodkaEntryInsert(VodkaState *vodkastate,
 	bool		isnull, found;
 	ItemPointerData	iptr;
 	IndexScanDesc	equalScan;
-	MemoryContext ctx;
 
 	/*insertdata.isDelete = FALSE;*/
 
@@ -717,8 +716,6 @@ vodkabuild(PG_FUNCTION_ARGS)
 
 	cleanEntryIndexScan(buildstate.vodkastate);
 	MemoryContextDelete(buildstate.tmpCtx);
-
-	buildstate.vodkastate->funcCtx = NULL;
 
 	/*
 	 * Update metapage stats
