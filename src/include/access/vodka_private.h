@@ -369,7 +369,6 @@ typedef struct VodkaState
 	ScanKeyData		entryScanKey;
 	Oid				entryScanOperator;
 	uint16			targetFreeSpace;
-	MemoryContext	funcCtx;
 } VodkaState;
 
 
