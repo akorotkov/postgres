@@ -4085,19 +4085,6 @@ DESCR("vodka(internal)");
 DATA(insert OID = 5046 (  vodkaoptions	   PGNSP PGUID 12 1 0 0 0 f f f f t f s 2 0 17 "1009 16" _null_ _null_ _null_ _null_  vodkaoptions _null_ _null_ _null_ ));
 DESCR("vodka(internal)");
 
-/* VODKA array support */
-DATA(insert OID = 5047 (  vodkajsonbconfig	 PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 2278 "2281 2281" _null_ _null_ _null_ _null_ vodkajsonbconfig _null_ _null_ _null_ ));
-DESCR("VODKA array support");
-DATA(insert OID = 5048 (  vodkajsonbextract	 PGNSP PGUID 12 1 0 0 0 f f f f t f i 3 0 2281 "2277 2281 2281" _null_ _null_ _null_ _null_ vodkajsonbextract _null_ _null_ _null_ ));
-DESCR("VODKA array support");
-DATA(insert OID = 5049 (  vodkaqueryjsonbextract	PGNSP PGUID 12 1 0 0 0 f f f f t f i 4 0 2281 "2277 2281 21 2281" _null_ _null_ _null_ _null_ vodkaqueryjsonbextract _null_ _null_ _null_ ));
-DESCR("VODKA array support");
-DATA(insert OID = 5050 (  vodkajsonbconsistent	PGNSP PGUID 12 1 0 0 0 f f f f t f i 7 0 16 "2281 21 2277 23 2281 2281 2281" _null_ _null_ _null_ _null_ vodkajsonbconsistent _null_ _null_ _null_ ));
-DESCR("VODKA array support");
-DATA(insert OID = 5051 (  vodkajsonbtriconsistent	PGNSP PGUID 12 1 0 0 0 f f f f t f i 6 0 16 "2281 21 2277 23 2281 2281" _null_ _null_ _null_ _null_ vodkajsonbtriconsistent _null_ _null_ _null_ ));
-DESCR("VODKA array support");
-
-
 /* overlap/contains/contained */
 DATA(insert OID = 2747 (  arrayoverlap		   PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 16 "2277 2277" _null_ _null_ _null_ _null_ arrayoverlap _null_ _null_ _null_ ));
 DATA(insert OID = 2748 (  arraycontains		   PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 16 "2277 2277" _null_ _null_ _null_ _null_ arraycontains _null_ _null_ _null_ ));

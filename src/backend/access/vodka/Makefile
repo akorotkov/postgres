@@ -13,7 +13,7 @@ top_builddir = ../../../..
 include $(top_builddir)/src/Makefile.global
 
 OBJS = vodkautil.o vodkainsert.o vodkaxlog.o vodkaentrypage.o vodkadatapage.o \
-	vodkabtree.o vodkascan.o vodkaget.o vodkavacuum.o vodkajsonbproc.o \
+	vodkabtree.o vodkascan.o vodkaget.o vodkavacuum.o \
 	vodkabulk.o vodkafast.o vodkapostinglist.o vodkalogic.o \
 	vodkajsonbentryproc.o
 

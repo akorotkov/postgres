@@ -228,13 +228,12 @@ DATA(insert (	783		range_ops			PGNSP PGUID 3919  3831 t 0 ));
 DATA(insert (	4000	range_ops			PGNSP PGUID 3474  3831 t 0 ));
 DATA(insert (	4000	quad_point_ops		PGNSP PGUID 4015  600 t 0 ));
 DATA(insert (	4000	kd_point_ops		PGNSP PGUID 4016  600 f 0 ));
-DATA(insert (	4000	text_ops	PGNSP PGUID 4017  25 t 0 ));
+DATA(insert (	4000	text_ops			PGNSP PGUID 4017  25 t 0 ));
 DATA(insert OID = 3999 ( 4000	bytea_ops	PGNSP PGUID 5058  17 t 0 ));
 #define BYTEA_SPGIST_OPS_OID 3999
 DATA(insert (	403		jsonb_ops			PGNSP PGUID 4033  3802 t 0 ));
 DATA(insert (	405		jsonb_ops			PGNSP PGUID 4034  3802 t 0 ));
 DATA(insert (	2742	jsonb_ops			PGNSP PGUID 4036  3802 t 25 ));
 DATA(insert (	2742	jsonb_hash_ops		PGNSP PGUID 4037  3802 f 23 ));
-DATA(insert (	5033	jsonb_ops			PGNSP PGUID 5052  3802 t 17 ));
 
 #endif   /* PG_OPCLASS_H */

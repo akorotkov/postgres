@@ -308,6 +308,9 @@ vodkaNewScanKey(IndexScanDesc scan)
 										   UInt16GetDatum(skey->sk_strategy),
 											  PointerGetDatum(&searchMode)));
 
+		if (searchMode != VODKA_SEARCH_MODE_DEFAULT)
+			elog(ERROR, "Only VODKA_SEARCH_MODE_DEFAULT is implemented yet!");
+
 		/*
 		 * If bogus searchMode is returned, treat as VODKA_SEARCH_MODE_ALL; note
 		 * in particular we don't allow extractQueryFn to select
