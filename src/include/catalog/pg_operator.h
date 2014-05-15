@@ -1807,6 +1807,9 @@ DATA(insert OID = 3249 (  "?&"	   PGNSP PGUID b f f 3802 1009 16 0 0 jsonb_exist
 DESCR("exists all");
 DATA(insert OID = 3250 (  "<@"	   PGNSP PGUID b f f 3802 3802 16 0 3246 jsonb_contained contsel contjoinsel ));
 DESCR("contained");
+DATA(insert OID = 5048 (  "%"	   PGNSP PGUID b f f 17 2281 16 0 0 vodka_match contsel contjoinsel ));
+DESCR("vodka match");
+#define VodkaMatchOperator 5048
 
 /*
  * function prototypes

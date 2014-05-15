@@ -224,6 +224,8 @@ startScanEntry(VodkaState *vodkastate, VodkaScanEntry entry)
 	}
 	else
 	{
+		entry->matchBitmap = tbm_create(work_mem * 1024L);
+
 		if (entry->list)
 		{
 			tbm_add_tuples(entry->matchBitmap, entry->list, entry->nlist, false);
@@ -235,8 +237,6 @@ startScanEntry(VodkaState *vodkastate, VodkaScanEntry entry)
 			scanPostingTree(vodkastate->index, entry, postingRoot);
 		}
 	}
-
-	entry->matchBitmap = tbm_create(work_mem * 1024L);
 
 	do {
 

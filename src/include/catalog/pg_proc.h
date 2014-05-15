@@ -4085,6 +4085,10 @@ DESCR("vodka(internal)");
 DATA(insert OID = 5046 (  vodkaoptions	   PGNSP PGUID 12 1 0 0 0 f f f f t f s 2 0 17 "1009 16" _null_ _null_ _null_ _null_  vodkaoptions _null_ _null_ _null_ ));
 DESCR("vodka(internal)");
 
+DATA(insert OID = 5047 (  vodka_match	   PGNSP PGUID 12 1 0 0 0 f f f f t f s 2 0 16 "17 2281" _null_ _null_ _null_ _null_  vodka_match _null_ _null_ _null_ ));
+DESCR("vodka match");
+
+
 /* overlap/contains/contained */
 DATA(insert OID = 2747 (  arrayoverlap		   PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 16 "2277 2277" _null_ _null_ _null_ _null_ arrayoverlap _null_ _null_ _null_ ));
 DATA(insert OID = 2748 (  arraycontains		   PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 16 "2277 2277" _null_ _null_ _null_ _null_ arraycontains _null_ _null_ _null_ ));
