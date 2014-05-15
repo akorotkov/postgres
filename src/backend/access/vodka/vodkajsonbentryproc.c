@@ -604,8 +604,9 @@ processPrefix(ChooseStatus status, JsonbVodkaKey *key, char *prefix, int len,
 
 	if (DatumGetPointer(reconstrValue))
 	{
-		flags = VARDATA_ANY(DatumGetPointer(reconstrValue));
-		reconstr = flags + key->pathLength + 1;
+		flags = (bool *)palloc(sizeof(bool) * (key->pathLength + 1));
+		memcpy(flags, VARDATA_ANY(DatumGetPointer(reconstrValue)), sizeof(bool) * (key->pathLength + 1));
+		reconstr = VARDATA_ANY(DatumGetPointer(reconstrValue)) + key->pathLength + 1;
 		reconstrLen = VARSIZE_ANY_EXHDR(reconstrValue) - (key->pathLength + 1);
 	}
 	else
@@ -625,7 +626,7 @@ processPrefix(ChooseStatus status, JsonbVodkaKey *key, char *prefix, int len,
 				Assert(!(c & JSONB_VODKA_FLAG_VALUE));
 				if (c & JSONB_VODKA_FLAG_ARRAY)
 				{
-					bool prev, next = false;
+					bool prev, next = false, allfalse = true;
 					for (j = 0; j < key->pathLength; j++)
 					{
 						prev = next;
@@ -648,7 +649,11 @@ processPrefix(ChooseStatus status, JsonbVodkaKey *key, char *prefix, int len,
 								flags[j] = prev;
 								break;
 						}
+						if (flags[j])
+							allfalse = false;
 					}
+					if (allfalse && !next)
+						return (Datum)0;
 					flags[key->pathLength - 1] = next;
 
 					start = i + 1;
@@ -663,7 +668,7 @@ processPrefix(ChooseStatus status, JsonbVodkaKey *key, char *prefix, int len,
 			case sInKey:
 				if (c == '\0')
 				{
-					bool prev, next = false;
+					bool prev, next = false, allfalse = true;
 					for (j = 0; j < key->pathLength; j++)
 					{
 						prev = next;
@@ -700,7 +705,11 @@ processPrefix(ChooseStatus status, JsonbVodkaKey *key, char *prefix, int len,
 								flags[j] = prev;
 								break;
 						}
+						if (flags[j])
+							allfalse = false;
 					}
+					if (allfalse && !next)
+						return (Datum)0;
 					flags[key->pathLength] = next;
 					start = i + 1;
 					status = sInitial;
@@ -955,7 +964,7 @@ spg_bytea_inner_consistent(PG_FUNCTION_ARGS)
 			out->reconstructedValues = (Datum *) palloc(sizeof(Datum) * in->nNodes);
 			out->nNodes = 0;
 
-			for (i = 0; i < in->nNodes; i++)
+			for (i = 0; (i < in->nNodes) && reconstructedValue; i++)
 			{
 				bool res;
 				uint16		nodeChar = DatumGetUInt16(in->nodeLabels[i]);
@@ -1002,7 +1011,10 @@ spg_bytea_inner_consistent(PG_FUNCTION_ARGS)
 					nodeReconstructedValue = processPrefix(status, key,
 							&c, 1, reconstructedValue);
 					nodeLen++;
-					res = true;
+					if (nodeReconstructedValue == (Datum)0)
+						res = false;
+					else
+						res = true;
 				}
 
 				if (res)
@@ -1338,32 +1350,39 @@ spg_bytea_leaf_consistent(PG_FUNCTION_ARGS)
 			reconstructedValue = processPrefix(status, key,
 					leafStr, i, in->reconstructedValue);
 
-			flags = VARDATA_ANY(DatumGetPointer(reconstructedValue));
-			if (!flags[key->pathLength])
-				res = false;
-
-			if (nextStatus == sInNumeric)
+			if (!reconstructedValue)
 			{
-				res = checkNumericValue(key, (Numeric)(leafStr + i + 1));
+				res = false;
 			}
 			else
 			{
-				if (key->inequality)
-				{
+				flags = VARDATA_ANY(DatumGetPointer(reconstructedValue));
+				if (!flags[key->pathLength])
 					res = false;
-				}
-				else if (!key->exact)
+
+				if (nextStatus == sInNumeric)
 				{
-					res = true;
+					res = checkNumericValue(key, (Numeric)(leafStr + i + 1));
 				}
-				else if ((key->exact->type & JSONB_VODKA_FLAG_TYPE) != (leafStr[i] & JSONB_VODKA_FLAG_TYPE))
+				else
 				{
-					res = false;
-				}
-				else if ((key->exact->type & JSONB_VODKA_FLAG_TYPE) == JSONB_VODKA_FLAG_STRING)
-				{
-					Assert(leafLen == i + 5);
-					res = (memcmp(leafStr + i + 1, &key->exact->hash, 4) == 0);
+					if (key->inequality)
+					{
+						res = false;
+					}
+					else if (!key->exact)
+					{
+						res = true;
+					}
+					else if ((key->exact->type & JSONB_VODKA_FLAG_TYPE) != (leafStr[i] & JSONB_VODKA_FLAG_TYPE))
+					{
+						res = false;
+					}
+					else if ((key->exact->type & JSONB_VODKA_FLAG_TYPE) == JSONB_VODKA_FLAG_STRING)
+					{
+						Assert(leafLen == i + 5);
+						res = (memcmp(leafStr + i + 1, &key->exact->hash, 4) == 0);
+					}
 				}
 			}
 		}
