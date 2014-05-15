@@ -514,14 +514,12 @@ SpGistGetTypeSize(SpGistTypeDesc *att, Datum datum)
 {
 	unsigned int size;
 
-	if (att->attbyval)
-		size = sizeof(Datum);
-	else if (att->attlen > 0)
+	if (att->attbyval || att->attlen > 0)
 		size = att->attlen;
 	else
-		size = VARSIZE_ANY(datum);
+		size = SG_VARSIZE_ANY(datum);
 
-	return MAXALIGN(size);
+	return size;
 }
 
 /*
@@ -534,7 +532,36 @@ memcpyDatum(void *target, SpGistTypeDesc *att, Datum datum)
 
 	if (att->attbyval)
 	{
-		memcpy(target, &datum, sizeof(Datum));
+		union {
+			uint8	u8;
+			uint16	u16;
+			uint32	u32;
+			uint64	u64;
+		} v;
+
+		switch(att->attlen)
+		{
+			case 1:
+				v.u8 = GET_1_BYTE(datum);
+				memcpy(target, &v.u8, 1);
+				break;
+			case 2:
+				v.u16 = GET_2_BYTE(datum);
+				memcpy(target, &v.u16, 2);
+				break;
+			case 4:
+				v.u32 = GET_4_BYTE(datum);
+				memcpy(target, &v.u32, 4);
+				break;
+#if SIZEOF_DATUM == 8
+			case 8:
+				v.u64 = GET_8_BYTE(datum);
+				memcpy(target, &v.u64, 8);
+				break;
+#endif
+			default:
+				elog(ERROR,"Unsupported pass-by-value length: %u", att->attlen);
+		}
 	}
 	else
 	{
@@ -553,11 +580,12 @@ spgFormLeafTuple(SpGistState *state, ItemPointer heapPtr,
 	SpGistLeafTuple tup;
 	unsigned int size;
 
-	/* compute space needed (note result is already maxaligned) */
+	/* compute space needed */
 	size = SGLTHDRSZ;
 	if (!isnull)
 		size += SpGistGetTypeSize(&state->attType, datum);
 
+	size = MAXALIGN(size);
 	/*
 	 * Ensure that we can replace the tuple with a dead tuple later.  This
 	 * test is unnecessary when !isnull, but let's be safe.
@@ -571,10 +599,65 @@ spgFormLeafTuple(SpGistState *state, ItemPointer heapPtr,
 	tup->size = size;
 	tup->nextOffset = InvalidOffsetNumber;
 	tup->heapPtr = *heapPtr;
+	tup->isnull = isnull;
 	if (!isnull)
 		memcpyDatum(SGLTDATAPTR(tup), &state->attType, datum);
 
 	return tup;
+}
+
+/*
+ * Returns stored datum. Note, for pass-by-reference value
+ * datum will be allocated in current memory context because
+ * inside tuple it could be unaligned
+ */
+Datum
+spgGetDatum(SpGistTypeDesc* att, char *ptr)
+{
+	Datum	r;
+
+	if (att->attbyval)
+	{
+		union {
+			uint8	u8;
+			uint16	u16;
+			uint32	u32;
+			uint64	u64;
+		} v;
+
+		switch(att->attlen)
+		{
+			case 1:
+				memcpy(&v.u8, ptr, 1);
+				r = SET_1_BYTE(v.u8);
+				break;
+			case 2:
+				memcpy(&v.u16, ptr, 2);
+				r = SET_2_BYTE(v.u16);
+				break;
+			case 4:
+				memcpy(&v.u32, ptr, 4);
+				r = SET_4_BYTE(v.u32);
+				break;
+#if SIZEOF_DATUM == 8
+			case 8:
+				memcpy(&v.u64, ptr, 4);
+				r = SET_8_BYTE(v.u64);
+				break;
+#endif
+			default:
+				elog(ERROR,"Unsupported pass-by-value length: %u", att->attlen);
+		}
+	}
+	else
+	{
+		Size size = (att->attlen > 0) ? att->attlen : SG_VARSIZE_ANY(ptr);
+		
+		r = PointerGetDatum(palloc(size));
+		memcpy(DatumGetPointer(r), ptr, size);
+	}
+
+	return r;
 }
 
 /*
@@ -588,38 +671,38 @@ spgFormNodeTuple(SpGistState *state, Datum label, bool isnull)
 {
 	SpGistNodeTuple tup;
 	unsigned int size;
-	unsigned short infomask = 0;
 
-	/* compute space needed (note result is already maxaligned) */
+	/* compute space needed */
 	size = SGNTHDRSZ;
 	if (!isnull)
 		size += SpGistGetTypeSize(&state->attLabelType, label);
 
-	/*
-	 * Here we make sure that the size will fit in the field reserved for it
-	 * in t_info.
-	 */
-	if ((size & INDEX_SIZE_MASK) != size)
-		ereport(ERROR,
-				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-				 errmsg("index row requires %zu bytes, maximum size is %zu",
-						(Size) size, (Size) INDEX_SIZE_MASK)));
-
 	tup = (SpGistNodeTuple) palloc0(size);
 
 	if (isnull)
-		infomask |= INDEX_NULL_MASK;
-	/* we don't bother setting the INDEX_VAR_MASK bit */
-	infomask |= size;
-	tup->t_info = infomask;
-
-	/* The TID field will be filled in later */
-	ItemPointerSetInvalid(&tup->t_tid);
-
-	if (!isnull)
+		SGNTSETNULL(tup);
+	else
 		memcpyDatum(SGNTDATAPTR(tup), &state->attLabelType, label);
 
+	/* The tid field will be filled in later */
+
 	return tup;
+}
+
+static Size
+spgFormNodeTupleSize(SpGistState *state, SpGistNodeTuple tuple)
+{
+	Size	size = SGNTHDRSZ;
+
+	if (!SGNTISNULL(tuple))
+	{
+		if (state->attLabelType.attbyval || state->attLabelType.attlen > 0)
+			size += state->attLabelType.attlen;
+		else
+			size += SG_VARSIZE_ANY(SGNTDATAPTR(tuple));
+	}
+
+	return size;
 }
 
 /*
@@ -645,7 +728,7 @@ spgFormInnerTuple(SpGistState *state, bool hasPrefix, Datum prefix,
 
 	/* Note: we rely on node tuple sizes to be maxaligned already */
 	for (i = 0; i < nNodes; i++)
-		size += IndexTupleSize(nodes[i]);
+		size += spgFormNodeTupleSize(state, nodes[i]);
 
 	/*
 	 * Ensure that we can replace the tuple with a dead tuple later.  This
@@ -653,6 +736,8 @@ spgFormInnerTuple(SpGistState *state, bool hasPrefix, Datum prefix,
 	 */
 	if (size < SGDTSIZE)
 		size = SGDTSIZE;
+
+	size = MAXALIGN(size);
 
 	/*
 	 * Inner tuple should be small enough to fit on a page
@@ -690,8 +775,8 @@ spgFormInnerTuple(SpGistState *state, bool hasPrefix, Datum prefix,
 	{
 		SpGistNodeTuple node = nodes[i];
 
-		memcpy(ptr, node, IndexTupleSize(node));
-		ptr += IndexTupleSize(node);
+		memcpy(ptr, node, spgFormNodeTupleSize(state, node));
+		ptr += spgFormNodeTupleSize(state, node);
 	}
 
 	return tup;
@@ -747,11 +832,11 @@ spgExtractNodeLabels(SpGistState *state, SpGistInnerTuple innerTuple)
 
 	/* Either all the labels must be NULL, or none. */
 	node = SGITNODEPTR(innerTuple);
-	if (IndexTupleHasNulls(node))
+	if (SGNTISNULL(node))
 	{
-		SGITITERATE(innerTuple, i, node)
+		SGITITERATE(state, innerTuple, i, node)
 		{
-			if (!IndexTupleHasNulls(node))
+			if (!SGNTISNULL(node))
 				elog(ERROR, "some but not all node labels are null in SPGiST inner tuple");
 		}
 		/* They're all null, so just return NULL */
@@ -760,11 +845,11 @@ spgExtractNodeLabels(SpGistState *state, SpGistInnerTuple innerTuple)
 	else
 	{
 		nodeLabels = (Datum *) palloc(sizeof(Datum) * innerTuple->nNodes);
-		SGITITERATE(innerTuple, i, node)
+		SGITITERATE(state, innerTuple, i, node)
 		{
-			if (IndexTupleHasNulls(node))
+			if (SGNTISNULL(node))
 				elog(ERROR, "some but not all node labels are null in SPGiST inner tuple");
-			nodeLabels[i] = SGNTDATUM(node, state);
+			nodeLabels[i] = SGNTDATUM(state, node);
 		}
 		return nodeLabels;
 	}

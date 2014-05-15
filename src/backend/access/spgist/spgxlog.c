@@ -37,6 +37,8 @@ fillFakeState(SpGistState *state, spgxlogState stateSrc)
 
 	state->myXid = stateSrc.myXid;
 	state->isBuild = stateSrc.isBuild;
+	state->attLabelType.attlen = stateSrc.attLabelLen;
+	state->attLabelType.attbyval = stateSrc.attLabelByVal;
 	state->deadTupleStorage = palloc0(SGDTSIZE);
 }
 
@@ -112,6 +114,9 @@ spgRedoAddLeaf(XLogRecPtr lsn, XLogRecord *record)
 	SpGistLeafTuple leafTuple;
 	Buffer		buffer;
 	Page		page;
+	SpGistState	state;
+
+	fillFakeState(&state, xldata->stateSrc);
 
 	/* we assume this is adequately aligned */
 	ptr += sizeof(spgxlogAddLeaf);
@@ -190,7 +195,7 @@ spgRedoAddLeaf(XLogRecPtr lsn, XLogRecord *record)
 				tuple = (SpGistInnerTuple) PageGetItem(page,
 								  PageGetItemId(page, xldata->offnumParent));
 
-				spgUpdateNodeLink(tuple, xldata->nodeI,
+				spgUpdateNodeLink(&state, tuple, xldata->nodeI,
 								  xldata->blknoLeaf, xldata->offnumLeaf);
 
 				PageSetLSN(page, lsn);
@@ -305,7 +310,7 @@ spgRedoMoveLeafs(XLogRecPtr lsn, XLogRecord *record)
 				tuple = (SpGistInnerTuple) PageGetItem(page,
 								  PageGetItemId(page, xldata->offnumParent));
 
-				spgUpdateNodeLink(tuple, xldata->nodeI,
+				spgUpdateNodeLink(&state, tuple, xldata->nodeI,
 								  xldata->blknoDst, toInsert[nInsert - 1]);
 
 				PageSetLSN(page, lsn);
@@ -491,7 +496,7 @@ spgRedoAddNode(XLogRecPtr lsn, XLogRecord *record)
 					innerTuple = (SpGistInnerTuple) PageGetItem(page,
 								  PageGetItemId(page, xldata->offnumParent));
 
-					spgUpdateNodeLink(innerTuple, xldata->nodeI,
+					spgUpdateNodeLink(&state, innerTuple, xldata->nodeI,
 									  xldata->blknoNew, xldata->offnumNew);
 
 					PageSetLSN(page, lsn);
@@ -786,7 +791,7 @@ spgRedoPickSplit(XLogRecPtr lsn, XLogRecord *record)
 
 					parent = (SpGistInnerTuple) PageGetItem(page,
 								  PageGetItemId(page, xldata->offnumParent));
-					spgUpdateNodeLink(parent, xldata->nodeI,
+					spgUpdateNodeLink(&state, parent, xldata->nodeI,
 									xldata->blknoInner, xldata->offnumInner);
 				}
 
@@ -831,7 +836,7 @@ spgRedoPickSplit(XLogRecPtr lsn, XLogRecord *record)
 
 					parent = (SpGistInnerTuple) PageGetItem(page,
 								  PageGetItemId(page, xldata->offnumParent));
-					spgUpdateNodeLink(parent, xldata->nodeI,
+					spgUpdateNodeLink(&state, parent, xldata->nodeI,
 									xldata->blknoInner, xldata->offnumInner);
 
 					PageSetLSN(page, lsn);

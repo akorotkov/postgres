@@ -764,7 +764,7 @@ spgprocesspending(spgBulkDeleteState *bds)
 						SpGistNodeTuple node;
 						int			i;
 
-						SGITITERATE(innerTuple, i, node)
+						SGITITERATE(&bds->spgstate, innerTuple, i, node)
 						{
 							if (ItemPointerIsValid(&node->t_tid))
 								spgAddPendingTID(bds, &node->t_tid);

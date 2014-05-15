@@ -45,13 +45,13 @@ typedef struct SPPageDesc
  * split operation.
  */
 void
-spgUpdateNodeLink(SpGistInnerTuple tup, int nodeN,
+spgUpdateNodeLink(SpGistState *state, SpGistInnerTuple tup, int nodeN,
 				  BlockNumber blkno, OffsetNumber offset)
 {
 	int			i;
 	SpGistNodeTuple node;
 
-	SGITITERATE(tup, i, node)
+	SGITITERATE(state, tup, i, node)
 	{
 		if (i == nodeN)
 		{
@@ -86,7 +86,7 @@ addNode(SpGistState *state, SpGistInnerTuple tuple, Datum label, int offset)
 		elog(ERROR, "invalid offset for adding node to SPGiST inner tuple");
 
 	nodes = palloc(sizeof(SpGistNodeTuple) * (tuple->nNodes + 1));
-	SGITITERATE(tuple, i, node)
+	SGITITERATE(state, tuple, i, node)
 	{
 		if (i < offset)
 			nodes[i] = node;
@@ -98,7 +98,7 @@ addNode(SpGistState *state, SpGistInnerTuple tuple, Datum label, int offset)
 
 	return spgFormInnerTuple(state,
 							 (tuple->prefixSize > 0),
-							 SGITDATUM(tuple, state),
+							 (tuple->prefixSize > 0) ? SGITDATUM(state, tuple) : (Datum)0,
 							 tuple->nNodes + 1,
 							 nodes);
 }
@@ -181,7 +181,7 @@ spgPageIndexMultiDelete(SpGistState *state, Page page,
  * WAL action).
  */
 static void
-saveNodeLink(Relation index, SPPageDesc *parent,
+saveNodeLink(Relation index, SpGistState *state, SPPageDesc *parent,
 			 BlockNumber blkno, OffsetNumber offnum)
 {
 	SpGistInnerTuple innerTuple;
@@ -189,7 +189,7 @@ saveNodeLink(Relation index, SPPageDesc *parent,
 	innerTuple = (SpGistInnerTuple) PageGetItem(parent->page,
 								PageGetItemId(parent->page, parent->offnum));
 
-	spgUpdateNodeLink(innerTuple, parent->node, blkno, offnum);
+	spgUpdateNodeLink(state, innerTuple, parent->node, blkno, offnum);
 
 	MarkBufferDirty(parent->buffer);
 }
@@ -216,6 +216,8 @@ addLeafTuple(Relation index, SpGistState *state, SpGistLeafTuple leafTuple,
 	xlrec.offnumParent = InvalidOffsetNumber;
 	xlrec.nodeI = 0;
 
+	STORE_STATE(state, xlrec.stateSrc);
+
 	ACCEPT_RDATA_DATA(&xlrec, sizeof(xlrec), 0);
 	/* we assume sizeof(xlrec) is at least int-aligned */
 	ACCEPT_RDATA_DATA(leafTuple, leafTuple->size, 1);
@@ -241,7 +243,7 @@ addLeafTuple(Relation index, SpGistState *state, SpGistLeafTuple leafTuple,
 			xlrec.offnumParent = parent->offnum;
 			xlrec.nodeI = parent->node;
 
-			saveNodeLink(index, parent, current->blkno, current->offnum);
+			saveNodeLink(index, state, parent, current->blkno, current->offnum);
 
 			ACCEPT_RDATA_BUFFER(parent->buffer, 3);
 		}
@@ -523,7 +525,7 @@ moveLeafs(Relation index, SpGistState *state,
 							nblkno, r);
 
 	/* Update parent's downlink and mark parent page dirty */
-	saveNodeLink(index, parent, nblkno, r);
+	saveNodeLink(index, state, parent, nblkno, r);
 
 	/* Mark the leaf pages too */
 	MarkBufferDirty(current->buffer);
@@ -733,13 +735,6 @@ doPickSplit(Relation index, SpGistState *state,
 	 * also, count up the amount of space that will be freed from current.
 	 * (Note that in the non-root case, we won't actually delete the old
 	 * tuples, only replace them with redirects or placeholders.)
-	 *
-	 * Note: the SGLTDATUM calls here are safe even when dealing with a nulls
-	 * page.  For a pass-by-value data type we will fetch a word that must
-	 * exist even though it may contain garbage (because of the fact that leaf
-	 * tuples must have size at least SGDTSIZE).  For a pass-by-reference type
-	 * we are just computing a pointer that isn't going to get dereferenced.
-	 * So it's not worth guarding the calls with isNulls checks.
 	 */
 	nToInsert = 0;
 	nToDelete = 0;
@@ -759,7 +754,7 @@ doPickSplit(Relation index, SpGistState *state,
 											PageGetItemId(current->page, i));
 			if (it->tupstate == SPGIST_LIVE)
 			{
-				in.datums[nToInsert] = SGLTDATUM(it, state);
+				in.datums[nToInsert] = (it->isnull == 0) ? SGLTDATUM(state, it) : (Datum)0;
 				heapPtrs[nToInsert] = it->heapPtr;
 				nToInsert++;
 				toDelete[nToDelete] = i;
@@ -784,7 +779,7 @@ doPickSplit(Relation index, SpGistState *state,
 											PageGetItemId(current->page, i));
 			if (it->tupstate == SPGIST_LIVE)
 			{
-				in.datums[nToInsert] = SGLTDATUM(it, state);
+				in.datums[nToInsert] = (it->isnull == 0) ? SGLTDATUM(state, it) : (Datum)0;
 				heapPtrs[nToInsert] = it->heapPtr;
 				nToInsert++;
 				toDelete[nToDelete] = i;
@@ -816,7 +811,7 @@ doPickSplit(Relation index, SpGistState *state,
 	 * space to include it; and in any case it has to be included in the input
 	 * for the picksplit function.  So don't increment nToInsert yet.
 	 */
-	in.datums[in.nTuples] = SGLTDATUM(newLeafTuple, state);
+	in.datums[in.nTuples] = (it->isnull == 0) ? SGLTDATUM(state, newLeafTuple) : (Datum)0;
 	heapPtrs[in.nTuples] = newLeafTuple->heapPtr;
 	in.nTuples++;
 
@@ -921,7 +916,7 @@ doPickSplit(Relation index, SpGistState *state,
 	 * Update nodes[] array to point into the newly formed innerTuple, so that
 	 * we can adjust their downlinks below.
 	 */
-	SGITITERATE(innerTuple, i, node)
+	SGITITERATE(state, innerTuple, i, node)
 	{
 		nodes[i] = node;
 	}
@@ -1291,7 +1286,7 @@ doPickSplit(Relation index, SpGistState *state,
 		xlrec.blknoParent = parent->blkno;
 		xlrec.offnumParent = parent->offnum;
 		xlrec.nodeI = parent->node;
-		saveNodeLink(index, parent, current->blkno, current->offnum);
+		saveNodeLink(index, state, parent, current->blkno, current->offnum);
 
 		ACCEPT_RDATA_BUFFER(parent->buffer, nRdata);
 		nRdata++;
@@ -1332,7 +1327,7 @@ doPickSplit(Relation index, SpGistState *state,
 		xlrec.blknoParent = parent->blkno;
 		xlrec.offnumParent = parent->offnum;
 		xlrec.nodeI = parent->node;
-		saveNodeLink(index, parent, current->blkno, current->offnum);
+		saveNodeLink(index, state, parent, current->blkno, current->offnum);
 
 		ACCEPT_RDATA_BUFFER(current->buffer, nRdata);
 		nRdata++;
@@ -1455,7 +1450,7 @@ spgMatchNodeAction(Relation index, SpGistState *state,
 	parent->node = nodeN;
 
 	/* Locate that node */
-	SGITITERATE(innerTuple, i, node)
+	SGITITERATE(state, innerTuple, i, node)
 	{
 		if (i == nodeN)
 			break;
@@ -1617,7 +1612,7 @@ spgAddNodeAction(Relation index, SpGistState *state,
 		MarkBufferDirty(current->buffer);
 
 		/* update parent's downlink and mark parent page dirty */
-		saveNodeLink(index, parent, current->blkno, current->offnum);
+		saveNodeLink(index, state, parent, current->blkno, current->offnum);
 
 		/*
 		 * Replace old tuple with a placeholder or redirection tuple.  Unless
@@ -1715,7 +1710,7 @@ spgSplitNodeAction(Relation index, SpGistState *state,
 	 * function.
 	 */
 	nodes = palloc(sizeof(SpGistNodeTuple) * innerTuple->nNodes);
-	SGITITERATE(innerTuple, i, node)
+	SGITITERATE(state, innerTuple, i, node)
 	{
 		nodes[i] = node;
 	}
@@ -1802,10 +1797,10 @@ spgSplitNodeAction(Relation index, SpGistState *state,
 	 * the postfix tuple first.)  We have to update the local copy of the
 	 * prefixTuple too, because that's what will be written to WAL.
 	 */
-	spgUpdateNodeLink(prefixTuple, 0, postfixBlkno, postfixOffset);
+	spgUpdateNodeLink(state, prefixTuple, 0, postfixBlkno, postfixOffset);
 	prefixTuple = (SpGistInnerTuple) PageGetItem(current->page,
 							  PageGetItemId(current->page, current->offnum));
-	spgUpdateNodeLink(prefixTuple, 0, postfixBlkno, postfixOffset);
+	spgUpdateNodeLink(state, prefixTuple, 0, postfixBlkno, postfixOffset);
 
 	MarkBufferDirty(current->buffer);
 
@@ -2044,7 +2039,8 @@ spgdoinsert(Relation index, SpGistState *state,
 			in.level = level;
 			in.allTheSame = innerTuple->allTheSame;
 			in.hasPrefix = (innerTuple->prefixSize > 0);
-			in.prefixDatum = SGITDATUM(innerTuple, state);
+			if (in.hasPrefix)
+				in.prefixDatum = SGITDATUM(state, innerTuple);
 			in.nNodes = innerTuple->nNodes;
 			in.nodeLabels = spgExtractNodeLabels(state, innerTuple);
 

@@ -281,7 +281,7 @@ spgLeafTest(Relation index, SpGistScanOpaque so,
 		return true;
 	}
 
-	leafDatum = SGLTDATUM(leafTuple, &so->state);
+	leafDatum = (it->isnull == 0) ? SGLTDATUM(&so->state, leafTuple) : (Datum)0;
 
 	/* use temp context for calling leaf_consistent */
 	oldCtx = MemoryContextSwitchTo(so->tempCxt);
@@ -484,13 +484,14 @@ redirect:
 			in.returnData = so->want_itup;
 			in.allTheSame = innerTuple->allTheSame;
 			in.hasPrefix = (innerTuple->prefixSize > 0);
-			in.prefixDatum = SGITDATUM(innerTuple, &so->state);
+			if (in.hasPrefix)
+				in.prefixDatum = SGITDATUM(&so->state, innerTuple);
 			in.nNodes = innerTuple->nNodes;
 			in.nodeLabels = spgExtractNodeLabels(&so->state, innerTuple);
 
 			/* collect node pointers */
 			nodes = (SpGistNodeTuple *) palloc(sizeof(SpGistNodeTuple) * in.nNodes);
-			SGITITERATE(innerTuple, i, node)
+			SGITITERATE(&so->state, innerTuple, i, node)
 			{
 				nodes[i] = node;
 			}
