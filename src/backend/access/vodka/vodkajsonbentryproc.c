@@ -1279,10 +1279,22 @@ spg_bytea_leaf_consistent(PG_FUNCTION_ARGS)
 		leafValue = DatumGetByteaPP(in->leafDatum);
 		Pointer queryVal = (Pointer)&key->exact->hash + len;
 
-		Assert(!key->inequality);
-		Assert(key->exact->type == (JSONB_VODKA_FLAG_VALUE | JSONB_VODKA_FLAG_STRING));
-
-		res = (memcmp(queryVal, VARDATA_ANY(leafValue), VARSIZE_ANY_EXHDR(leafValue)) == 0);
+		if (key->inequality)
+		{
+			res = false;
+		}
+		else if (!key->exact)
+		{
+			res = true;
+		}
+		else if (key->exact->type != (JSONB_VODKA_FLAG_VALUE | JSONB_VODKA_FLAG_STRING))
+		{
+			res = false;
+		}
+		else
+		{
+			res = (memcmp(queryVal, VARDATA_ANY(leafValue), VARSIZE_ANY_EXHDR(leafValue)) == 0);
+		}
 
 		out->leafValue = (Datum)0;
 		out->recheck = false;
