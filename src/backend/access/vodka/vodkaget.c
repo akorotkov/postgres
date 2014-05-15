@@ -107,13 +107,15 @@ readPostingList(VodkaState *vodkastate, VodkaScanEntry entry,
 	Buffer	buffer;
 	Page	page;
 	VodkaPostingList *postinglist;
+	ItemId	itemId;
 
 	buffer = ReadBuffer(vodkastate->index, ItemPointerGetBlockNumber(iptr));
 	LockBuffer(buffer, VODKA_EXCLUSIVE);
 	page = BufferGetPage(buffer);
 
-	postinglist = (VodkaPostingList *)PageGetItem(page,
-			PageGetItemId(page, ItemPointerGetOffsetNumber(iptr)));
+	itemId = PageGetItemId(page, ItemPointerGetOffsetNumber(iptr));
+
+	postinglist = (VodkaPostingList *)PageGetItem(page, itemId);
 	if (postinglist->first.ip_posid == 0xFFFF)
 	{
 		*blkno = ItemPointerGetBlockNumber(&postinglist->first);

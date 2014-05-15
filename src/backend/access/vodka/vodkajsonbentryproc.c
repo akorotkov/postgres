@@ -782,20 +782,24 @@ spg_bytea_inner_consistent(PG_FUNCTION_ARGS)
 
 	if (status == sInValue && key)
 	{
-		Pointer queryVal = (Pointer)&key->exact->hash + len;
+		Pointer queryVal;
 		bool prefixRes;
 
 		Assert(!key->inequality);
-		Assert(key->exact->type == (JSONB_VODKA_FLAG_VALUE | JSONB_VODKA_FLAG_STRING));
-		if (in->hasPrefix)
+		if (key->exact)
 		{
-			prefixText = DatumGetByteaPP(in->prefixDatum);
-			prefixSize = VARSIZE_ANY_EXHDR(prefixText);
-			prefixStr = VARDATA_ANY(prefixText);
+			Assert(key->exact->type == (JSONB_VODKA_FLAG_VALUE | JSONB_VODKA_FLAG_STRING));
+			queryVal = (Pointer)&key->exact->hash + len;
+			if (in->hasPrefix)
+			{
+				prefixText = DatumGetByteaPP(in->prefixDatum);
+				prefixSize = VARSIZE_ANY_EXHDR(prefixText);
+				prefixStr = VARDATA_ANY(prefixText);
 
-			prefixRes = (memcmp(queryVal, prefixStr, prefixSize) == 0);
-			len += prefixSize;
-			queryVal += prefixSize;
+				prefixRes = (memcmp(queryVal, prefixStr, prefixSize) == 0);
+				len += prefixSize;
+				queryVal += prefixSize;
+			}
 		}
 
 		out->nodeNumbers = (int *) palloc(sizeof(int) * in->nNodes);
@@ -808,11 +812,14 @@ spg_bytea_inner_consistent(PG_FUNCTION_ARGS)
 			uint16 nodeChar = DatumGetUInt16(in->nodeLabels[i]);
 			char c;
 
-			Assert(nodeChar != 0x100);
-			c = (char)nodeChar;
+			if (key->exact)
+			{
+				Assert(nodeChar != 0x100);
+				c = (char)nodeChar;
 
-			if (c != *queryVal)
-				continue;
+				if (c != *queryVal)
+					continue;
+			}
 
 			out->nodeNumbers[out->nNodes] = i;
 			out->levelAdds[out->nNodes] = LEVEL_ADD(in->level, status, len + 1);
@@ -860,7 +867,7 @@ spg_bytea_inner_consistent(PG_FUNCTION_ARGS)
 						which &= (1 << 1);
 				}
 			}
-			else
+			else if (key->exact)
 			{
 				int cmp;
 				cmp = DatumGetInt32(DirectFunctionCall2(numeric_cmp,
@@ -970,6 +977,10 @@ spg_bytea_inner_consistent(PG_FUNCTION_ARGS)
 						if (key->inequality)
 						{
 							res = ((JSONB_VODKA_FLAG_TYPE & nodeChar) == JSONB_VODKA_FLAG_NUMERIC);
+						}
+						else if (!key->exact)
+						{
+							res = true;
 						}
 						else
 						{
@@ -1156,6 +1167,66 @@ logValue(char *v, int len)
 	elog(NOTICE, "%s", s);
 }
 
+static bool
+checkNumericValue(JsonbVodkaKey *key, Numeric value)
+{
+	bool res = true;
+	if (key->inequality)
+	{
+		if (key->leftBound)
+		{
+			if ((key->leftBound->type & JSONB_VODKA_FLAG_TYPE) != JSONB_VODKA_FLAG_NUMERIC)
+			{
+				res = false;
+			}
+			else
+			{
+				int cmp;
+				cmp = DatumGetInt32(DirectFunctionCall2(numeric_cmp,
+						 NumericGetDatum(value),
+						 NumericGetDatum(key->leftBound->n)));
+
+				if (cmp < 0 || (cmp == 0 && !key->leftInclusive))
+					res = false;
+			}
+		}
+		if (res && key->rightBound)
+		{
+			if ((key->rightBound->type & JSONB_VODKA_FLAG_TYPE) != JSONB_VODKA_FLAG_NUMERIC)
+			{
+				res = false;
+			}
+			else
+			{
+				int cmp;
+				cmp = DatumGetInt32(DirectFunctionCall2(numeric_cmp,
+						 NumericGetDatum(value),
+						 NumericGetDatum(key->rightBound->n)));
+
+				if (cmp > 0 || (cmp == 0 && !key->rightInclusive))
+					res = false;
+			}
+		}
+	}
+	else if (key->exact)
+	{
+		if ((key->exact->type & JSONB_VODKA_FLAG_TYPE) != JSONB_VODKA_FLAG_NUMERIC)
+		{
+			res = false;
+		}
+		else
+		{
+			int cmp;
+			cmp = DatumGetInt32(DirectFunctionCall2(numeric_cmp,
+					 NumericGetDatum(value),
+					 NumericGetDatum(key->exact->n)));
+			if (cmp != 0)
+				res = false;
+		}
+	}
+	return res;
+}
+
 Datum
 spg_bytea_leaf_consistent(PG_FUNCTION_ARGS)
 {
@@ -1211,39 +1282,7 @@ spg_bytea_leaf_consistent(PG_FUNCTION_ARGS)
 
 		if (key)
 		{
-			if (key->inequality)
-			{
-				if (key->leftBound)
-				{
-					int cmp;
-					cmp = DatumGetInt32(DirectFunctionCall2(numeric_cmp,
-							 NumericGetDatum(value),
-							 NumericGetDatum(key->leftBound->n)));
-
-					if (cmp < 0 || (cmp == 0 && !key->leftInclusive))
-						res = false;
-				}
-				if (res && key->rightBound)
-				{
-					int cmp;
-					cmp = DatumGetInt32(DirectFunctionCall2(numeric_cmp,
-							 NumericGetDatum(value),
-							 NumericGetDatum(key->rightBound->n)));
-
-					if (cmp > 0 || (cmp == 0 && !key->rightInclusive))
-						res = false;
-				}
-			}
-			else
-			{
-				int cmp;
-				cmp = DatumGetInt32(DirectFunctionCall2(numeric_cmp,
-						 NumericGetDatum(value),
-						 NumericGetDatum(key->exact->n)));
-				if (cmp != 0)
-					res = false;
-			}
-
+			res = checkNumericValue(key, value);
 		}
 		else
 		{
@@ -1278,84 +1317,137 @@ spg_bytea_leaf_consistent(PG_FUNCTION_ARGS)
 	{
 		leafValue = DatumGetByteaPP(in->leafDatum);
 
-		if (DatumGetPointer(in->reconstructedValue))
-			reconstrValue = DatumGetByteaP(in->reconstructedValue);
-
-		Assert(len == 0 ? reconstrValue == NULL :
-			   VARSIZE_ANY_EXHDR(reconstrValue) == len);
-
-		/* Reconstruct the full string represented by this leaf tuple */
-		fullLen = len + VARSIZE_ANY_EXHDR(leafValue);
-		if (VARSIZE_ANY_EXHDR(leafValue) == 0 && len > 0)
+		if (key)
 		{
-			fullValue = VARDATA(reconstrValue);
-			out->leafValue = PointerGetDatum(reconstrValue);
-		}
-		else
-		{
-			bytea	   *fullText = palloc(VARHDRSZ + fullLen);
+			char *leafStr = VARDATA_ANY(leafValue);
+			int leafLen = VARSIZE_ANY_EXHDR(leafValue);
+			Datum reconstructedValue;
+			ChooseStatus nextStatus = status;
+			bool *flags;
+			int i;
 
-			SET_VARSIZE(fullText, VARHDRSZ + fullLen);
-			fullValue = VARDATA(fullText);
-			if (len)
-				memcpy(fullValue, VARDATA(reconstrValue), len);
-			if (VARSIZE_ANY_EXHDR(leafValue) > 0)
-				memcpy(fullValue + len, VARDATA_ANY(leafValue),
-					   VARSIZE_ANY_EXHDR(leafValue));
-			out->leafValue = PointerGetDatum(fullText);
-		}
+			res = true;
 
-		/* Perform the required comparison(s) */
-		res = true;
-		for (j = 0; j < in->nkeys; j++)
-		{
-			StrategyNumber strategy = in->scankeys[j].sk_strategy;
-			bytea	   *query = DatumGetTextPP(in->scankeys[j].sk_argument);
-			int			queryLen = VARSIZE_ANY_EXHDR(query);
-			int			r;
-
-			if (strategy > 10)
+			for (i = 0; i < leafLen; i++)
 			{
-				/* Collation-aware comparison */
-				strategy -= 10;
+				nextStatus = getNextStatus(nextStatus, leafStr[i]);
+				if (nextStatus == sInNumeric || nextStatus == sInValue)
+					break;
+			}
 
-				/* If asserts enabled, verify encoding of reconstructed string */
-				Assert(pg_verifymbstr(fullValue, fullLen, false));
+			reconstructedValue = processPrefix(status, key,
+					leafStr, i, in->reconstructedValue);
 
-				r = varstr_cmp(fullValue, Min(queryLen, fullLen),
-							   VARDATA_ANY(query), Min(queryLen, fullLen),
-							   PG_GET_COLLATION());
+			flags = VARDATA_ANY(DatumGetPointer(reconstructedValue));
+			if (!flags[key->pathLength])
+				res = false;
+
+			if (nextStatus == sInNumeric)
+			{
+				res = checkNumericValue(key, (Numeric)(leafStr + i + 1));
 			}
 			else
 			{
-				/* Non-collation-aware comparison */
-				r = memcmp(fullValue, VARDATA_ANY(query), Min(queryLen, fullLen));
-				/*logValue(fullValue, fullLen);
-				logValue(VARDATA_ANY(query), queryLen);*/
-			}
-
-			if (r == 0)
-			{
-				if (queryLen > fullLen)
-					r = -1;
-				else if (queryLen < fullLen)
-					r = 1;
-			}
-
-			switch (strategy)
-			{
-				case BTEqualStrategyNumber:
-					res = (r == 0);
-					break;
-				default:
-					elog(ERROR, "unrecognized strategy number: %d",
-						 in->scankeys[j].sk_strategy);
+				if (key->inequality)
+				{
 					res = false;
-					break;
+				}
+				else if (!key->exact)
+				{
+					res = true;
+				}
+				else if ((key->exact->type & JSONB_VODKA_FLAG_TYPE) != (leafStr[i] & JSONB_VODKA_FLAG_TYPE))
+				{
+					res = false;
+				}
+				else if ((key->exact->type & JSONB_VODKA_FLAG_TYPE) == JSONB_VODKA_FLAG_STRING)
+				{
+					Assert(leafLen == i + 5);
+					res = (memcmp(leafStr + i + 1, &key->exact->hash, 4) == 0);
+				}
+			}
+		}
+		else
+		{
+			if (DatumGetPointer(in->reconstructedValue))
+				reconstrValue = DatumGetByteaP(in->reconstructedValue);
+
+			Assert(len == 0 ? reconstrValue == NULL :
+				   VARSIZE_ANY_EXHDR(reconstrValue) == len);
+
+			/* Reconstruct the full string represented by this leaf tuple */
+			fullLen = len + VARSIZE_ANY_EXHDR(leafValue);
+			if (VARSIZE_ANY_EXHDR(leafValue) == 0 && len > 0)
+			{
+				fullValue = VARDATA(reconstrValue);
+				out->leafValue = PointerGetDatum(reconstrValue);
+			}
+			else
+			{
+				bytea	   *fullText = palloc(VARHDRSZ + fullLen);
+
+				SET_VARSIZE(fullText, VARHDRSZ + fullLen);
+				fullValue = VARDATA(fullText);
+				if (len)
+					memcpy(fullValue, VARDATA(reconstrValue), len);
+				if (VARSIZE_ANY_EXHDR(leafValue) > 0)
+					memcpy(fullValue + len, VARDATA_ANY(leafValue),
+						   VARSIZE_ANY_EXHDR(leafValue));
+				out->leafValue = PointerGetDatum(fullText);
 			}
 
-			if (!res)
-				break;				/* no need to consider remaining conditions */
+			/* Perform the required comparison(s) */
+			res = true;
+			for (j = 0; j < in->nkeys; j++)
+			{
+				StrategyNumber strategy = in->scankeys[j].sk_strategy;
+				bytea	   *query = DatumGetTextPP(in->scankeys[j].sk_argument);
+				int			queryLen = VARSIZE_ANY_EXHDR(query);
+				int			r;
+
+				if (strategy > 10)
+				{
+					/* Collation-aware comparison */
+					strategy -= 10;
+
+					/* If asserts enabled, verify encoding of reconstructed string */
+					Assert(pg_verifymbstr(fullValue, fullLen, false));
+
+					r = varstr_cmp(fullValue, Min(queryLen, fullLen),
+								   VARDATA_ANY(query), Min(queryLen, fullLen),
+								   PG_GET_COLLATION());
+				}
+				else
+				{
+					/* Non-collation-aware comparison */
+					r = memcmp(fullValue, VARDATA_ANY(query), Min(queryLen, fullLen));
+					/*logValue(fullValue, fullLen);
+					logValue(VARDATA_ANY(query), queryLen);*/
+				}
+
+				if (r == 0)
+				{
+					if (queryLen > fullLen)
+						r = -1;
+					else if (queryLen < fullLen)
+						r = 1;
+				}
+
+				switch (strategy)
+				{
+					case BTEqualStrategyNumber:
+						res = (r == 0);
+						break;
+					default:
+						elog(ERROR, "unrecognized strategy number: %d",
+							 in->scankeys[j].sk_strategy);
+						res = false;
+						break;
+				}
+
+				if (!res)
+					break;				/* no need to consider remaining conditions */
+			}
 		}
 	}
 
