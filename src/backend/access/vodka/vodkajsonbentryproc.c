@@ -536,8 +536,13 @@ spg_bytea_picksplit(PG_FUNCTION_ARGS)
 			}
 
 			if (commonLen < VARSIZE_ANY_EXHDR(texti))
-				leafD = formByteaDatum(VARDATA_ANY(texti) + commonLen + 1,
-									  VARSIZE_ANY_EXHDR(texti) - commonLen - 1);
+			{
+				if (status == sInNumeric)
+					leafD = datumCopy(PointerGetDatum(VARDATA_ANY(texti) + commonLen + 1), false, -1);
+				else
+					leafD = formByteaDatum(VARDATA_ANY(texti) + commonLen + 1,
+										  VARSIZE_ANY_EXHDR(texti) - commonLen - 1);
+			}
 			else
 				leafD = formByteaDatum(NULL, 0);
 
@@ -654,7 +659,7 @@ processPrefix(ChooseStatus status, JsonbVodkaKey *key, char *prefix, int len,
 					}
 					if (allfalse && !next)
 						return (Datum)0;
-					flags[key->pathLength - 1] = next;
+					flags[key->pathLength] = next;
 
 					start = i + 1;
 					status = sInitial;
@@ -792,7 +797,7 @@ spg_bytea_inner_consistent(PG_FUNCTION_ARGS)
 	if (status == sInValue && key)
 	{
 		Pointer queryVal;
-		bool prefixRes;
+		bool prefixRes = true;
 
 		Assert(!key->inequality);
 		if (key->exact)
@@ -823,11 +828,20 @@ spg_bytea_inner_consistent(PG_FUNCTION_ARGS)
 
 			if (key->exact)
 			{
-				Assert(nodeChar != 0x100);
-				c = (char)nodeChar;
+				if (nodeChar != 0x100)
+				{
+					c = (char)nodeChar;
 
-				if (c != *queryVal)
-					continue;
+					if (c != *queryVal)
+						continue;
+				}
+				else
+				{
+					if (key->exact &&
+							(key->exact->type & JSONB_VODKA_FLAG_TYPE) != JSONB_VODKA_FLAG_NULL &&
+							(key->exact->type & JSONB_VODKA_FLAG_TYPE) != JSONB_VODKA_FLAG_BOOL)
+						continue;
+				}
 			}
 
 			out->nodeNumbers[out->nNodes] = i;
@@ -1229,6 +1243,7 @@ checkNumericValue(JsonbVodkaKey *key, Numeric value)
 		else
 		{
 			int cmp;
+
 			cmp = DatumGetInt32(DirectFunctionCall2(numeric_cmp,
 					 NumericGetDatum(value),
 					 NumericGetDatum(key->exact->n)));
