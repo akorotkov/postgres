@@ -128,6 +128,7 @@ typedef struct SpGistState
 	bool		isBuild;		/* true if doing index build */
 } SpGistState;
 
+#define MaxSpgistTuplesPerPage ((int)((BLCKSZ - SizeOfPageHeaderData)/(8 + sizeof(ItemId))))
 /*
  * Private state of an index scan
  */
@@ -156,15 +157,9 @@ typedef struct SpGistScanOpaqueData
 	TupleDesc	indexTupDesc;	/* if so, tuple descriptor for them */
 	int			nPtrs;			/* number of TIDs found on current page */
 	int			iPtr;			/* index for scanning through same */
-	ItemPointerData heapPtrs[MaxIndexTuplesPerPage];	/* TIDs from cur page */
-	bool		recheck[MaxIndexTuplesPerPage]; /* their recheck flags */
-	IndexTuple	indexTups[MaxIndexTuplesPerPage];		/* reconstructed tuples */
-
-	/*
-	 * Note: using MaxIndexTuplesPerPage above is a bit hokey since
-	 * SpGistLeafTuples aren't exactly IndexTuples; however, they are larger,
-	 * so this is safe.
-	 */
+	ItemPointerData heapPtrs[MaxSpgistTuplesPerPage];	/* TIDs from cur page */
+	bool		recheck[MaxSpgistTuplesPerPage]; /* their recheck flags */
+	IndexTuple	indexTups[MaxSpgistTuplesPerPage];		/* reconstructed tuples */
 } SpGistScanOpaqueData;
 
 typedef SpGistScanOpaqueData *SpGistScanOpaque;
@@ -188,16 +183,16 @@ typedef struct SpGistCache
  * Some staff to work with unaligend access
  */
 static inline unsigned int
-VARSIZE_4B_UNALIGNED(char *data)
+VARSIZE_4B_UNALIGNED(Datum data)
 {
 	varattrib_4b	p;
 
-	memcpy(&p, data, sizeof(p.va_4byte));
+	memcpy(&p, DatumGetPointer(data), sizeof(p.va_4byte));
 
 	return VARSIZE_4B(&p); 
 }
 
-#define SG_VARSIZE_ANY(PTR)	(VARATT_IS_1B(PTR) ? VARSIZE_1B(PTR) : VARSIZE_4B_UNALIGNED(PTR))
+#define SG_VARSIZE_ANY(PTR)	(VARATT_IS_1B(PTR) ? VARSIZE_1B(PTR) : VARSIZE_4B_UNALIGNED((Datum)(PTR)))
 
 static inline BlockNumber
 spgItemPointerGetBlockNumber(ItemPointer iptr)
@@ -206,7 +201,8 @@ spgItemPointerGetBlockNumber(ItemPointer iptr)
 
 	memcpy(&tmp, iptr, sizeof(*iptr));
 
-	return ItemPointerGetBlockNumber(&tmp);
+	/* avoid asserts for invalid blocknumber */
+	return BlockIdGetBlockNumber(&tmp.ip_blkid);
 }
 
 static inline OffsetNumber
@@ -216,7 +212,8 @@ spgItemPointerGetOffsetNumber(ItemPointer iptr)
 
 	memcpy(&tmp, iptr, sizeof(*iptr));
 
-	return ItemPointerGetOffsetNumber(&tmp);
+	/* avoid asserts for invalid offsetnumber */
+	return tmp.ip_posid;
 }
 
 static inline void
@@ -296,14 +293,19 @@ typedef SpGistNodeTupleData *SpGistNodeTuple;
 #define SGNTDATAPTR(t)		(((char *) (t)) + SGNTHDRSZ)
 #define SGNTIITEMPOINTER(t)	((ItemPointer)(t))
 #define SGNTSIZE(s, t)		(SGNTHDRSZ + (SGNTISNULL(t) ? 0 :	\
-								SpGistGetTypeSize(&(s)->attLabelType, PointerGetDatum(SGNTDATAPTR(t)))
+								SpGistGetTypeSize(&(s)->attLabelType, PointerGetDatum(SGNTDATAPTR(t)))))
 #define SGNTNULL			(0x8000)
 #define SGNTISNULL(t)		(spgItemPointerGetOffsetNumber(SGNTIITEMPOINTER(t)) & SGNTNULL)
 #define SGNTSETNULL(t)		spgItemPointerSet(	\
 								SGNTIITEMPOINTER(t),	\
 								spgItemPointerGetBlockNumber(SGNTIITEMPOINTER(t)),	\
-								spgItemPointerGetOffsetBumber(SGNTIITEMPOINTER(t)) | SGNTNULL	\
+								spgItemPointerGetOffsetNumber(SGNTIITEMPOINTER(t)) | SGNTNULL	\
 							)
+#define SGNTSETITEMPOINTER(t, b, o) \
+			spgItemPointerSet(SGNTIITEMPOINTER(t), (b), (o) | SGNTISNULL(t))
+#define SGNTGETITEMPOINTER(t, i)	ItemPointerSet((i), \
+												   spgItemPointerGetBlockNumber(SGNTIITEMPOINTER(t)), \
+												   spgItemPointerGetOffsetNumber(SGNTIITEMPOINTER(t)) & ~SGNTNULL)
 #define SGNTDATUM(s, t)		spgGetDatum(&(s)->attLabelType, SGNTDATAPTR(t))
 
 /*

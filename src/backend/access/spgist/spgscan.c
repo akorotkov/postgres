@@ -281,7 +281,7 @@ spgLeafTest(Relation index, SpGistScanOpaque so,
 		return true;
 	}
 
-	leafDatum = (it->isnull == 0) ? SGLTDATUM(&so->state, leafTuple) : (Datum)0;
+	leafDatum = (leafTuple->isnull == 0) ? SGLTDATUM(&so->state, leafTuple) : (Datum)0;
 
 	/* use temp context for calling leaf_consistent */
 	oldCtx = MemoryContextSwitchTo(so->tempCxt);
@@ -525,16 +525,19 @@ redirect:
 
 			for (i = 0; i < out.nNodes; i++)
 			{
-				int			nodeN = out.nodeNumbers[i];
+				int				nodeN = out.nodeNumbers[i];
+				ItemPointerData	iptr;
 
+				SGNTGETITEMPOINTER(nodes[nodeN], &iptr);
 				Assert(nodeN >= 0 && nodeN < in.nNodes);
-				if (ItemPointerIsValid(&nodes[nodeN]->t_tid))
+
+				if (ItemPointerIsValid(&iptr))
 				{
 					ScanStackEntry *newEntry;
 
 					/* Create new work item for this node */
 					newEntry = palloc(sizeof(ScanStackEntry));
-					newEntry->ptr = nodes[nodeN]->t_tid;
+					newEntry->ptr = iptr;
 					if (out.levelAdds)
 						newEntry->level = stackEntry->level + out.levelAdds[i];
 					else

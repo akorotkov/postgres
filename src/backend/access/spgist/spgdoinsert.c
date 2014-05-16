@@ -55,7 +55,7 @@ spgUpdateNodeLink(SpGistState *state, SpGistInnerTuple tup, int nodeN,
 	{
 		if (i == nodeN)
 		{
-			ItemPointerSet(&node->t_tid, blkno, offset);
+			SGNTSETITEMPOINTER(node, blkno, offset);
 			return;
 		}
 	}
@@ -811,7 +811,7 @@ doPickSplit(Relation index, SpGistState *state,
 	 * space to include it; and in any case it has to be included in the input
 	 * for the picksplit function.  So don't increment nToInsert yet.
 	 */
-	in.datums[in.nTuples] = (it->isnull == 0) ? SGLTDATUM(state, newLeafTuple) : (Datum)0;
+	in.datums[in.nTuples] = (newLeafTuple->isnull == 0) ? SGLTDATUM(state, newLeafTuple) : (Datum)0;
 	heapPtrs[in.nTuples] = newLeafTuple->heapPtr;
 	in.nTuples++;
 
@@ -1194,9 +1194,10 @@ doPickSplit(Relation index, SpGistState *state,
 	for (i = 0; i < nToInsert; i++)
 	{
 		SpGistLeafTuple it = newLeafs[i];
-		Buffer		leafBuffer;
-		BlockNumber leafBlock;
-		OffsetNumber newoffset;
+		Buffer			leafBuffer;
+		BlockNumber 	leafBlock;
+		OffsetNumber 	newoffset;
+		ItemPointerData	iptr;
 
 		/* Which page is it going to? */
 		leafBuffer = leafPageSelect[i] ? newLeafBuffer : current->buffer;
@@ -1205,10 +1206,11 @@ doPickSplit(Relation index, SpGistState *state,
 		/* Link tuple into correct chain for its node */
 		n = out.mapTuplesToNodes[i];
 
-		if (ItemPointerIsValid(&nodes[n]->t_tid))
+		SGNTGETITEMPOINTER(nodes[n], &iptr);
+		if (ItemPointerIsValid(&iptr))
 		{
-			Assert(ItemPointerGetBlockNumber(&nodes[n]->t_tid) == leafBlock);
-			it->nextOffset = ItemPointerGetOffsetNumber(&nodes[n]->t_tid);
+			Assert(ItemPointerGetBlockNumber(&iptr) == leafBlock);
+			it->nextOffset = ItemPointerGetOffsetNumber(&iptr);
 		}
 		else
 			it->nextOffset = InvalidOffsetNumber;
@@ -1221,7 +1223,7 @@ doPickSplit(Relation index, SpGistState *state,
 		toInsert[i] = newoffset;
 
 		/* ... and complete the chain linking */
-		ItemPointerSet(&nodes[n]->t_tid, leafBlock, newoffset);
+		SGNTSETITEMPOINTER(nodes[n], leafBlock, newoffset);
 
 		/* Also copy leaf tuple into WAL data */
 		memcpy(leafptr, newLeafs[i], newLeafs[i]->size);
@@ -1431,8 +1433,9 @@ spgMatchNodeAction(Relation index, SpGistState *state,
 				   SpGistInnerTuple innerTuple,
 				   SPPageDesc *current, SPPageDesc *parent, int nodeN)
 {
-	int			i;
+	int				i;
 	SpGistNodeTuple node;
+	ItemPointerData	iptr;
 
 	/* Release previous parent buffer if any */
 	if (parent->buffer != InvalidBuffer &&
@@ -1460,11 +1463,12 @@ spgMatchNodeAction(Relation index, SpGistState *state,
 		elog(ERROR, "failed to find requested node %d in SPGiST inner tuple",
 			 nodeN);
 
+	SGNTGETITEMPOINTER(node, &iptr);
 	/* Point current to the downlink location, if any */
-	if (ItemPointerIsValid(&node->t_tid))
+	if (ItemPointerIsValid(&iptr))
 	{
-		current->blkno = ItemPointerGetBlockNumber(&node->t_tid);
-		current->offnum = ItemPointerGetOffsetNumber(&node->t_tid);
+		current->blkno = ItemPointerGetBlockNumber(&iptr);
+		current->offnum = ItemPointerGetOffsetNumber(&iptr);
 	}
 	else
 	{

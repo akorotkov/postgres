@@ -546,16 +546,16 @@ memcpyDatum(void *target, SpGistTypeDesc *att, Datum datum)
 				memcpy(target, &v.u8, 1);
 				break;
 			case 2:
-				v.u16 = GET_2_BYTE(datum);
+				v.u16 = GET_2_BYTES(datum);
 				memcpy(target, &v.u16, 2);
 				break;
 			case 4:
-				v.u32 = GET_4_BYTE(datum);
+				v.u32 = GET_4_BYTES(datum);
 				memcpy(target, &v.u32, 4);
 				break;
 #if SIZEOF_DATUM == 8
 			case 8:
-				v.u64 = GET_8_BYTE(datum);
+				v.u64 = GET_8_BYTES(datum);
 				memcpy(target, &v.u64, 8);
 				break;
 #endif
@@ -633,16 +633,16 @@ spgGetDatum(SpGistTypeDesc* att, char *ptr)
 				break;
 			case 2:
 				memcpy(&v.u16, ptr, 2);
-				r = SET_2_BYTE(v.u16);
+				r = SET_2_BYTES(v.u16);
 				break;
 			case 4:
 				memcpy(&v.u32, ptr, 4);
-				r = SET_4_BYTE(v.u32);
+				r = SET_4_BYTES(v.u32);
 				break;
 #if SIZEOF_DATUM == 8
 			case 8:
 				memcpy(&v.u64, ptr, 4);
-				r = SET_8_BYTE(v.u64);
+				r = SET_8_BYTES(v.u64);
 				break;
 #endif
 			default:
