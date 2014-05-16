@@ -16,6 +16,7 @@
 
 #include "access/heapam.h"
 #include "access/htup_details.h"
+#include "access/vodka_private.h"
 #include "catalog/catalog.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_tablespace.h"
@@ -310,6 +311,7 @@ pg_relation_size(PG_FUNCTION_ARGS)
 	text	   *forkName = PG_GETARG_TEXT_P(1);
 	Relation	rel;
 	int64		size;
+	ForkNumber	forkNum;
 
 	rel = try_relation_open(relOid, AccessShareLock);
 
@@ -323,8 +325,15 @@ pg_relation_size(PG_FUNCTION_ARGS)
 	if (rel == NULL)
 		PG_RETURN_NULL();
 
-	size = calculate_relation_size(&(rel->rd_node), rel->rd_backend,
-							  forkname_to_number(text_to_cstring(forkName)));
+	forkNum = forkname_to_number(text_to_cstring(forkName));
+
+	size = calculate_relation_size(&(rel->rd_node), rel->rd_backend, forkNum);
+
+	if (rel->rd_rel->relam == VODKA_AM_OID)
+	{
+		VodkaState *state = initVodkaState(rel);
+		size += calculate_relation_size(&(state->entryTree.rd_node), rel->rd_backend, forkNum);
+	}
 
 	relation_close(rel, AccessShareLock);
 
@@ -393,6 +402,14 @@ calculate_table_size(Relation rel)
 	for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
 		size += calculate_relation_size(&(rel->rd_node), rel->rd_backend,
 										forkNum);
+
+	if (rel->rd_rel->relam == VODKA_AM_OID)
+	{
+		VodkaState *state = initVodkaState(rel);
+		for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
+			size += calculate_relation_size(&(state->entryTree.rd_node),
+											rel->rd_backend, forkNum);
+	}
 
 	/*
 	 * Size of toast relation
