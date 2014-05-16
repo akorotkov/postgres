@@ -97,8 +97,8 @@ addNode(SpGistState *state, SpGistInnerTuple tuple, Datum label, int offset)
 	nodes[offset] = spgFormNodeTuple(state, label, false);
 
 	return spgFormInnerTuple(state,
-							 (tuple->prefixSize > 0),
-							 (tuple->prefixSize > 0) ? SGITDATUM(state, tuple) : (Datum)0,
+							 tuple->hasPrefix,
+							 (tuple->hasPrefix) ? SGITDATUM(state, tuple) : (Datum)0,
 							 tuple->nNodes + 1,
 							 nodes);
 }
@@ -2042,7 +2042,7 @@ spgdoinsert(Relation index, SpGistState *state,
 			in.leafDatum = leafDatum;
 			in.level = level;
 			in.allTheSame = innerTuple->allTheSame;
-			in.hasPrefix = (innerTuple->prefixSize > 0);
+			in.hasPrefix = innerTuple->hasPrefix;
 			if (in.hasPrefix)
 				in.prefixDatum = SGITDATUM(state, innerTuple);
 			in.nNodes = innerTuple->nNodes;

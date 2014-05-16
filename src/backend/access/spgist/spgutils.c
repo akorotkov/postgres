@@ -763,13 +763,13 @@ spgFormInnerTuple(SpGistState *state, bool hasPrefix, Datum prefix,
 	tup = (SpGistInnerTuple) palloc0(size);
 
 	tup->nNodes = nNodes;
-	tup->prefixSize = prefixSize;
+	tup->hasPrefix = hasPrefix;
 	tup->size = size;
 
 	if (hasPrefix)
 		memcpyDatum(SGITDATAPTR(tup), &state->attPrefixType, prefix);
 
-	ptr = (char *) SGITNODEPTR(tup);
+	ptr = (char *) SGITNODEPTR(state, tup);
 
 	for (i = 0; i < nNodes; i++)
 	{
@@ -831,7 +831,7 @@ spgExtractNodeLabels(SpGistState *state, SpGistInnerTuple innerTuple)
 	SpGistNodeTuple node;
 
 	/* Either all the labels must be NULL, or none. */
-	node = SGITNODEPTR(innerTuple);
+	node = SGITNODEPTR(state, innerTuple);
 	if (SGNTISNULL(node))
 	{
 		SGITITERATE(state, innerTuple, i, node)

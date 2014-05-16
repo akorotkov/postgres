@@ -251,10 +251,9 @@ typedef struct SpGistInnerTupleData
 {
 	unsigned int tupstate:2,	/* LIVE/REDIRECT/DEAD/PLACEHOLDER */
 				allTheSame:1,	/* all nodes in tuple are equivalent */
-				nNodes:13,		/* number of nodes within inner tuple */
-				prefixSize:16;	/* size of prefix, or 0 if none */
-	uint16		size;			/* total size of inner tuple */
-	/* On most machines there will be a couple of wasted bytes here */
+				hasPrefix:1,	/* has prefix datum ? */
+				nNodes:12,		/* number of nodes within inner tuple */
+				size:16;		/* total size of inner tuple */
 	/* prefix datum follows, then nodes */
 } SpGistInnerTupleData;
 
@@ -266,14 +265,14 @@ typedef SpGistInnerTupleData *SpGistInnerTuple;
 #define SGITMAXSIZE			0xFFFF
 
 #define SGITHDRSZ			sizeof(SpGistInnerTupleData)
-#define _SGITDATA(x)		(((char *) (x)) + SGITHDRSZ)
-#define SGITDATAPTR(x)		((x)->prefixSize ? _SGITDATA(x) : NULL)
+#define SGITDATAPTR(x)		(((char *) (x)) + SGITHDRSZ)
 #define SGITDATUM(s, t)		spgGetDatum(&(s)->attPrefixType, SGITDATAPTR(t))
-#define SGITNODEPTR(x)		((SpGistNodeTuple) (_SGITDATA(x) + (x)->prefixSize))
+#define SGITNODEPTR(s, x)	((SpGistNodeTuple) (SGITDATAPTR(x) + \
+		(((x)->hasPrefix) ? SpGistGetTypeSize(&(s)->attPrefixType, PointerGetDatum(SGITDATAPTR(x))) : 0)))
 
 /* Macro for iterating through the nodes of an inner tuple */
 #define SGITITERATE(s, x, i, nt)	\
-	for ((i) = 0, (nt) = SGITNODEPTR(x); \
+	for ((i) = 0, (nt) = SGITNODEPTR((s), (x)); \
 		 (i) < (x)->nNodes; \
 		 (i)++, (nt) = (SpGistNodeTuple) (((char *) (nt)) + SGNTSIZE((s),(nt))))
 

@@ -483,7 +483,7 @@ redirect:
 			in.level = stackEntry->level;
 			in.returnData = so->want_itup;
 			in.allTheSame = innerTuple->allTheSame;
-			in.hasPrefix = (innerTuple->prefixSize > 0);
+			in.hasPrefix = innerTuple->hasPrefix;
 			if (in.hasPrefix)
 				in.prefixDatum = SGITDATUM(&so->state, innerTuple);
 			in.nNodes = innerTuple->nNodes;
