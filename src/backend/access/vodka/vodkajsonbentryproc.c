@@ -479,7 +479,7 @@ spg_bytea_picksplit(PG_FUNCTION_ARGS)
 		while (i < commonLen)
 		{
 			status = getNextStatus(status, VARDATA_ANY(text0)[i]);
-			if (status == sInNumeric || status == sInValue)
+			if (status == sInNumeric)
 				break;
 			i++;
 		}
@@ -956,21 +956,29 @@ spg_bytea_inner_consistent(PG_FUNCTION_ARGS)
 		if (key)
 		{
 			Datum reconstructedValue = in->reconstructedValue;
+			int  inValue = -1;
 
 			if (in->hasPrefix)
 			{
+				ChooseStatus initStatus = status;
 				prefixText = DatumGetByteaPP(in->prefixDatum);
 				prefixSize = VARSIZE_ANY_EXHDR(prefixText);
 				prefixStr = VARDATA_ANY(prefixText);
 				maxReconstrLen += prefixSize;
-				reconstructedValue = processPrefix(status, key,
-						prefixStr, prefixSize, reconstructedValue);
-				len += prefixSize;
 				for (i = 0; i < prefixSize; i++)
 				{
 					status = getNextStatus(status, prefixStr[i]);
+					if (status == sInValue)
+					{
+						status = sInitial;
+						inValue = i;
+						break;
+					}
 					Assert(status != sInNumeric);
 				}
+				reconstructedValue = processPrefix(initStatus, key,
+						prefixStr, i, reconstructedValue);
+				len += i;
 			}
 
 			out->nodeNumbers = (int *) palloc(sizeof(int) * in->nNodes);
@@ -982,16 +990,22 @@ spg_bytea_inner_consistent(PG_FUNCTION_ARGS)
 			{
 				bool res;
 				uint16		nodeChar = DatumGetUInt16(in->nodeLabels[i]);
+				uint16		chooseChar;
 				Datum nodeReconstructedValue;
 				int nodeLen = len;
 				ChooseStatus nodeStatus;
+
+				if (inValue < 0)
+					chooseChar = nodeChar;
+				else
+					chooseChar = prefixStr[inValue];
 
 				if (nodeChar == 0x100)
 				{
 					Assert(false);
 					res = false;
 				}
-				else if (status == sInitial && (nodeChar & JSONB_VODKA_FLAG_VALUE))
+				else if (status == sInitial && (chooseChar & JSONB_VODKA_FLAG_VALUE))
 				{
 					bool *flags = VARDATA_ANY(DatumGetPointer(reconstructedValue));
 					nodeLen = 0;
@@ -999,7 +1013,7 @@ spg_bytea_inner_consistent(PG_FUNCTION_ARGS)
 					{
 						if (key->inequality)
 						{
-							res = ((JSONB_VODKA_FLAG_TYPE & nodeChar) == JSONB_VODKA_FLAG_NUMERIC);
+							res = ((JSONB_VODKA_FLAG_TYPE & chooseChar) == JSONB_VODKA_FLAG_NUMERIC);
 						}
 						else if (!key->exact)
 						{
@@ -1007,20 +1021,36 @@ spg_bytea_inner_consistent(PG_FUNCTION_ARGS)
 						}
 						else
 						{
-							res = (nodeChar == key->exact->type);
+							res = (chooseChar == key->exact->type);
 						}
 					}
 					else
 					{
 						res = false;
 					}
-					nodeStatus = getNextStatus(status, (char)nodeChar);
+					nodeStatus = getNextStatus(status, (char)chooseChar);
+					Assert(nodeStatus != sInNumeric);
+
+					if (inValue >= 0 && res)
+					{
+						Pointer	ptr;
+						ptr = (Pointer)&key->exact->hash;
+
+						nodeLen = prefixSize - inValue;
+						if (memcmp(ptr, prefixStr + inValue + 1, prefixSize - inValue - 1))
+							res = false;
+						ptr += prefixSize - inValue - 1;
+						if ((uint8)*ptr != nodeChar)
+							res = false;
+						else
+							res = true;
+					}
 					nodeReconstructedValue = datumCopy(reconstructedValue,
 							false, -1);
 				}
 				else
 				{
-					char c = (char)nodeChar;
+					char c = (char)chooseChar;
 					nodeStatus = getNextStatus(status, c);
 					nodeReconstructedValue = processPrefix(status, key,
 							&c, 1, reconstructedValue);

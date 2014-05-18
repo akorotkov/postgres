@@ -426,9 +426,16 @@ vodkaEntryInsert(VodkaState *vodkastate,
 
 	equalScan = vodkastate->entryScan;
 
-	found =	DatumGetBool(OidFunctionCall2(vodkastate->entryTree.rd_am->amgettuple,
-						 PointerGetDatum(equalScan),
-						 Int32GetDatum(ForwardScanDirection)));
+	if (!buildStats || buildStats->hasCleanup)
+	{
+		found =	DatumGetBool(OidFunctionCall2(vodkastate->entryTree.rd_am->amgettuple,
+							 PointerGetDatum(equalScan),
+							 Int32GetDatum(ForwardScanDirection)));
+	}
+	else
+	{
+		found = false;
+	}
 
 	if (found)
 		iptr = equalScan->xs_ctup.t_self;
@@ -584,6 +591,7 @@ vodkaBuildCallback(Relation index, HeapTuple htup, Datum *values,
 
 		buildstate->firstblkno = InvalidBlockNumber;
 	}
+	buildstate->buildStats.hasCleanup = true;
 
 	MemoryContextSwitchTo(oldCtx);
 }

@@ -75,6 +75,7 @@ typedef struct VodkaStatsData
 	int64		nEntries;
 	int32		vodkaVersion;
 	RelFileNode	entryTreeNode;
+	bool		hasCleanup;
 	VodkaLastUsedPage postingListLUP;
 } VodkaStatsData;
 
