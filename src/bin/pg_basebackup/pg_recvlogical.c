@@ -51,7 +51,7 @@ static int	outfd = -1;
 static volatile sig_atomic_t time_to_abort = false;
 static volatile sig_atomic_t output_reopen = false;
 static int64 output_last_fsync = -1;
-static bool output_unsynced = false;
+static bool output_needs_fsync = false;
 static XLogRecPtr output_written_lsn = InvalidXLogRecPtr;
 static XLogRecPtr output_fsync_lsn = InvalidXLogRecPtr;
 
@@ -80,16 +80,16 @@ usage(void)
 	printf(_("  -w, --no-password      never prompt for password\n"));
 	printf(_("  -W, --password         force password prompt (should happen automatically)\n"));
 	printf(_("\nReplication options:\n"));
-	printf(_("  -F  --fsync-interval=INTERVAL\n"
-			 "                         frequency of syncs to the output file (in seconds, defaults to 10)\n"));
+	printf(_("  -F  --fsync-interval=SECS\n"
+			 "                         frequency of syncs to the output file (default: %d)\n"), (fsync_interval / 1000));
 	printf(_("  -o, --option=NAME[=VALUE]\n"
-			 "                         Specify option NAME with optional value VALUE, to be passed\n"
+			 "                         specify option NAME with optional value VALUE, to be passed\n"
 			 "                         to the output plugin\n"));
-	printf(_("  -P, --plugin=PLUGIN    use output plugin PLUGIN (defaults to test_decoding)\n"));
-	printf(_("  -s, --status-interval=INTERVAL\n"
-			 "                         time between status packets sent to server (in seconds, defaults to 10)\n"));
+	printf(_("  -P, --plugin=PLUGIN    use output plugin PLUGIN (default: %s)\n"), plugin);
+	printf(_("  -s, --status-interval=SECS\n"
+			 "                         time between status packets sent to server (default: %d)\n"), (standby_message_timeout / 1000));
 	printf(_("  -S, --slot=SLOT        use existing replication slot SLOT instead of starting a new one\n"));
-	printf(_("  -I, --startpos=PTR     Where in an existing slot should the streaming start\n"));
+	printf(_("  -I, --startpos=PTR     where in an existing slot should the streaming start\n"));
 	printf(_("\nAction to be performed:\n"));
 	printf(_("      --create           create a new replication slot (for the slotname see --slot)\n"));
 	printf(_("      --start            start streaming in a replication slot (for the slotname see --slot)\n"));
@@ -173,10 +173,10 @@ OutputFsync(int64 now)
 	if (fsync_interval <= 0)
 		return true;
 
-	if (!output_unsynced)
+	if (!output_needs_fsync)
 		return true;
 
-	output_unsynced = false;
+	output_needs_fsync = false;
 
 	/* Accept EINVAL, in case output is writing to a pipe or similar. */
 	if (fsync(outfd) != 0 && errno != EINVAL)
@@ -253,7 +253,7 @@ StreamLog(void)
 	res = PQexec(conn, query->data);
 	if (PQresultStatus(res) != PGRES_COPY_BOTH)
 	{
-		fprintf(stderr, _("%s: could not send replication command \"%s\": %s\n"),
+		fprintf(stderr, _("%s: could not send replication command \"%s\": %s"),
 				progname, query->data, PQresultErrorMessage(res));
 		PQclear(res);
 		goto error;
@@ -263,7 +263,7 @@ StreamLog(void)
 
 	if (verbose)
 		fprintf(stderr,
-				_("%s: initiated streaming\n"),
+				_("%s: streaming initiated\n"),
 				progname);
 
 	while (!time_to_abort)
@@ -304,6 +304,34 @@ StreamLog(void)
 			last_status = now;
 		}
 
+		/* got SIGHUP, close output file */
+		if (outfd != -1 && output_reopen && strcmp(outfile, "-") != 0)
+		{
+			now = feGetCurrentTimestamp();
+			if (!OutputFsync(now))
+				goto error;
+			close(outfd);
+			outfd = -1;
+		}
+		output_reopen = false;
+
+		/* open the output file, if not open yet */
+		if (outfd == -1)
+		{
+			if (strcmp(outfile, "-") == 0)
+				outfd = fileno(stdout);
+			else
+				outfd = open(outfile, O_CREAT | O_APPEND | O_WRONLY | PG_BINARY,
+							 S_IRUSR | S_IWUSR);
+			if (outfd == -1)
+			{
+				fprintf(stderr,
+						_("%s: could not open log file \"%s\": %s\n"),
+						progname, outfile, strerror(errno));
+				goto error;
+			}
+		}
+
 		r = PQgetCopyData(conn, &copybuf, 1);
 		if (r == 0)
 		{
@@ -327,7 +355,7 @@ StreamLog(void)
 					((int64) 1000);
 
 			/* Compute when we need to wakeup to fsync the output file. */
-			if (fsync_interval > 0 && output_unsynced)
+			if (fsync_interval > 0 && output_needs_fsync)
 				fsync_target = output_last_fsync + (fsync_interval - 1) *
 					((int64) 1000);
 
@@ -468,42 +496,11 @@ StreamLog(void)
 			output_written_lsn = Max(temp, output_written_lsn);
 		}
 
-		/* redirect output to stdout */
-		if (outfd == -1 && strcmp(outfile, "-") == 0)
-		{
-			outfd = fileno(stdout);
-		}
-
-		/* got SIGHUP, close output file */
-		if (outfd != -1 && output_reopen)
-		{
-			now = feGetCurrentTimestamp();
-			if (!OutputFsync(now))
-				goto error;
-			close(outfd);
-			outfd = -1;
-			output_reopen = false;
-		}
-
-		if (outfd == -1)
-		{
-
-			outfd = open(outfile, O_CREAT | O_APPEND | O_WRONLY | PG_BINARY,
-						 S_IRUSR | S_IWUSR);
-			if (outfd == -1)
-			{
-				fprintf(stderr,
-						_("%s: could not open log file \"%s\": %s\n"),
-						progname, outfile, strerror(errno));
-				goto error;
-			}
-		}
-
 		bytes_left = r - hdr_len;
 		bytes_written = 0;
 
 		/* signal that a fsync is needed */
-		output_unsynced = true;
+		output_needs_fsync = true;
 
 		while (bytes_left)
 		{
@@ -817,7 +814,7 @@ main(int argc, char **argv)
 
 	if (do_drop_slot && (do_create_slot || do_start_slot))
 	{
-		fprintf(stderr, _("%s: --stop cannot be combined with --init or --start\n"), progname);
+		fprintf(stderr, _("%s: cannot use --init or --start together with --stop\n"), progname);
 		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
 				progname);
 		exit(1);
@@ -825,7 +822,7 @@ main(int argc, char **argv)
 
 	if (startpos && (do_create_slot || do_drop_slot))
 	{
-		fprintf(stderr, _("%s: --startpos cannot be combined with --init or --stop\n"), progname);
+		fprintf(stderr, _("%s: cannot use --init or --stop together with --startpos\n"), progname);
 		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
 				progname);
 		exit(1);
@@ -895,7 +892,7 @@ main(int argc, char **argv)
 		if (PQntuples(res) != 0 || PQnfields(res) != 0)
 		{
 			fprintf(stderr,
-					_("%s: could not stop logical rep: got %d rows and %d fields, expected %d rows and %d fields\n"),
+					_("%s: could not stop logical replication: got %d rows and %d fields, expected %d rows and %d fields\n"),
 					progname, PQntuples(res), PQnfields(res), 0, 0);
 			disconnect_and_exit(1);
 		}
@@ -930,7 +927,7 @@ main(int argc, char **argv)
 		if (PQntuples(res) != 1 || PQnfields(res) != 4)
 		{
 			fprintf(stderr,
-					_("%s: could not init logical rep: got %d rows and %d fields, expected %d rows and %d fields\n"),
+					_("%s: could not init logical replication: got %d rows and %d fields, expected %d rows and %d fields\n"),
 					progname, PQntuples(res), PQnfields(res), 1, 4);
 			disconnect_and_exit(1);
 		}
@@ -938,7 +935,7 @@ main(int argc, char **argv)
 		if (sscanf(PQgetvalue(res, 0, 1), "%X/%X", &hi, &lo) != 2)
 		{
 			fprintf(stderr,
-					_("%s: could not parse log location \"%s\"\n"),
+					_("%s: could not parse transaction log location \"%s\"\n"),
 					progname, PQgetvalue(res, 0, 1));
 			disconnect_and_exit(1);
 		}
@@ -965,14 +962,14 @@ main(int argc, char **argv)
 		}
 		else if (noloop)
 		{
-			fprintf(stderr, _("%s: disconnected.\n"), progname);
+			fprintf(stderr, _("%s: disconnected\n"), progname);
 			exit(1);
 		}
 		else
 		{
 			fprintf(stderr,
 			/* translator: check source for value for %d */
-					_("%s: disconnected. Waiting %d seconds to try again.\n"),
+					_("%s: disconnected; waiting %d seconds to try again\n"),
 					progname, RECONNECT_SLEEP_TIME);
 			pg_usleep(RECONNECT_SLEEP_TIME * 1000000);
 		}

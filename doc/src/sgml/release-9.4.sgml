@@ -30,7 +30,7 @@
      <listitem>
       <para>
        <link linkend="logicaldecoding">Logical decoding</link> allows database
-       changes to be streamed out in customizable format
+       changes to be streamed out in a customizable format
       </para>
      </listitem>
 
@@ -89,7 +89,7 @@
       linkend="functions-formatting-table"><function>to_timestamp()</></link>
       and <function>to_date()</> format strings to consume a corresponding
       number of characters in the input string (whitespace or not), then
-      conditionally additional adjacent whitespace if not in <literal>FX</>
+      conditionally consume adjacent whitespace if not in <literal>FX</>
       mode (Jeevan Chalke)
      </para>
 
@@ -98,7 +98,7 @@
       format string behaved like a single whitespace character and consumed
       all adjacent whitespace in the input string.  For example, previously
       format string space-space-space would consume only the first space in
-      ' 12', while it will not consume all three characters.
+      ' 12', while it will now consume all three characters.
      </para>
     </listitem>
 
@@ -122,7 +122,7 @@
      </para>
 
      <para>
-      Previously empty arrays were returned as one-dimensional empty arrays
+      Previously, empty arrays were returned as one-dimensional empty arrays
       whose text representation looked the same as zero-dimensional arrays
       (<literal>{}</>).  <application>intarray</>'s behavior in this area
       now matches the built-in array operators.
@@ -131,9 +131,9 @@
 
     <listitem>
      <para>
-      NULL <link
+      Disallow NULL <link
       linkend="xfunc-sql-variadic-functions"><literal>VARIADIC</></link>
-      function arguments are now disallowed (Pavel Stehule)
+      function arguments (Pavel Stehule)
      </para>
 
      <para>
@@ -175,7 +175,7 @@
      </para>
 
      <para>
-      Previously, stripped lexemes got a default location and could be
+      Previously stripped lexemes got a default location and could be
       considered if mixed with non-stripped lexemes.
      </para>
     </listitem>
@@ -198,6 +198,21 @@
       Use the last specified <link
       linkend="recovery-target"><varname>recovery_target</></link> if
       multiple are specified (Heikki Linnakangas)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      On Windows, automatically preserve quotes in command strings supplied
+      by the user (Heikki Linnakangas)
+     </para>
+
+     <para>
+      User commands that did their own quote preservation might need
+      adjustment, e.g.  <link
+      linkend="guc-archive-command">archive_command</link>, <link
+      linkend="restore-command">restore_command</link>, <command>COPY TO/FROM
+      PROGRAM</>.
      </para>
     </listitem>
 
@@ -268,7 +283,7 @@
      </para>
 
      <para>
-      Previously, <option>-u</> was used to specify the user name.
+      Previously <option>-u</> was used to specify the user name.
       Also spell the long option as <option>--username</>, again for
       consistency with other tools.
      </para>
@@ -280,6 +295,12 @@
       that can be registered
       by <function>RegisterBackgroundWorker()</function> is now limited to
       <link linkend="guc-max-worker-processes"><varname>max_worker_processes</></link>
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      <command>DISCARD ALL</> now also discards sequence state.
      </para>
     </listitem>
 
@@ -345,7 +366,7 @@
 
       <listitem>
        <para>
-        During immediate shutdown, send uncatchable termination signals
+        During immediate shutdown send uncatchable termination signals
         to child processes that have not already shutdown (MauMau,
         &Aacute;lvaro Herrera)
        </para>
@@ -719,7 +740,7 @@
 
        <para>
         In contrast
-        to <link linkend="guc-local-preload-libraries"><varname>local_preload_libraries</></link>,
+        to <link linkend="guc-local-preload-libraries"><varname>local_preload_libraries</></link>
         this parameter can load any shared library, not just those in
         the <filename>$libdir/plugins</> directory.
        </para>
@@ -768,8 +789,8 @@
       <listitem>
        <para>
         Have Windows <acronym>ASCII</>-encoded databases and server process
-        (e.g.  <link linkend="app-postmaster">postmaster) emit messages
-        in the <envar>LC_CTYPE</></link>-defined language (Alexander Law,
+        (e.g.  <link linkend="app-postmaster">postmaster</>) emit messages
+        in the <envar>LC_CTYPE</>-defined language (Alexander Law,
         Noah Misch)
        </para>
 
@@ -973,7 +994,7 @@
       <listitem>
        <para>
         Add <link linkend="queries-tablefunctions"><literal>WITH
-        ORDINALITY</></link> syntax which numbers rows returned from
+        ORDINALITY</></link> syntax to number rows returned from
         <literal>FROM</>-clause functions (Andrew Gierth, David Fetter)
        </para>
 
@@ -990,7 +1011,6 @@
        </para>
 
        <para>
-        <!-- FIXME: drop? -->
         This was added so views that select from a table with zero columns
         can be dumped correctly.
        </para>
@@ -1013,7 +1033,6 @@
        </para>
 
        <para>
-        <!-- FIXME: compatibility break entry? -->
         <command>DISCARD ALL</> will now also discard such information.
        </para>
       </listitem>
@@ -1023,7 +1042,7 @@
          Add <command>FORCE NULL</> option
          to <link linkend="SQL-COPY"><command>COPY FROM</></link> which causes
          quoted strings matching the null string to be converted to NULL in
-         in <literal>CSV</> mode (Ian Barwick, Michael Paquier)
+         <literal>CSV</> mode (Ian Barwick, Michael Paquier)
         </para>
 
         <para>
@@ -1097,22 +1116,25 @@
 
       <listitem>
        <para>
-        Allow the updating of <link
-        linkend="SQL-CREATEVIEW-updatable-views">views</link>
-        where only some columns are auto-updateable (Dean Rasheed)
+        Allow views to be <link
+        linkend="SQL-CREATEVIEW-updatable-views">automatically
+        updated</link> even if they contain some non-updatable columns
+        (Dean Rasheed)
        </para>
 
        <para>
-        Previously the presence of a non-auto-updateable column prevented
-        all columns from being auto-updated.  Deletes are now supported
-        on suitable views even if no auto-updateable columns are present.
+        Previously the presence of non-updatable columns such as
+        expressions, literals, and function calls prevented automatic
+        updates.  Now <command>INSERT</>s, <command>UPDATE</>s and
+        <command>DELETE</>s are supported, provided that they do not
+        attempt to assign new values to any of the non-updatable columns.
        </para>
       </listitem>
 
       <listitem>
        <para>
         Allow control over whether <command>INSERT</>s and
-        <command>UPDATE</>s can add rows to an auto-updateable view that
+        <command>UPDATE</>s can add rows to an auto-updatable view that
         would no longer appear in the view (Dean Rasheed)
        </para>
 
@@ -1125,7 +1147,7 @@
       <listitem>
        <para>
         Allow <link linkend="rules-privileges">security barrier views</>
-        to be automatically updateable (Dean Rasheed)
+        to be automatically updatable (Dean Rasheed)
        </para>
       </listitem>
 
@@ -1156,7 +1178,7 @@
 
       <listitem>
        <para>
-        Improve the internal definition of system relations (Andres Freund,
+        Improve how system-level relations are designated (Andres Freund,
         Robert Haas)
        </para>
 
@@ -1181,6 +1203,11 @@
         AGGREGATE</></link> to supply the size of the aggregate's
         transition state data (Hadi Moshayedi)
        </para>
+
+       <para>
+        This allows the optimizer to better estimate how much memory will be
+        used by aggregates.
+       </para>
       </listitem>
 
      </itemizedlist>
@@ -1200,7 +1227,7 @@
 
       <listitem>
        <para>
-        Allow the changing of foreign key constraint  via <link
+        Allow changing foreign key constraint deferrability via <link
         linkend="SQL-ALTERTABLE"><command>ALTER TABLE</></link>
         ... <literal>ALTER CONSTRAINT</> (Simon Riggs)
        </para>
@@ -1236,7 +1263,7 @@
 
       <listitem>
        <para>
-        Fully-implement the <link
+        Fully implement the <link
         linkend="datatype-line"><type>line</></link> data type (Peter
         Eisentraut)
        </para>
@@ -1244,7 +1271,8 @@
        <para>
         The line <emphasis>segment</> data type (<link
         linkend="datatype-lseg"><type>LSEG</></link>) has always been
-        fully supported.
+        fully supported.  The previous <type>line</> data type (enabled
+        only via a compile-time option) is not binary or dump-compatible.
        </para>
       </listitem>
 
@@ -1299,8 +1327,8 @@
         <para>
          This allows for faster access to values in the <type>JSON</>
          document and faster and more useful indexing of <type>JSON</>.
-         <type>JSONB</> values are also typed as appropriate scalar
-         SQL types.
+         Scalar values in <type>JSONB</> documents are typed as appropriate
+         scalar SQL types.
         </para>
        </listitem>
 
@@ -1453,7 +1481,7 @@
        <para>
         Add function <link
         linkend="functions-admin-dblocation"><function>pg_filenode_relation()</></link>
-        to allow for more efficient filenode to relation lookups (Andres
+        to allow for more efficient lookup of relation names from filenodes (Andres
         Freund)
        </para>
       </listitem>
@@ -1524,10 +1552,13 @@
       </listitem>
 
       <listitem>
-       <!-- FIXME -->
        <para>
         Allow polymorphic aggregates to have non-polymorphic state data
-        types ? (Tom Lane)
+        types (Tom Lane)
+       </para>
+       <para>
+        This allows the declaration of aggregates like the built-in
+        aggregate <function>array_agg()</> in SQL.
        </para>
       </listitem>
 
@@ -1587,7 +1618,7 @@
        <para>
         Add variables <link
         linkend="plpgsql-extra-checks"><varname>plpgsql.extra_warnings</></link>
-        and <varname>plpgsql.extra_errors</>to enable additional PL/pgSQL
+        and <varname>plpgsql.extra_errors</> to enable additional PL/pgSQL
         warnings and errors (Marko Tiikkaja, Petr Jelinek)
        </para>
 
@@ -1753,7 +1784,8 @@
 
       <listitem>
        <para>
-        Allow field wrapping to <application>psql</>'s "extended" mode
+        Add ability to wrap long lines in <application>psql</>'s
+        <literal>expanded</> mode by using <command>\pset format wrapped</>
         (Sergey Muraviov)
        </para>
       </listitem>
@@ -2199,7 +2231,8 @@
       <listitem>
        <para>
         Add <link linkend="pgprewarm"><application>pg_prewarm</></link>
-        to preload relation data into the shared buffer cache (Robert Haas)
+        extension to preload relation data into the shared buffer cache
+        (Robert Haas)
        </para>
 
        <para>
@@ -2224,7 +2257,7 @@
 
       <listitem>
        <para>
-        Add logging of trigger execution to <link
+        Add option to include trigger execution time to <link
         linkend="auto-explain"><application>auto_explain</></link>
         (Horiguchi Kyotaro)
        </para>
@@ -2260,9 +2293,10 @@
 
       <listitem>
        <para>
-        Improve indexing of <link
-        linkend="pgtrgm"><application>pg_trgm</></link> values to
-        discourage indexing whitespace (Alexander Korotkov)
+        Improve <link linkend="pgtrgm"><application>pg_trgm</>'s</link>
+        generation of trigrams for indexed regular expression searches by
+        discouraging the indexing of trigrams containing whitespace (Alexander
+        Korotkov)
        </para>
       </listitem>
 
@@ -2309,7 +2343,7 @@
 
       <listitem>
        <para>
-        Allow pgbench to process script files of any line length (Sawada
+        Allow <application>pgbench</> to process script files of any line length (Sawada
         Masahiko)
        </para>
 
@@ -2320,20 +2354,20 @@
 
       <listitem>
        <para>
-        Add <application>pg_bench</> option (<option>--rate</>) to control
+        Add <application>pgbench</> option (<option>--rate</>) to control
         the transaction rate (Fabien Coelho)
        </para>
       </listitem>
 
       <listitem>
        <para>
-        Add <option>--progress</> output option to pgbench (Fabien Coelho)
+        Add <option>--progress</> output option to <application>pgbench</> (Fabien Coelho)
        </para>
       </listitem>
 
       <listitem>
        <para>
-        Add long options to pgbench (Fabien Coelho)
+        Add long options to <application>pgbench</> (Fabien Coelho)
        </para>
       </listitem>
 
