@@ -245,7 +245,7 @@ spgItemPointerSet(ItemPointer iptr, BlockNumber blkno, OffsetNumber offset)
  * Inner tuple layout:
  * header/optional prefix/array of nodes, which are SpGistNodeTuples
  *
- * size and prefixSize must be multiples of MAXALIGN
+ * size must be multiples of MAXALIGN
  */
 typedef struct SpGistInnerTupleData
 {
@@ -260,7 +260,7 @@ typedef struct SpGistInnerTupleData
 typedef SpGistInnerTupleData *SpGistInnerTuple;
 
 /* these must match largest values that fit in bit fields declared above */
-#define SGITMAXNNODES		0x1FFF
+#define SGITMAXNNODES		0x0FFF
 #define SGITMAXPREFIXSIZE	0xFFFF
 #define SGITMAXSIZE			0xFFFF
 
