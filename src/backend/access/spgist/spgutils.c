@@ -641,7 +641,7 @@ spgGetDatum(SpGistTypeDesc* att, char *ptr)
 				break;
 #if SIZEOF_DATUM == 8
 			case 8:
-				memcpy(&v.u64, ptr, 4);
+				memcpy(&v.u64, ptr, 8);
 				r = SET_8_BYTES(v.u64);
 				break;
 #endif
