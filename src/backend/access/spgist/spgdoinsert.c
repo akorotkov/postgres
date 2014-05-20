@@ -600,7 +600,6 @@ checkAllTheSame(spgPickSplitIn *in, spgPickSplitOut *out, bool tooBig,
 				bool *includeNew)
 {
 	int			theNode;
-	int			limit;
 	int			i;
 
 	/* For the moment, assume we can include the new leaf tuple */
@@ -610,22 +609,24 @@ checkAllTheSame(spgPickSplitIn *in, spgPickSplitOut *out, bool tooBig,
 	if (in->nTuples <= 1)
 		return false;
 
-	/* If tuple set doesn't fit on one page, ignore the new tuple in test */
-	limit = tooBig ? in->nTuples - 1 : in->nTuples;
-
 	/* Check to see if more than one node is populated */
 	theNode = out->mapTuplesToNodes[0];
-	for (i = 1; i < limit; i++)
+	for (i = 1; i < in->nTuples; i++)
 	{
 		if (out->mapTuplesToNodes[i] != theNode)
+		{
+			/*
+			 * It's possible that new value are different from all others and
+			 * other values are the same.  We will reserve a node for new 
+			 * value although its pointer could be invalid
+			 */
+			if (tooBig)
+				*includeNew = false;
 			return false;
+		}
 	}
 
 	/* Nope, so override the picksplit function's decisions */
-
-	/* If the new tuple is in its own node, it can't be included in split */
-	if (tooBig && out->mapTuplesToNodes[in->nTuples - 1] != theNode)
-		*includeNew = false;
 
 	out->nNodes = 8;			/* arbitrary number of child nodes */
 

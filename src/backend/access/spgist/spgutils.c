@@ -685,6 +685,7 @@ spgFormNodeTuple(SpGistState *state, Datum label, bool isnull)
 		memcpyDatum(SGNTDATAPTR(tup), &state->attLabelType, label);
 
 	/* The tid field will be filled in later */
+	SGNTSETITEMPOINTER(tup, InvalidBlockNumber, InvalidOffsetNumber);
 
 	return tup;
 }
