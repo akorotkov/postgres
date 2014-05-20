@@ -640,7 +640,7 @@ entrySplitPage(GinBtree btree, Buffer origbuf,
 	tupstoresize = ptr - tupstore;
 
 	if (GinPageRightMost(lpage))
-		threshold = (Size) (totalsize * 0.9);
+		threshold = (Size) (totalsize * btree->fillfactor);
 	else
 		threshold = totalsize / 2;
 
@@ -752,6 +752,7 @@ ginPrepareEntryScan(GinBtree btree, OffsetNumber attnum,
 	btree->index = ginstate->index;
 	btree->rootBlkno = GIN_ROOT_BLKNO;
 	btree->ginstate = ginstate;
+	btree->fillfactor = 0.9;
 
 	btree->findChildPage = entryLocateEntry;
 	btree->getLeftMostChild = entryGetLeftMostPage;

@@ -33,6 +33,8 @@ typedef struct
 	MemoryContext tmpCtx;
 	MemoryContext funcCtx;
 	BuildAccumulator accum;
+	BlockNumber	firstblkno;
+	BlockNumber	nblocks;
 } GinBuildState;
 
 
@@ -176,7 +178,7 @@ void
 ginEntryInsert(GinState *ginstate,
 			   OffsetNumber attnum, Datum key, GinNullCategory category,
 			   ItemPointerData *items, uint32 nitem,
-			   GinStatsData *buildStats)
+			   GinStatsData *buildStats, double fillfactor)
 {
 	GinBtreeData btree;
 	GinBtreeEntryInsertData insertdata;
@@ -191,6 +193,7 @@ ginEntryInsert(GinState *ginstate,
 		buildStats->nEntries++;
 
 	ginPrepareEntryScan(&btree, attnum, key, category, ginstate);
+	btree.fillfactor = fillfactor;
 
 	stack = ginFindLeafPage(&btree, false);
 	page = BufferGetPage(stack->buffer);
@@ -275,6 +278,9 @@ ginBuildCallback(Relation index, HeapTuple htup, Datum *values,
 
 	oldCtx = MemoryContextSwitchTo(buildstate->tmpCtx);
 
+	if (buildstate->firstblkno == InvalidBlockNumber)
+		buildstate->firstblkno = ItemPointerGetBlockNumber(&htup->t_self);
+
 	for (i = 0; i < buildstate->ginstate.origTupdesc->natts; i++)
 		ginHeapTupleBulkInsert(buildstate, (OffsetNumber) (i + 1),
 							   values[i], isnull[i],
@@ -288,6 +294,31 @@ ginBuildCallback(Relation index, HeapTuple htup, Datum *values,
 		GinNullCategory category;
 		uint32		nlist;
 		OffsetNumber attnum;
+		BlockNumber	nblocks, delta, blkno;
+		double		fillfactor;
+
+		blkno = ItemPointerGetBlockNumber(&htup->t_self);
+		nblocks = buildstate->nblocks;
+		if (blkno > buildstate->firstblkno)
+		{
+			delta = blkno - buildstate->firstblkno + 1;
+		}
+		else
+		{
+			delta = nblocks - (buildstate->firstblkno - blkno);
+		}
+
+		if (delta > 0)
+		{
+			fillfactor = 0.9 * (double)delta / (double)nblocks;
+			if (fillfactor < 0.5)
+				fillfactor = 0.75;
+			fillfactor = Min(0.9, fillfactor);
+		}
+		else
+		{
+			fillfactor = 0.75;
+		}
 
 		ginBeginBAScan(&buildstate->accum);
 		while ((list = ginGetBAEntry(&buildstate->accum,
@@ -296,7 +327,7 @@ ginBuildCallback(Relation index, HeapTuple htup, Datum *values,
 			/* there could be many entries, so be willing to abort here */
 			CHECK_FOR_INTERRUPTS();
 			ginEntryInsert(&buildstate->ginstate, attnum, key, category,
-						   list, nlist, &buildstate->buildStats);
+						   list, nlist, &buildstate->buildStats, fillfactor);
 		}
 
 		MemoryContextReset(buildstate->tmpCtx);
@@ -388,6 +419,9 @@ ginbuild(PG_FUNCTION_ARGS)
 											   ALLOCSET_DEFAULT_MAXSIZE);
 
 	buildstate.accum.ginstate = &buildstate.ginstate;
+	buildstate.firstblkno = InvalidBlockNumber;
+	RelationOpenSmgr(heap);
+	buildstate.nblocks = smgrnblocks(heap->rd_smgr, MAIN_FORKNUM);
 	ginInitBA(&buildstate.accum);
 
 	/*
@@ -406,7 +440,7 @@ ginbuild(PG_FUNCTION_ARGS)
 		/* there could be many entries, so be willing to abort here */
 		CHECK_FOR_INTERRUPTS();
 		ginEntryInsert(&buildstate.ginstate, attnum, key, category,
-					   list, nlist, &buildstate.buildStats);
+					   list, nlist, &buildstate.buildStats, 0.9);
 	}
 	MemoryContextSwitchTo(oldCtx);
 
@@ -483,7 +517,7 @@ ginHeapTupleInsert(GinState *ginstate, OffsetNumber attnum,
 
 	for (i = 0; i < nentries; i++)
 		ginEntryInsert(ginstate, attnum, entries[i], categories[i],
-					   item, 1, NULL);
+					   item, 1, NULL, 0.9);
 }
 
 Datum

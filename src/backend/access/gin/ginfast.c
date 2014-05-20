@@ -834,7 +834,7 @@ ginInsertCleanup(GinState *ginstate,
 								  &attnum, &key, &category, &nlist)) != NULL)
 			{
 				ginEntryInsert(ginstate, attnum, key, category,
-							   list, nlist, NULL);
+							   list, nlist, NULL, 0.9);
 				if (vac_delay)
 					vacuum_delay_point();
 			}
@@ -870,7 +870,7 @@ ginInsertCleanup(GinState *ginstate,
 				while ((list = ginGetBAEntry(&accum,
 								  &attnum, &key, &category, &nlist)) != NULL)
 					ginEntryInsert(ginstate, attnum, key, category,
-								   list, nlist, NULL);
+								   list, nlist, NULL, 0.9);
 			}
 
 			/*

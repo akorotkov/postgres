@@ -631,7 +631,7 @@ extern Datum gininsert(PG_FUNCTION_ARGS);
 extern void ginEntryInsert(GinState *ginstate,
 			   OffsetNumber attnum, Datum key, GinNullCategory category,
 			   ItemPointerData *items, uint32 nitem,
-			   GinStatsData *buildStats);
+			   GinStatsData *buildStats, double fillfactor);
 
 /* ginbtree.c */
 
@@ -685,6 +685,7 @@ typedef struct GinBtreeData
 
 	/* Search key for data tree (posting tree) */
 	ItemPointerData itemptr;
+	double		fillfactor;
 } GinBtreeData;
 
 /* This represents a tuple to be inserted to entry tree. */
