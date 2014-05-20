@@ -588,7 +588,7 @@ entrySplitPage(GinBtree btree, Buffer origbuf,
 	OffsetNumber i,
 				maxoff,
 				separator = InvalidOffsetNumber;
-	Size		totalsize = 0;
+	Size		totalsize = 0, threshold;
 	Size		tupstoresize;
 	Size		lsize = 0,
 				size;
@@ -639,6 +639,11 @@ entrySplitPage(GinBtree btree, Buffer origbuf,
 	}
 	tupstoresize = ptr - tupstore;
 
+	if (GinPageRightMost(lpage))
+		threshold = (Size) (totalsize * 0.9);
+	else
+		threshold = totalsize / 2;
+
 	/*
 	 * Initialize the left and right pages, and copy all the tuples back to
 	 * them.
@@ -655,7 +660,7 @@ entrySplitPage(GinBtree btree, Buffer origbuf,
 	{
 		itup = (IndexTuple) ptr;
 
-		if (lsize > totalsize / 2)
+		if (lsize > threshold || i == maxoff)
 		{
 			if (separator == InvalidOffsetNumber)
 				separator = i - 1;
