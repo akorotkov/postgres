@@ -171,24 +171,36 @@ static int	NextEOXactTupleDescNum = 0;
 static int	EOXactTupleDescArrayLen = 0;
 
 /*
- *		macros to manipulate the lookup hashtables
+ *		macros to manipulate the lookup hashtable
  */
-#define RelationCacheInsert(RELATION)	\
+#define RelationCacheInsert(RELATION, replace_allowed)	\
 do { \
-	RelIdCacheEnt *idhentry; bool found; \
-	idhentry = (RelIdCacheEnt*)hash_search(RelationIdCache, \
-										   (void *) &(RELATION->rd_id), \
+	RelIdCacheEnt *hentry; bool found; \
+	hentry = (RelIdCacheEnt *) hash_search(RelationIdCache, \
+										   (void *) &((RELATION)->rd_id), \
 										   HASH_ENTER, &found); \
-	/* used to give notice if found -- now just keep quiet */ \
-	idhentry->reldesc = RELATION; \
+	if (found) \
+	{ \
+		/* see comments in RelationBuildDesc and RelationBuildLocalRelation */ \
+		Relation _old_rel = hentry->reldesc; \
+		Assert(replace_allowed); \
+		hentry->reldesc = (RELATION); \
+		if (RelationHasReferenceCountZero(_old_rel)) \
+			RelationDestroyRelation(_old_rel, false); \
+		else if (!IsBootstrapProcessingMode()) \
+			elog(WARNING, "leaking still-referenced relcache entry for \"%s\"", \
+				 RelationGetRelationName(_old_rel)); \
+	} \
+	else \
+		hentry->reldesc = (RELATION); \
 } while(0)
 
 #define RelationIdCacheLookup(ID, RELATION) \
 do { \
 	RelIdCacheEnt *hentry; \
-	hentry = (RelIdCacheEnt*)hash_search(RelationIdCache, \
-										 (void *) &(ID), \
-										 HASH_FIND, NULL); \
+	hentry = (RelIdCacheEnt *) hash_search(RelationIdCache, \
+										   (void *) &(ID), \
+										   HASH_FIND, NULL); \
 	if (hentry) \
 		RELATION = hentry->reldesc; \
 	else \
@@ -197,12 +209,13 @@ do { \
 
 #define RelationCacheDelete(RELATION) \
 do { \
-	RelIdCacheEnt *idhentry; \
-	idhentry = (RelIdCacheEnt*)hash_search(RelationIdCache, \
-										   (void *) &(RELATION->rd_id), \
+	RelIdCacheEnt *hentry; \
+	hentry = (RelIdCacheEnt *) hash_search(RelationIdCache, \
+										   (void *) &((RELATION)->rd_id), \
 										   HASH_REMOVE, NULL); \
-	if (idhentry == NULL) \
-		elog(WARNING, "trying to delete a rd_id reldesc that does not exist"); \
+	if (hentry == NULL) \
+		elog(WARNING, "failed to delete relcache entry for OID %u", \
+			 (RELATION)->rd_id); \
 } while(0)
 
 static HTAB *OpClassCache = NULL;
@@ -963,9 +976,18 @@ RelationBuildDesc(Oid targetRelId, bool insertIt)
 
 	/*
 	 * Insert newly created relation into relcache hash table, if requested.
+	 *
+	 * There is one scenario in which we might find a hashtable entry already
+	 * present, even though our caller failed to find it: if the relation is a
+	 * system catalog or index that's used during relcache load, we might have
+	 * recursively created the same relcache entry during the preceding steps.
+	 * So allow RelationCacheInsert to delete any already-present relcache
+	 * entry for the same OID.  The already-present entry should have refcount
+	 * zero (else somebody forgot to close it); in the event that it doesn't,
+	 * we'll elog a WARNING and leak the already-present entry.
 	 */
 	if (insertIt)
-		RelationCacheInsert(relation);
+		RelationCacheInsert(relation, true);
 
 	/* It's fully valid */
 	relation->rd_isvalid = true;
@@ -1580,7 +1602,7 @@ formrdesc(const char *relationName, Oid relationReltype,
 	/*
 	 * add new reldesc to relcache
 	 */
-	RelationCacheInsert(relation);
+	RelationCacheInsert(relation, false);
 
 	/* It's fully valid */
 	relation->rd_isvalid = true;
@@ -1882,6 +1904,8 @@ RelationDestroyRelation(Relation relation, bool remember_tupdesc)
 	}
 	list_free(relation->rd_indexlist);
 	bms_free(relation->rd_indexattr);
+	bms_free(relation->rd_keyattr);
+	bms_free(relation->rd_idattr);
 	FreeTriggerDesc(relation->trigdesc);
 	if (relation->rd_options)
 		pfree(relation->rd_options);
@@ -2360,7 +2384,7 @@ RelationCloseSmgrByOid(Oid relationId)
 	RelationCloseSmgr(relation);
 }
 
-void
+static void
 RememberToFreeTupleDescAtEOX(TupleDesc td)
 {
 	if (EOXactTupleDescArray == NULL)
@@ -2528,6 +2552,7 @@ AtEOXact_cleanup(Relation relation, bool isCommit)
 		list_free(relation->rd_indexlist);
 		relation->rd_indexlist = NIL;
 		relation->rd_oidindex = InvalidOid;
+		relation->rd_replidindex = InvalidOid;
 		relation->rd_indexvalid = 0;
 	}
 }
@@ -2626,6 +2651,7 @@ AtEOSubXact_cleanup(Relation relation, bool isCommit,
 		list_free(relation->rd_indexlist);
 		relation->rd_indexlist = NIL;
 		relation->rd_oidindex = InvalidOid;
+		relation->rd_replidindex = InvalidOid;
 		relation->rd_indexvalid = 0;
 	}
 }
@@ -2816,9 +2842,15 @@ RelationBuildLocalRelation(const char *relname,
 	RelationInitPhysicalAddr(rel);
 
 	/*
-	 * Okay to insert into the relcache hash tables.
+	 * Okay to insert into the relcache hash table.
+	 *
+	 * Ordinarily, there should certainly not be an existing hash entry for
+	 * the same OID; but during bootstrap, when we create a "real" relcache
+	 * entry for one of the bootstrap relations, we'll be overwriting the
+	 * phony one created with formrdesc.  So allow that to happen for nailed
+	 * rels.
 	 */
-	RelationCacheInsert(rel);
+	RelationCacheInsert(rel, nailit);
 
 	/*
 	 * Flag relation as needing eoxact cleanup (to clear rd_createSubid). We
@@ -3466,8 +3498,13 @@ AttrDefaultFetch(Relation relation)
 				NameStr(relation->rd_att->attrs[adform->adnum - 1]->attname),
 					 RelationGetRelationName(relation));
 			else
-				attrdef[i].adbin = MemoryContextStrdup(CacheMemoryContext,
-												   TextDatumGetCString(val));
+			{
+				/* detoast and convert to cstring in caller's context */
+				char	   *s = TextDatumGetCString(val);
+
+				attrdef[i].adbin = MemoryContextStrdup(CacheMemoryContext, s);
+				pfree(s);
+			}
 			break;
 		}
 
@@ -3577,6 +3614,10 @@ CheckConstraintFetch(Relation relation)
  * of the index list.  rd_oidindex is valid when rd_indexvalid isn't zero;
  * it is the pg_class OID of a unique index on OID when the relation has one,
  * and InvalidOid if there is no such index.
+ *
+ * In exactly the same way, we update rd_replidindex, which is the pg_class
+ * OID of an index to be used as the relation's replication identity index,
+ * or InvalidOid if there is no such index.
  */
 List *
 RelationGetIndexList(Relation relation)
@@ -3648,8 +3689,8 @@ RelationGetIndexList(Relation relation)
 
 		/*
 		 * Invalid, non-unique, non-immediate or predicate indexes aren't
-		 * interesting for neither oid indexes nor replication identity
-		 * indexes, so don't check them.
+		 * interesting for either oid indexes or replication identity indexes,
+		 * so don't check them.
 		 */
 		if (!IndexIsValid(index) || !index->indisunique ||
 			!index->indimmediate ||
@@ -3662,28 +3703,16 @@ RelationGetIndexList(Relation relation)
 			indclass->values[0] == OID_BTREE_OPS_OID)
 			oidIndex = index->indexrelid;
 
-		/* always prefer primary keys */
+		/* remember primary key index if any */
 		if (index->indisprimary)
 			pkeyIndex = index->indexrelid;
 
-		/* explicitly chosen index */
+		/* remember explicitly chosen replica index */
 		if (index->indisreplident)
 			candidateIndex = index->indexrelid;
 	}
 
 	systable_endscan(indscan);
-
-	/* primary key */
-	if (replident == REPLICA_IDENTITY_DEFAULT &&
-		OidIsValid(pkeyIndex))
-		relation->rd_replidindex = pkeyIndex;
-	/* explicitly chosen index */
-	else if (replident == REPLICA_IDENTITY_INDEX &&
-			 OidIsValid(candidateIndex))
-		relation->rd_replidindex = candidateIndex;
-	/* nothing */
-	else
-		relation->rd_replidindex = InvalidOid;
 
 	heap_close(indrel, AccessShareLock);
 
@@ -3691,6 +3720,12 @@ RelationGetIndexList(Relation relation)
 	oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
 	relation->rd_indexlist = list_copy(result);
 	relation->rd_oidindex = oidIndex;
+	if (replident == REPLICA_IDENTITY_DEFAULT && OidIsValid(pkeyIndex))
+		relation->rd_replidindex = pkeyIndex;
+	else if (replident == REPLICA_IDENTITY_INDEX && OidIsValid(candidateIndex))
+		relation->rd_replidindex = candidateIndex;
+	else
+		relation->rd_replidindex = InvalidOid;
 	relation->rd_indexvalid = 1;
 	MemoryContextSwitchTo(oldcxt);
 
@@ -3748,7 +3783,8 @@ insert_ordered_oid(List *list, Oid datum)
  * correctly with respect to the full index set.  It is up to the caller
  * to ensure that a correct rd_indexattr set has been cached before first
  * calling RelationSetIndexList; else a subsequent inquiry might cause a
- * wrong rd_indexattr set to get computed and cached.
+ * wrong rd_indexattr set to get computed and cached.  Likewise, we do not
+ * touch rd_keyattr or rd_idattr.
  */
 void
 RelationSetIndexList(Relation relation, List *indexIds, Oid oidIndex)
@@ -3764,6 +3800,8 @@ RelationSetIndexList(Relation relation, List *indexIds, Oid oidIndex)
 	list_free(relation->rd_indexlist);
 	relation->rd_indexlist = indexIds;
 	relation->rd_oidindex = oidIndex;
+	/* For the moment, assume the target rel hasn't got a replica index */
+	relation->rd_replidindex = InvalidOid;
 	relation->rd_indexvalid = 2;	/* mark list as forced */
 	/* Flag relation as needing eoxact cleanup (to reset the list) */
 	EOXactListAdd(relation);
@@ -3795,6 +3833,27 @@ RelationGetOidIndex(Relation relation)
 	}
 
 	return relation->rd_oidindex;
+}
+
+/*
+ * RelationGetReplicaIndex -- get OID of the relation's replica identity index
+ *
+ * Returns InvalidOid if there is no such index.
+ */
+Oid
+RelationGetReplicaIndex(Relation relation)
+{
+	List	   *ilist;
+
+	if (relation->rd_indexvalid == 0)
+	{
+		/* RelationGetIndexList does the heavy lifting. */
+		ilist = RelationGetIndexList(relation);
+		list_free(ilist);
+		Assert(relation->rd_indexvalid != 0);
+	}
+
+	return relation->rd_replidindex;
 }
 
 /*
@@ -3935,8 +3994,8 @@ RelationGetIndexPredicate(Relation relation)
  * predicates.)
  *
  * Depending on attrKind, a bitmap covering the attnums for all index columns,
- * for all key columns or for all the columns the configured replica identity
- * are returned.
+ * for all potential foreign key columns, or for all columns in the configured
+ * replica identity index is returned.
  *
  * Attribute numbers are offset by FirstLowInvalidHeapAttributeNumber so that
  * we can include system attributes (e.g., OID) in the bitmap representation.
@@ -3955,22 +4014,25 @@ RelationGetIndexAttrBitmap(Relation relation, IndexAttrBitmapKind attrKind)
 	Bitmapset  *uindexattrs;	/* columns in unique indexes */
 	Bitmapset  *idindexattrs;	/* columns in the replica identity */
 	List	   *indexoidlist;
+	Oid			relreplindex;
 	ListCell   *l;
 	MemoryContext oldcxt;
 
 	/* Quick exit if we already computed the result. */
 	if (relation->rd_indexattr != NULL)
+	{
 		switch (attrKind)
 		{
-			case INDEX_ATTR_BITMAP_IDENTITY_KEY:
-				return bms_copy(relation->rd_idattr);
-			case INDEX_ATTR_BITMAP_KEY:
-				return bms_copy(relation->rd_keyattr);
 			case INDEX_ATTR_BITMAP_ALL:
 				return bms_copy(relation->rd_indexattr);
+			case INDEX_ATTR_BITMAP_KEY:
+				return bms_copy(relation->rd_keyattr);
+			case INDEX_ATTR_BITMAP_IDENTITY_KEY:
+				return bms_copy(relation->rd_idattr);
 			default:
 				elog(ERROR, "unknown attrKind %u", attrKind);
 		}
+	}
 
 	/* Fast path if definitely no indexes */
 	if (!RelationGetForm(relation)->relhasindex)
@@ -3984,6 +4046,15 @@ RelationGetIndexAttrBitmap(Relation relation, IndexAttrBitmapKind attrKind)
 	/* Fall out if no indexes (but relhasindex was set) */
 	if (indexoidlist == NIL)
 		return NULL;
+
+	/*
+	 * Copy the rd_replidindex value computed by RelationGetIndexList before
+	 * proceeding.  This is needed because a relcache flush could occur inside
+	 * index_open below, resetting the fields managed by RelationGetIndexList.
+	 * (The values we're computing will still be valid, assuming that caller
+	 * has a sufficient lock on the relation.)
+	 */
+	relreplindex = relation->rd_replidindex;
 
 	/*
 	 * For each index, add referenced attributes to indexattrs.
@@ -4007,7 +4078,6 @@ RelationGetIndexAttrBitmap(Relation relation, IndexAttrBitmapKind attrKind)
 		bool		isKey;		/* candidate key */
 		bool		isIDKey;	/* replica identity index */
 
-
 		indexDesc = index_open(indexOid, AccessShareLock);
 
 		/* Extract index key information from the index's pg_index row */
@@ -4019,7 +4089,7 @@ RelationGetIndexAttrBitmap(Relation relation, IndexAttrBitmapKind attrKind)
 			indexInfo->ii_Predicate == NIL;
 
 		/* Is this index the configured (or default) replica identity? */
-		isIDKey = indexOid == relation->rd_replidindex;
+		isIDKey = (indexOid == relreplindex);
 
 		/* Collect simple attribute references */
 		for (i = 0; i < indexInfo->ii_NumIndexAttrs; i++)
@@ -4031,12 +4101,12 @@ RelationGetIndexAttrBitmap(Relation relation, IndexAttrBitmapKind attrKind)
 				indexattrs = bms_add_member(indexattrs,
 							   attrnum - FirstLowInvalidHeapAttributeNumber);
 
-				if (isIDKey)
-					idindexattrs = bms_add_member(idindexattrs,
-							   attrnum - FirstLowInvalidHeapAttributeNumber);
-
 				if (isKey)
 					uindexattrs = bms_add_member(uindexattrs,
+							   attrnum - FirstLowInvalidHeapAttributeNumber);
+
+				if (isIDKey)
+					idindexattrs = bms_add_member(idindexattrs,
 							   attrnum - FirstLowInvalidHeapAttributeNumber);
 			}
 		}
@@ -4052,22 +4122,28 @@ RelationGetIndexAttrBitmap(Relation relation, IndexAttrBitmapKind attrKind)
 
 	list_free(indexoidlist);
 
-	/* Now save a copy of the bitmap in the relcache entry. */
+	/*
+	 * Now save copies of the bitmaps in the relcache entry.  We intentionally
+	 * set rd_indexattr last, because that's the one that signals validity of
+	 * the values; if we run out of memory before making that copy, we won't
+	 * leave the relcache entry looking like the other ones are valid but
+	 * empty.
+	 */
 	oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
-	relation->rd_indexattr = bms_copy(indexattrs);
 	relation->rd_keyattr = bms_copy(uindexattrs);
 	relation->rd_idattr = bms_copy(idindexattrs);
+	relation->rd_indexattr = bms_copy(indexattrs);
 	MemoryContextSwitchTo(oldcxt);
 
 	/* We return our original working copy for caller to play with */
 	switch (attrKind)
 	{
-		case INDEX_ATTR_BITMAP_IDENTITY_KEY:
-			return idindexattrs;
-		case INDEX_ATTR_BITMAP_KEY:
-			return uindexattrs;
 		case INDEX_ATTR_BITMAP_ALL:
 			return indexattrs;
+		case INDEX_ATTR_BITMAP_KEY:
+			return uindexattrs;
+		case INDEX_ATTR_BITMAP_IDENTITY_KEY:
+			return idindexattrs;
 		default:
 			elog(ERROR, "unknown attrKind %u", attrKind);
 			return NULL;
@@ -4611,8 +4687,11 @@ load_relcache_init_file(bool shared)
 			rel->rd_refcnt = 0;
 		rel->rd_indexvalid = 0;
 		rel->rd_indexlist = NIL;
-		rel->rd_indexattr = NULL;
 		rel->rd_oidindex = InvalidOid;
+		rel->rd_replidindex = InvalidOid;
+		rel->rd_indexattr = NULL;
+		rel->rd_keyattr = NULL;
+		rel->rd_idattr = NULL;
 		rel->rd_createSubid = InvalidSubTransactionId;
 		rel->rd_newRelfilenodeSubid = InvalidSubTransactionId;
 		rel->rd_amcache = NULL;
@@ -4652,7 +4731,7 @@ load_relcache_init_file(bool shared)
 	 */
 	for (relno = 0; relno < num_rels; relno++)
 	{
-		RelationCacheInsert(rels[relno]);
+		RelationCacheInsert(rels[relno], false);
 		/* also make a list of their OIDs, for RelationIdIsInInitFile */
 		if (!shared)
 			initFileRelationIds = lcons_oid(RelationGetRelid(rels[relno]),

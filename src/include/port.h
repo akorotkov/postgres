@@ -302,6 +302,18 @@ extern FILE *pgwin32_fopen(const char *, const char *);
 #endif
 
 /*
+ * Mingw-w64 headers #define popen and pclose to _popen and _pclose.  We want
+ * to use our popen wrapper, rather than plain _popen, so override that.  For
+ * consistency, use our version of pclose, too.
+ */
+#ifdef popen
+#undef popen
+#endif
+#ifdef pclose
+#undef pclose
+#endif
+
+/*
  * system() and popen() replacements to enclose the command in an extra
  * pair of quotes.
  */
@@ -325,6 +337,20 @@ extern int	gettimeofday(struct timeval * tp, struct timezone * tzp);
  */
 #define closesocket close
 #endif   /* WIN32 */
+
+/*
+ * On Windows, setvbuf() does not support _IOLBF mode, and interprets that
+ * as _IOFBF.  To add insult to injury, setvbuf(file, NULL, _IOFBF, 0)
+ * crashes outright if "parameter validation" is enabled.  Therefore, in
+ * places where we'd like to select line-buffered mode, we fall back to
+ * unbuffered mode instead on Windows.  Always use PG_IOLBF not _IOLBF
+ * directly in order to implement this behavior.
+ */
+#ifndef WIN32
+#define PG_IOLBF	_IOLBF
+#else
+#define PG_IOLBF	_IONBF
+#endif
 
 /*
  * Default "extern" declarations or macro substitutes for library routines.

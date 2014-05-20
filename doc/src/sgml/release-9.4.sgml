@@ -7,7 +7,7 @@
   <note>
    <title>Release Date</title>
    <simpara>2014-??-??</simpara>
-   <simpara>Current as of 2014-05-03</simpara>
+   <simpara>Current as of 2014-05-10</simpara>
   </note>
 
   <sect2>
@@ -29,8 +29,8 @@
 
      <listitem>
       <para>
-       Logical change-set extraction allows database
-       changes to be optionally recorded in <emphasis>logical</> format
+       <link linkend="logicaldecoding">Logical decoding</link> allows database
+       changes to be streamed out in a customizable format
       </para>
      </listitem>
 
@@ -52,7 +52,7 @@
      <listitem>
       <para>
        Add <acronym>SQL</>-level command <link
-       linkend="SQL-ALTERSYSTEM"><command>ALTER SYSTEM</></link> command
+       linkend="SQL-ALTERSYSTEM"><command>ALTER SYSTEM</></link>
        to edit the <filename>postgresql.conf</> configuration file
       </para>
      </listitem>
@@ -89,7 +89,7 @@
       linkend="functions-formatting-table"><function>to_timestamp()</></link>
       and <function>to_date()</> format strings to consume a corresponding
       number of characters in the input string (whitespace or not), then
-      conditionally additional adjacent whitespace if not in <literal>FX</>
+      conditionally consume adjacent whitespace if not in <literal>FX</>
       mode (Jeevan Chalke)
      </para>
 
@@ -98,7 +98,7 @@
       format string behaved like a single whitespace character and consumed
       all adjacent whitespace in the input string.  For example, previously
       format string space-space-space would consume only the first space in
-      ' 12', while it will not consume all three characters.
+      ' 12', while it will now consume all three characters.
      </para>
     </listitem>
 
@@ -122,7 +122,7 @@
      </para>
 
      <para>
-      Previously empty arrays were returned as one-dimensional empty arrays
+      Previously, empty arrays were returned as one-dimensional empty arrays
       whose text representation looked the same as zero-dimensional arrays
       (<literal>{}</>).  <application>intarray</>'s behavior in this area
       now matches the built-in array operators.
@@ -131,9 +131,9 @@
 
     <listitem>
      <para>
-      NULL <link
+      Disallow NULL <link
       linkend="xfunc-sql-variadic-functions"><literal>VARIADIC</></link>
-      function arguments are now disallowed (Pavel Stehule)
+      function arguments (Pavel Stehule)
      </para>
 
      <para>
@@ -175,7 +175,7 @@
      </para>
 
      <para>
-      Previously, stripped lexemes got a default location and could be
+      Previously stripped lexemes got a default location and could be
       considered if mixed with non-stripped lexemes.
      </para>
     </listitem>
@@ -185,7 +185,7 @@
       Prevent <link
       linkend="ddl-constraints-check-constraints"><literal>CHECK</></link>
       constraints from referencing system columns, except
-      <structname>tableoid</> (Amit Kapila)
+      <structfield>tableoid</> (Amit Kapila)
      </para>
 
      <para>
@@ -203,8 +203,23 @@
 
     <listitem>
      <para>
+      On Windows, automatically preserve quotes in command strings supplied
+      by the user (Heikki Linnakangas)
+     </para>
+
+     <para>
+      User commands that did their own quote preservation might need
+      adjustment, e.g.  <link
+      linkend="guc-archive-command">archive_command</link>, <link
+      linkend="restore-command">restore_command</link>, <command>COPY TO/FROM
+      PROGRAM</>.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
       Remove system column <link
-      linkend="catalog-pg-class"><structname>pg_class.reltoastidxid</></link>
+      linkend="catalog-pg-class"><structfield>pg_class.reltoastidxid</></link>
       (Michael Paquier)
      </para>
     </listitem>
@@ -218,6 +233,17 @@
      <para>
       The proper way to use <application>Kerberos</> authentication is
       with <acronym>GSSAPI</>.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Handle domains over arrays like plain arrays in PL/Python
+      (Rodolfo Campero)
+     </para>
+
+     <para>
+      Previously they were treated as strings.
      </para>
     </listitem>
 
@@ -240,7 +266,7 @@
     <listitem>
      <para>
       Remove system column <link
-      linkend="catalog-pg-rewrite"><structname>pg_rewrite.ev_attr</></link>
+      linkend="catalog-pg-rewrite"><structfield>pg_rewrite.ev_attr</></link>
       (Kevin Grittner)
      </para>
 
@@ -257,9 +283,24 @@
      </para>
 
      <para>
-      Previously, <option>-u</> was used to specify the user name.
+      Previously <option>-u</> was used to specify the user name.
       Also spell the long option as <option>--username</>, again for
       consistency with other tools.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      The maximum number of <link linkend="bgworker">background workers</link>
+      that can be registered
+      by <function>RegisterBackgroundWorker()</function> is now limited to
+      <link linkend="guc-max-worker-processes"><varname>max_worker_processes</></link>
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      <command>DISCARD ALL</> now also discards sequence state.
      </para>
     </listitem>
 
@@ -325,7 +366,7 @@
 
       <listitem>
        <para>
-        During immediate shutdown, send uncatchable termination signals
+        During immediate shutdown send uncatchable termination signals
         to child processes that have not already shutdown (MauMau,
         &Aacute;lvaro Herrera)
        </para>
@@ -452,15 +493,15 @@
 
       <listitem>
        <para>
-        <link linkend="vacuum-for-wraparound">Freeze</link>
-        tuples when tables are written with <link
+        Attempt to <link linkend="vacuum-for-wraparound">freeze</link>
+        tuples when tables are rewritten with <link
         linkend="SQL-CLUSTER"><command>CLUSTER</></link> or <link
         linkend="SQL-VACUUM"><command>VACUUM FULL</></link> (Robert Haas,
         Andres Freund)
        </para>
 
        <para>
-        This avoids the need to freeze the tuples in the future.
+        This can avoid the need to freeze the tuples in the future.
        </para>
       </listitem>
 
@@ -530,7 +571,7 @@
 
        <para>
         This appears in <link
-        linkend="pg-stat-all-tables-view"><structname>pg_stat_all_tables.n_mod_since_analyze</></link>.
+        linkend="pg-stat-all-tables-view"><structfield>pg_stat_all_tables.n_mod_since_analyze</></link>.
        </para>
       </listitem>
 
@@ -545,12 +586,9 @@
 
       <listitem>
        <para>
-        Add <structname>xid</> and <link
-        linkend="ddl-system-columns"><structname>xmin</></link>
-        to system views <link
-        linkend="pg-stat-activity-view"><structname>pg_stat_activity</></link>
-        and <link
-        linkend="pg-stat-replication-view"><structname>pg_stat_replication</></link>
+        Add <varname>backend_xid</> and <varname>backend_xmin</> columns to
+        the system view <link linkend="pg-stat-activity-view"><structname>pg_stat_activity</></link>
+        and <varname>backend_xmin</> to <link linkend="pg-stat-replication-view"><structname>pg_stat_replication</></link>
         (Christian Kruse)
        </para>
       </listitem>
@@ -571,10 +609,10 @@
        </para>
 
        <para>
-        Such keys are faster and have improved security
-        over previous options.  New variable <link
-        linkend="guc-ssl-ecdh-curve"><varname>ssl_ecdh_curve</></link>
-        controls the curve that is used.
+        Such keys are faster and have improved security over previous
+        options. The new configuration
+        parameter <link linkend="guc-ssl-ecdh-curve"><varname>ssl_ecdh_curve</></link>
+        controls which curve is used.
        </para>
       </listitem>
 
@@ -617,15 +655,14 @@
 
       <listitem>
        <para>
-        Add <acronym>SQL</>-level command <link
+        Add <acronym>SQL</>-level <link
         linkend="SQL-ALTERSYSTEM"><command>ALTER SYSTEM</></link> command
-        to edit the <filename>postgresql.conf</> configuration file
-        (Amit Kapila)
+        to adjust server-wide settings (Amit Kapila)
        </para>
 
        <para>
-        Previously <filename>postgresql.conf</> could only be edited at
-        the file system level.
+        Previously such settings could only be changed by
+        editing <filename>postgresql.conf</> at the file system level.
        </para>
       </listitem>
 
@@ -680,8 +717,8 @@
        </para>
 
        <para>
-        Hint bits are not normally logged, except when checksums are
-        enabled.  This is useful for tools like <application>pg_rewind</>.
+        Hint bits are not normally logged, except when checksums are enabled.
+        This is useful for external tools like <application>pg_rewind</>.
        </para>
       </listitem>
 
@@ -702,9 +739,10 @@
        </para>
 
        <para>
-        Such libraries are auto-<link
-        linkend="SQL-LOAD"><command>LOAD</></link>'ed, unlike <link
-        linkend="guc-local-preload-libraries"><varname>local_preload_libraries</></link>.
+        In contrast
+        to <link linkend="guc-local-preload-libraries"><varname>local_preload_libraries</></link>
+        this parameter can load any shared library, not just those in
+        the <filename>$libdir/plugins</> directory.
        </para>
       </listitem>
 
@@ -751,8 +789,8 @@
       <listitem>
        <para>
         Have Windows <acronym>ASCII</>-encoded databases and server process
-        (e.g.  <link linkend="app-postmaster">postmaster) emit messages
-        in the <envar>LC_CTYPE</></link>-defined language (Alexander Law,
+        (e.g.  <link linkend="app-postmaster">postmaster</>) emit messages
+        in the <envar>LC_CTYPE</>-defined language (Alexander Law,
         Noah Misch)
        </para>
 
@@ -775,16 +813,14 @@
 
       <listitem>
        <para>
-        Allow <link
-        linkend="recovery-config"><filename>recovery.conf</></link>
-        parameter <link
-        linkend="min-recovery-apply-delay"><varname>min_recovery_apply_delay</></link>
-        to force delayed replication (Robert Haas, Fabr&iacute;zio de
-        Royes Mello, Simon Riggs)
+        Add <link linkend="recovery-config"><filename>recovery.conf</></link>
+        parameter <link linkend="recovery-min-apply-delay"><varname>recovery_min_apply_delay</></link>
+        to delay replication (Robert Haas, Fabr&iacute;zio de Royes Mello,
+        Simon Riggs)
        </para>
 
        <para>
-        This is useful for delaying replaying of user errors on standby
+        This is useful for delaying the replay of user errors on standby
         servers.
        </para>
       </listitem>
@@ -793,11 +829,9 @@
        <para>
         Add <link
         linkend="recovery-target"><varname>recovery_target</></link>
-        option <option>immediate</> option to replay
-        <link linkend="wal"><acronym>WAL</></link> stop
-        recovery when a consistent state is reached, i.e.  <link
-        linkend="functions-admin-backup-table"><function>pg_stop_backup()</></link>
-        (MauMau, Heikki Linnakangas)
+        option <option>immediate</> to stop <link
+        linkend="wal"><acronym>WAL</></link> recovery as soon as a
+        consistent state is reached (MauMau, Heikki Linnakangas)
        </para>
       </listitem>
 
@@ -807,11 +841,11 @@
        </para>
 
        <para>
-        The timestamp reported by <link
-        linkend="functions-recovery-info-table"><function>pg_last_xact_replay_timestamp()</></link>
-        now shows information about committed records, not commits being
-        replayed.  Recovering to restore points now replay the restore
-        point, rather than stop just before the restore point.
+        The timestamp reported
+        by <link linkend="functions-recovery-info-table"><function>pg_last_xact_replay_timestamp()</></link>
+        now shows information about already-committed records, not of transactions
+        about to be committed. Recovering to a restore point now replays the
+        restore point, rather than stopping just before the restore point.
        </para>
       </listitem>
 
@@ -831,8 +865,8 @@
       <listitem>
        <para>
         Add <link linkend="streaming-replication-slots">replication
-        slots</link> to report the <acronym>WAL</> activity on streaming
-        standbys (Andres Freund, Robert Haas)
+        slots</link> to coordinate activity on streaming standbys with the
+        node they are streaming from (Andres Freund, Robert Haas)
        </para>
 
        <para>
@@ -872,19 +906,18 @@
      </itemizedlist>
 
      <sect4>
-      <title><link linkend="logicaldecoding">Logical Change-Set Extraction</></title>
+      <title><link linkend="logicaldecoding">Logical Decoding</></title>
 
       <para>
-       Logical change-set extraction allows database
-       changes to be optionally recorded in <emphasis>logical</> format
-       in the <link linkend="wal"><acronym>WAL</></link>.  This format can
-       be easily processed by external tools.  In previous releases, only
-       binary changes were recorded in the <acronym>WAL</>.  To implement
-       this feature, the following changes were made:
+       Logical decoding allows database changes to be optionally streamed in a
+       configurable format. The data is read from
+       the <link linkend="wal"><acronym>WAL</></link> and transformed into the
+       desired target format. To implement this feature, the following changes
+       were made:
       </para>
 
       <itemizedlist>
-
+       <!-- FIXME: This imo needs a pretty fundamental rewrite -->
        <listitem>
         <para>
          Add new <option>logical</> <link
@@ -953,15 +986,15 @@
       <listitem>
        <para>
         Add <link linkend="queries-tablefunctions"><literal>ROWS
-        FROM</></link> syntax to allow horizontal concatenation of
-        <literal>FROM</>-clause set-returning functions (Andrew Gierth)
+        FROM()</></link> syntax to allow horizontal concatenation of
+        set-returning functions in the <literal>FROM</>-clause (Andrew Gierth)
        </para>
       </listitem>
 
       <listitem>
        <para>
         Add <link linkend="queries-tablefunctions"><literal>WITH
-        ORDINALITY</></link> which numbers rows returned from
+        ORDINALITY</></link> syntax to number rows returned from
         <literal>FROM</>-clause functions (Andrew Gierth, David Fetter)
        </para>
 
@@ -978,8 +1011,8 @@
        </para>
 
        <para>
-        This was added for consistency, and so querying tables with no
-        columns would not produce an error.
+        This was added so views that select from a table with zero columns
+        can be dumped correctly.
        </para>
       </listitem>
 
@@ -1006,9 +1039,10 @@
 
        <listitem>
         <para>
-         Allow quoted strings matching the null string to be converted
-         to NULL in <link linkend="SQL-COPY"><command>COPY FROM</></link>
-         in <literal>CSV</> mode (Ian Barwick, Michael Paquier)
+         Add <command>FORCE NULL</> option
+         to <link linkend="SQL-COPY"><command>COPY FROM</></link> which causes
+         quoted strings matching the null string to be converted to NULL in
+         <literal>CSV</> mode (Ian Barwick, Michael Paquier)
         </para>
 
         <para>
@@ -1019,14 +1053,13 @@
 
       <listitem>
        <para>
-        Issue warnings for <link linkend="SQL-SET"><command>SET</></link>
-        outside of a transaction block, as they have no effect (Bruce
-        Momjian)
+        Issue warnings for commands used outside of transaction blocks
+        because they have no effect (Bruce Momjian)
        </para>
 
        <para>
         The cases are <literal>SET
-        LOCAL</>/<literal>CONSTRAINTS</>/<literal>TRANSACTION</> and
+        LOCAL</>, <literal>SET CONSTRAINTS</>, <literal>SET TRANSACTION</> and
         <literal>ABORT</>.
        </para>
       </listitem>
@@ -1083,22 +1116,25 @@
 
       <listitem>
        <para>
-        Allow <link linkend="SQL-CREATEVIEW-updatable-views">auto-updates
-        on views</link> where only some columns are auto-updateable
+        Allow views to be <link
+        linkend="SQL-CREATEVIEW-updatable-views">automatically
+        updated</link> even if they contain some non-updatable columns
         (Dean Rasheed)
        </para>
 
        <para>
-        Previously the presence of a non-auto-updateable column prevented
-        all columns from being auto-updated.  Deletes are now supported
-        on suitable views even if no auto-updateable columns are present.
+        Previously the presence of non-updatable columns such as
+        expressions, literals, and function calls prevented automatic
+        updates.  Now <command>INSERT</>s, <command>UPDATE</>s and
+        <command>DELETE</>s are supported, provided that they do not
+        attempt to assign new values to any of the non-updatable columns.
        </para>
       </listitem>
 
       <listitem>
        <para>
         Allow control over whether <command>INSERT</>s and
-        <command>UPDATE</>s can add rows to an auto-updateable view that
+        <command>UPDATE</>s can add rows to an auto-updatable view that
         would no longer appear in the view (Dean Rasheed)
        </para>
 
@@ -1111,7 +1147,7 @@
       <listitem>
        <para>
         Allow <link linkend="rules-privileges">security barrier views</>
-        to be automatically updateable (Dean Rasheed)
+        to be automatically updatable (Dean Rasheed)
        </para>
       </listitem>
 
@@ -1142,13 +1178,13 @@
 
       <listitem>
        <para>
-        Improve the internal definition of system relations (Andres Freund,
+        Improve how system-level relations are designated (Andres Freund,
         Robert Haas)
        </para>
 
        <para>
-        Previously, relations moved into the system catalog schema could
-        not be modified.
+        Previously, relations once moved into the system catalog schema could
+        no longer be modified or dropped.
        </para>
       </listitem>
 
@@ -1166,6 +1202,11 @@
         Allow <link linkend="SQL-CREATEAGGREGATE"><command>CREATE
         AGGREGATE</></link> to supply the size of the aggregate's
         transition state data (Hadi Moshayedi)
+       </para>
+
+       <para>
+        This allows the optimizer to better estimate how much memory will be
+        used by aggregates.
        </para>
       </listitem>
 
@@ -1186,7 +1227,7 @@
 
       <listitem>
        <para>
-        Allow the changing of foreign key constraint  via <link
+        Allow changing foreign key constraint deferrability via <link
         linkend="SQL-ALTERTABLE"><command>ALTER TABLE</></link>
         ... <literal>ALTER CONSTRAINT</> (Simon Riggs)
        </para>
@@ -1204,7 +1245,8 @@
         ON</>, <literal>SET WITHOUT CLUSTER</>, <literal>ALTER COLUMN
         SET STATISTICS</>, <literal>ALTER COLUMN</> <literal>SET</>
         <option>(attribute_option)</>, <literal>ALTER COLUMN RESET</>
-        <option>(attribute_option)</>.
+        <option>(attribute_option)</> no longer require <literal>ACCESS
+        EXCLUSIVE</> locks.
        </para>
       </listitem>
 
@@ -1221,7 +1263,7 @@
 
       <listitem>
        <para>
-        Fully-implement the <link
+        Fully implement the <link
         linkend="datatype-line"><type>line</></link> data type (Peter
         Eisentraut)
        </para>
@@ -1229,7 +1271,8 @@
        <para>
         The line <emphasis>segment</> data type (<link
         linkend="datatype-lseg"><type>LSEG</></link>) has always been
-        fully supported.
+        fully supported.  The previous <type>line</> data type (enabled
+        only via a compile-time option) is not binary or dump-compatible.
        </para>
       </listitem>
 
@@ -1284,8 +1327,8 @@
         <para>
          This allows for faster access to values in the <type>JSON</>
          document and faster and more useful indexing of <type>JSON</>.
-         <type>JSONB</> values are also typed as appropriate scalar
-         SQL types.
+         Scalar values in <type>JSONB</> documents are typed as appropriate
+         scalar SQL types.
         </para>
        </listitem>
 
@@ -1375,8 +1418,8 @@
        </para>
 
        <para>
-        The functions being with <literal>make_</>, e.g. <link
-        linkend="functions-datetime-table"><function>make_date()</></link>.
+        These functions are prefixed with <literal>make_</>,
+        e.g. <link linkend="functions-datetime-table"><function>make_date()</></link>.
        </para>
       </listitem>
 
@@ -1419,17 +1462,18 @@
 
       <listitem>
        <para>
-        Add functions for error-free <structname>pg_class</>,
+        Add functions for looking up objects in <structname>pg_class</>,
         <structname>pg_proc</>, <structname>pg_type</>, and
-        <structname>pg_operator</> lookups (Yugo Nagata, Nozomi Anzai,
+        <structname>pg_operator</> which do not generate errors for
+        non-existent objects (Yugo Nagata, Nozomi Anzai,
         Robert Haas)
        </para>
 
        <para>
         For example, <link
         linkend="functions-info-catalog-table"><function>to_regclass()</></link>
-        does error-free lookups of <structname>pg_class</>, and returns
-        NULL for lookup failures.
+        does lookups of <structname>pg_class</> and returns NULL for
+        non-existent objects.
        </para>
       </listitem>
 
@@ -1437,7 +1481,7 @@
        <para>
         Add function <link
         linkend="functions-admin-dblocation"><function>pg_filenode_relation()</></link>
-        to allow for more efficient filenode to relation lookups  (Andres
+        to allow for more efficient lookup of relation names from filenodes (Andres
         Freund)
        </para>
       </listitem>
@@ -1447,7 +1491,7 @@
         Add <link
         linkend="information-schema"><structname>information_schema</></link>
         column <link
-        linkend="infoschema-parameters"><structname>parameters.parameter_default</></link>
+        linkend="infoschema-parameters"><structfield>parameters.parameter_default</></link>
         (Peter Eisentraut)
        </para>
       </listitem>
@@ -1455,7 +1499,7 @@
       <listitem>
        <para>
         Have <link
-        linkend="infoschema-schemata"><structname>information_schema.schemata</></link>
+        linkend="infoschema-schemata"><structfield>information_schema.schemata</></link>
         show all accessible schema (Peter Eisentraut)
        </para>
 
@@ -1510,7 +1554,11 @@
       <listitem>
        <para>
         Allow polymorphic aggregates to have non-polymorphic state data
-        types ? (Tom Lane)
+        types (Tom Lane)
+       </para>
+       <para>
+        This allows the declaration of aggregates like the built-in
+        aggregate <function>array_agg()</> in SQL.
        </para>
       </listitem>
 
@@ -1570,7 +1618,7 @@
        <para>
         Add variables <link
         linkend="plpgsql-extra-checks"><varname>plpgsql.extra_warnings</></link>
-        and <varname>plpgsql.extra_errors</>to enable additional PL/pgSQL
+        and <varname>plpgsql.extra_errors</> to enable additional PL/pgSQL
         warnings and errors (Marko Tiikkaja, Petr Jelinek)
        </para>
 
@@ -1587,17 +1635,6 @@
      <title><link linkend="plpython">PL/Python</link> Server-Side Language</title>
 
      <itemizedlist>
-
-      <listitem>
-       <para>
-        Handle domains over arrays like plain arrays in PL/Python
-        (Rodolfo Campero)
-       </para>
-
-       <para>
-        Previously they were treated as strings.
-       </para>
-      </listitem>
 
       <listitem>
        <para>
@@ -1675,9 +1712,9 @@
 
       <listitem>
        <para>
-        Allow <link linkend="APP-VACUUMDB"><application>vacuumdb</></link>
-        <option>--analyze-in-stages</> to analyze in stages of increasing
-        granularity (Peter Eisentraut)
+        Add <link linkend="APP-VACUUMDB"><application>vacuumdb</></link>
+        option <option>--analyze-in-stages</> to analyze in stages of
+        increasing granularity (Peter Eisentraut)
        </para>
 
        <para>
@@ -1747,7 +1784,8 @@
 
       <listitem>
        <para>
-        Allow field wrapping to <application>psql</>'s "extended" mode
+        Add ability to wrap long lines in <application>psql</>'s
+        <literal>expanded</> mode by using <command>\pset format wrapped</>
         (Sergey Muraviov)
        </para>
       </listitem>
@@ -2105,7 +2143,7 @@
       <listitem>
        <para>
         Improve support for <envar>VPATH</> builds of <acronym>PGXS</>
-        modules  (Cédric Villemain, Andrew Dunstan)
+        modules  (C&eacute;dric Villemain, Andrew Dunstan)
        </para>
       </listitem>
 
@@ -2175,6 +2213,12 @@
        </para>
       </listitem>
 
+      <listitem>
+       <para>
+        Allow client-only installs for <acronym>MSVC</> (Windows) builds (MauMau)
+       </para>
+      </listitem>
+
      </itemizedlist>
 
    </sect3>
@@ -2187,7 +2231,8 @@
       <listitem>
        <para>
         Add <link linkend="pgprewarm"><application>pg_prewarm</></link>
-        to preload relation data into the shared buffer cache (Robert Haas)
+        extension to preload relation data into the shared buffer cache
+        (Robert Haas)
        </para>
 
        <para>
@@ -2212,7 +2257,7 @@
 
       <listitem>
        <para>
-        Add logging of trigger execution to <link
+        Add option to include trigger execution time to <link
         linkend="auto-explain"><application>auto_explain</></link>
         (Horiguchi Kyotaro)
        </para>
@@ -2248,9 +2293,10 @@
 
       <listitem>
        <para>
-        Improve indexing of <link
-        linkend="pgtrgm"><application>pg_trgm</></link> values to
-        discourage indexing whitespace (Alexander Korotkov)
+        Improve <link linkend="pgtrgm"><application>pg_trgm</>'s</link>
+        generation of trigrams for indexed regular expression searches by
+        discouraging the indexing of trigrams containing whitespace (Alexander
+        Korotkov)
        </para>
       </listitem>
 
@@ -2297,7 +2343,7 @@
 
       <listitem>
        <para>
-        Allow pgbench to process script files of any line length (Sawada
+        Allow <application>pgbench</> to process script files of any line length (Sawada
         Masahiko)
        </para>
 
@@ -2308,20 +2354,20 @@
 
       <listitem>
        <para>
-        Add <application>pg_bench</> option (<option>--rate</>) to control
+        Add <application>pgbench</> option (<option>--rate</>) to control
         the transaction rate (Fabien Coelho)
        </para>
       </listitem>
 
       <listitem>
        <para>
-        Add <option>--progress</> output option to pgbench (Fabien Coelho)
+        Add <option>--progress</> output option to <application>pgbench</> (Fabien Coelho)
        </para>
       </listitem>
 
       <listitem>
        <para>
-        Add long options to pgbench (Fabien Coelho)
+        Add long options to <application>pgbench</> (Fabien Coelho)
        </para>
       </listitem>
 
@@ -2362,7 +2408,7 @@
 
        <para>
         This allows monitoring tools to only fetch query text for newly
-        created entries, as reported in <structname>queryid</>.
+        created entries, as reported in <structfield>queryid</>.
        </para>
       </listitem>
 
