@@ -1029,7 +1029,6 @@ spg_bytea_inner_consistent(PG_FUNCTION_ARGS)
 						res = false;
 					}
 					nodeStatus = getNextStatus(status, (char)chooseChar);
-					Assert(nodeStatus != sInNumeric);
 
 					if (inValue >= 0 && res && !key->inequality &&
 							key->exact && (key->exact->type & JSONB_VODKA_FLAG_TYPE) == JSONB_VODKA_FLAG_STRING)
