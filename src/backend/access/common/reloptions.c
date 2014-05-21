@@ -21,6 +21,7 @@
 #include "access/nbtree.h"
 #include "access/reloptions.h"
 #include "access/spgist.h"
+#include "access/spgist_private.h"
 #include "catalog/pg_type.h"
 #include "commands/defrem.h"
 #include "commands/tablespace.h"
@@ -130,6 +131,22 @@ static relopt_int intRelOpts[] =
 			RELOPT_KIND_SPGIST
 		},
 		SPGIST_DEFAULT_FILLFACTOR, SPGIST_MIN_FILLFACTOR, 100
+	},
+	{
+		{
+			"split_limit_bytes",
+			"Do not split leaf chain if its size is less",
+			RELOPT_KIND_SPGIST
+		},
+		SPGIST_DEFAULT_LIMIT_BYTES, 0, SPGIST_PAGE_CAPACITY
+	},
+	{
+		{
+			"split_limit_number",
+			"Do not split leaf chain if its length is less",
+			RELOPT_KIND_SPGIST
+		},
+		SPGIST_DEFAULT_LIMIT_NUMBER, 0, MaxSpgistTuplesPerPage
 	},
 	{
 		{

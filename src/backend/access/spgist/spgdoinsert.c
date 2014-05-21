@@ -1988,8 +1988,8 @@ spgdoinsert(Relation index, SpGistState *state,
 			}
 			else if ((sizeToSplit =
 					  checkSplitConditions(index, state, &current,
-									&nToSplit)) < SPGIST_PAGE_CAPACITY / 2 &&
-					 nToSplit < 64 &&
+									&nToSplit)) < SpGistGetSplitLimitBytes(index) &&
+					 nToSplit < SpGistGetSplitLimitNumber(index) &&
 					 leafTuple->size + sizeof(ItemIdData) + sizeToSplit <= SPGIST_PAGE_CAPACITY)
 			{
 				/*

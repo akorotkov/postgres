@@ -129,6 +129,26 @@ typedef struct SpGistState
 } SpGistState;
 
 #define MaxSpgistTuplesPerPage ((int)((BLCKSZ - SizeOfPageHeaderData)/(8 + sizeof(ItemId))))
+
+/*
+ * Storage type for SP-GiST's reloptions
+ */
+typedef struct SpGistOptions
+{
+	int32       vl_len_;        	/* varlena header (do not touch directly!) */
+	int32       fillfactor;
+	int32       splitLimitBytes;  	/* split limit in bytes */
+	int32       splitLimitNumber;  	/* split limit by numbers in leaf chain */
+} SpGistOptions;
+
+#define SPGIST_DEFAULT_LIMIT_BYTES	(SPGIST_PAGE_CAPACITY/2)
+#define SPGIST_DEFAULT_LIMIT_NUMBER	(64)
+#define SpGistGetOptions(relation)	((SpGistOptions *) (relation)->rd_options)	
+#define SpGistGetSplitLimitBytes(relation) (SpGistGetOptions(relation) ? \
+			SpGistGetOptions(relation)->splitLimitBytes : SPGIST_DEFAULT_LIMIT_BYTES)
+#define SpGistGetSplitLimitNumber(relation) (SpGistGetOptions(relation) ? \
+			SpGistGetOptions(relation)->splitLimitNumber : SPGIST_DEFAULT_LIMIT_NUMBER)
+
 /*
  * Private state of an index scan
  */

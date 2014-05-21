@@ -107,7 +107,7 @@ spgGetCache(Relation index)
 void
 initSpGistState(SpGistState *state, Relation index)
 {
-	SpGistCache *cache;
+	SpGistCache 	*cache;
 
 	/* Get cached static information about index */
 	cache = spgGetCache(index);
@@ -492,15 +492,30 @@ SpGistInitMetapage(Page page)
 Datum
 spgoptions(PG_FUNCTION_ARGS)
 {
-	Datum		reloptions = PG_GETARG_DATUM(0);
-	bool		validate = PG_GETARG_BOOL(1);
-	bytea	   *result;
+	Datum			reloptions = PG_GETARG_DATUM(0);
+	bool			validate = PG_GETARG_BOOL(1);
+	relopt_value	*options;
+	SpGistOptions	*rdopts;
+	int				numoptions;
+	static const relopt_parse_elt tab[] = {
+		{"fillfactor", RELOPT_TYPE_INT, offsetof(SpGistOptions, fillfactor)},
+		{"split_limit_bytes", RELOPT_TYPE_INT, offsetof(SpGistOptions, splitLimitBytes)},
+		{"split_limit_number", RELOPT_TYPE_INT, offsetof(SpGistOptions, splitLimitNumber)}
+	};
 
-	result = default_reloptions(reloptions, validate, RELOPT_KIND_SPGIST);
+	options = parseRelOptions(reloptions, validate, RELOPT_KIND_SPGIST,
+							  &numoptions);
 
-	if (result)
-		PG_RETURN_BYTEA_P(result);
-	PG_RETURN_NULL();
+	/* if none set, we're done */
+	if (numoptions == 0)
+		PG_RETURN_NULL();
+
+	rdopts = allocateReloptStruct(sizeof(SpGistOptions), options, numoptions);
+	fillRelOptions((void *) rdopts, sizeof(SpGistOptions), options, numoptions,
+				   validate, tab, lengthof(tab));
+
+	pfree(options);
+	PG_RETURN_BYTEA_P(rdopts);
 }
 
 /*
