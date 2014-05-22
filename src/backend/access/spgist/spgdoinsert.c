@@ -323,11 +323,6 @@ addLeafTuple(Relation index, SpGistState *state, SpGistLeafTuple leafTuple,
  * Count the number and total size of leaf tuples in the chain starting at
  * current->offnum.  Return number into *nToSplit and total size as function
  * result.
- *
- * Klugy special case when considering the root page (i.e., root is a leaf
- * page, but we're about to split for the first time): return fake large
- * values to force spgdoinsert() to take the doPickSplit rather than
- * moveLeafs code path.  moveLeafs is not prepared to deal with root page.
  */
 static int
 checkSplitConditions(Relation index, SpGistState *state,
@@ -337,12 +332,7 @@ checkSplitConditions(Relation index, SpGistState *state,
 				n = 0,
 				totalSize = 0;
 
-	if (SpGistBlockIsRoot(current->blkno))
-	{
-		/* return impossible values to force split */
-		*nToSplit = BLCKSZ;
-		return BLCKSZ;
-	}
+	Assert(!SpGistBlockIsRoot(current->blkno));
 
 	i = current->offnum;
 	while (i != InvalidOffsetNumber)
@@ -1974,48 +1964,61 @@ spgdoinsert(Relation index, SpGistState *state,
 		if (SpGistPageIsLeaf(current.page))
 		{
 			SpGistLeafTuple leafTuple;
-			int			nToSplit,
-						sizeToSplit;
+			int			nToSplit = 0,
+						sizeToSplit = 0;
 
 			leafTuple = spgFormLeafTuple(state, heapPtr, leafDatum, isnull);
-			if (leafTuple->size + sizeof(ItemIdData) <=
-				SpGistPageGetFreeSpace(current.page, 1))
-			{
-				/* it fits on page, so insert it and we're done */
-				addLeafTuple(index, state, leafTuple,
-							 &current, &parent, isnull, isNew);
-				break;
-			}
-			else if ((sizeToSplit =
-					  checkSplitConditions(index, state, &current,
-									&nToSplit)) < SpGistGetSplitLimitBytes(index) &&
-					 nToSplit < SpGistGetSplitLimitNumber(index) &&
-					 leafTuple->size + sizeof(ItemIdData) + sizeToSplit <= SPGIST_PAGE_CAPACITY)
-			{
-				/*
-				 * the amount of data is pretty small, so just move the whole
-				 * chain to another leaf page rather than splitting it.
-				 */
-				Assert(!isNew);
-				moveLeafs(index, state, &current, &parent, leafTuple, isnull);
-				break;			/* we're done */
-			}
-			else
-			{
-				/* picksplit */
-				if (doPickSplit(index, state, &current, &parent,
-								leafTuple, level, isnull, isNew))
-					break;		/* doPickSplit installed new tuples */
 
-				/* leaf tuple will not be inserted yet */
-				pfree(leafTuple);
+			if (!SpGistBlockIsRoot(current.blkno))
+				sizeToSplit = checkSplitConditions(index, state, &current,
+												   &nToSplit);
 
-				/*
-				 * current now describes new inner tuple, go insert into it
-				 */
-				Assert(!SpGistPageIsLeaf(current.page));
-				goto process_inner_tuple;
+			/* 
+			 * if leaf chain satisfyes limits then try to insert
+			 * new leaf tuple in current page or move whole chain
+			 * to another page
+			 */
+			if (sizeToSplit <= SpGistGetSplitLimitBytes(index) &&
+				nToSplit <= SpGistGetSplitLimitNumber(index))
+			{
+				/* we don't want to split chain if possible */
+
+				if (leafTuple->size + sizeof(ItemIdData) <=
+					SpGistPageGetFreeSpace(current.page, 1))
+				{
+					/* it fits on page, so insert it and we're done */
+					addLeafTuple(index, state, leafTuple,
+								 &current, &parent, isnull, isNew);
+					break;
+				}
+
+				if (leafTuple->size + sizeof(ItemIdData) + sizeToSplit <= 
+					SPGIST_PAGE_CAPACITY && !SpGistBlockIsRoot(current.blkno))
+				{
+					/*
+					 * the amount of data is pretty small, so just move the whole
+					 * chain to another leaf page rather than splitting it.
+					 * But moveLeafs() can not move from root page.
+					 */
+					Assert(!isNew);
+					moveLeafs(index, state, &current, &parent, leafTuple, isnull);
+					break;			/* we're done */
+				}
 			}
+
+			/* picksplit */
+			if (doPickSplit(index, state, &current, &parent,
+							leafTuple, level, isnull, isNew))
+				break;		/* doPickSplit installed new tuples */
+
+			/* leaf tuple will not be inserted yet */
+			pfree(leafTuple);
+
+			/*
+			 * current now describes new inner tuple, go insert into it
+			 */
+			Assert(!SpGistPageIsLeaf(current.page));
+			goto process_inner_tuple;
 		}
 		else	/* non-leaf page */
 		{
