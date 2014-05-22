@@ -57,6 +57,13 @@
       </para>
      </listitem>
 
+     <listitem>
+      <para>
+       Reduce lock levels of some <link
+       linkend="SQL-ALTERTABLE"><command>ALTER TABLE</></link> commands
+      </para>
+     </listitem>
+
    </itemizedlist>
 
    <para>
@@ -1237,7 +1244,7 @@
        <para>
         Reduce lock levels of some <link
         linkend="SQL-ALTERTABLE"><command>ALTER TABLE</></link> commands
-        (Simon Riggs, Noah Misch)
+        (Simon Riggs, Noah Misch, Robert Haas)
        </para>
 
        <para>
@@ -2343,7 +2350,7 @@
 
       <listitem>
        <para>
-        Allow <application>pgbench</> to process script files of any line length (Sawada
+        Remove line length limit for <application>pgbench</> scripts (Sawada
         Masahiko)
        </para>
 
