@@ -107,7 +107,7 @@ spgGetCache(Relation index)
 void
 initSpGistState(SpGistState *state, Relation index)
 {
-	SpGistCache *cache;
+	SpGistCache 	*cache;
 
 	/* Get cached static information about index */
 	cache = spgGetCache(index);
@@ -492,15 +492,30 @@ SpGistInitMetapage(Page page)
 Datum
 spgoptions(PG_FUNCTION_ARGS)
 {
-	Datum		reloptions = PG_GETARG_DATUM(0);
-	bool		validate = PG_GETARG_BOOL(1);
-	bytea	   *result;
+	Datum			reloptions = PG_GETARG_DATUM(0);
+	bool			validate = PG_GETARG_BOOL(1);
+	relopt_value	*options;
+	SpGistOptions	*rdopts;
+	int				numoptions;
+	static const relopt_parse_elt tab[] = {
+		{"fillfactor", RELOPT_TYPE_INT, offsetof(SpGistOptions, fillfactor)},
+		{"split_limit_bytes", RELOPT_TYPE_INT, offsetof(SpGistOptions, splitLimitBytes)},
+		{"split_limit_number", RELOPT_TYPE_INT, offsetof(SpGistOptions, splitLimitNumber)}
+	};
 
-	result = default_reloptions(reloptions, validate, RELOPT_KIND_SPGIST);
+	options = parseRelOptions(reloptions, validate, RELOPT_KIND_SPGIST,
+							  &numoptions);
 
-	if (result)
-		PG_RETURN_BYTEA_P(result);
-	PG_RETURN_NULL();
+	/* if none set, we're done */
+	if (numoptions == 0)
+		PG_RETURN_NULL();
+
+	rdopts = allocateReloptStruct(sizeof(SpGistOptions), options, numoptions);
+	fillRelOptions((void *) rdopts, sizeof(SpGistOptions), options, numoptions,
+				   validate, tab, lengthof(tab));
+
+	pfree(options);
+	PG_RETURN_BYTEA_P(rdopts);
 }
 
 /*
@@ -514,14 +529,12 @@ SpGistGetTypeSize(SpGistTypeDesc *att, Datum datum)
 {
 	unsigned int size;
 
-	if (att->attbyval)
-		size = sizeof(Datum);
-	else if (att->attlen > 0)
+	if (att->attbyval || att->attlen > 0)
 		size = att->attlen;
 	else
-		size = VARSIZE_ANY(datum);
+		size = SG_VARSIZE_ANY(datum);
 
-	return MAXALIGN(size);
+	return size;
 }
 
 /*
@@ -534,7 +547,36 @@ memcpyDatum(void *target, SpGistTypeDesc *att, Datum datum)
 
 	if (att->attbyval)
 	{
-		memcpy(target, &datum, sizeof(Datum));
+		union {
+			uint8	u8;
+			uint16	u16;
+			uint32	u32;
+			uint64	u64;
+		} v;
+
+		switch(att->attlen)
+		{
+			case 1:
+				v.u8 = GET_1_BYTE(datum);
+				memcpy(target, &v.u8, 1);
+				break;
+			case 2:
+				v.u16 = GET_2_BYTES(datum);
+				memcpy(target, &v.u16, 2);
+				break;
+			case 4:
+				v.u32 = GET_4_BYTES(datum);
+				memcpy(target, &v.u32, 4);
+				break;
+#if SIZEOF_DATUM == 8
+			case 8:
+				v.u64 = GET_8_BYTES(datum);
+				memcpy(target, &v.u64, 8);
+				break;
+#endif
+			default:
+				elog(ERROR,"Unsupported pass-by-value length: %u", att->attlen);
+		}
 	}
 	else
 	{
@@ -553,11 +595,12 @@ spgFormLeafTuple(SpGistState *state, ItemPointer heapPtr,
 	SpGistLeafTuple tup;
 	unsigned int size;
 
-	/* compute space needed (note result is already maxaligned) */
+	/* compute space needed */
 	size = SGLTHDRSZ;
 	if (!isnull)
 		size += SpGistGetTypeSize(&state->attType, datum);
 
+	size = MAXALIGN(size);
 	/*
 	 * Ensure that we can replace the tuple with a dead tuple later.  This
 	 * test is unnecessary when !isnull, but let's be safe.
@@ -571,10 +614,65 @@ spgFormLeafTuple(SpGistState *state, ItemPointer heapPtr,
 	tup->size = size;
 	tup->nextOffset = InvalidOffsetNumber;
 	tup->heapPtr = *heapPtr;
+	tup->isnull = isnull;
 	if (!isnull)
 		memcpyDatum(SGLTDATAPTR(tup), &state->attType, datum);
 
 	return tup;
+}
+
+/*
+ * Returns stored datum. Note, for pass-by-reference value
+ * datum will be allocated in current memory context because
+ * inside tuple it could be unaligned
+ */
+Datum
+spgGetDatum(SpGistTypeDesc* att, char *ptr)
+{
+	Datum	r;
+
+	if (att->attbyval)
+	{
+		union {
+			uint8	u8;
+			uint16	u16;
+			uint32	u32;
+			uint64	u64;
+		} v;
+
+		switch(att->attlen)
+		{
+			case 1:
+				memcpy(&v.u8, ptr, 1);
+				r = SET_1_BYTE(v.u8);
+				break;
+			case 2:
+				memcpy(&v.u16, ptr, 2);
+				r = SET_2_BYTES(v.u16);
+				break;
+			case 4:
+				memcpy(&v.u32, ptr, 4);
+				r = SET_4_BYTES(v.u32);
+				break;
+#if SIZEOF_DATUM == 8
+			case 8:
+				memcpy(&v.u64, ptr, 8);
+				r = SET_8_BYTES(v.u64);
+				break;
+#endif
+			default:
+				elog(ERROR,"Unsupported pass-by-value length: %u", att->attlen);
+		}
+	}
+	else
+	{
+		Size size = (att->attlen > 0) ? att->attlen : SG_VARSIZE_ANY(ptr);
+		
+		r = PointerGetDatum(palloc(size));
+		memcpy(DatumGetPointer(r), ptr, size);
+	}
+
+	return r;
 }
 
 /*
@@ -588,38 +686,39 @@ spgFormNodeTuple(SpGistState *state, Datum label, bool isnull)
 {
 	SpGistNodeTuple tup;
 	unsigned int size;
-	unsigned short infomask = 0;
 
-	/* compute space needed (note result is already maxaligned) */
+	/* compute space needed */
 	size = SGNTHDRSZ;
 	if (!isnull)
 		size += SpGistGetTypeSize(&state->attLabelType, label);
 
-	/*
-	 * Here we make sure that the size will fit in the field reserved for it
-	 * in t_info.
-	 */
-	if ((size & INDEX_SIZE_MASK) != size)
-		ereport(ERROR,
-				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-				 errmsg("index row requires %zu bytes, maximum size is %zu",
-						(Size) size, (Size) INDEX_SIZE_MASK)));
-
 	tup = (SpGistNodeTuple) palloc0(size);
 
 	if (isnull)
-		infomask |= INDEX_NULL_MASK;
-	/* we don't bother setting the INDEX_VAR_MASK bit */
-	infomask |= size;
-	tup->t_info = infomask;
-
-	/* The TID field will be filled in later */
-	ItemPointerSetInvalid(&tup->t_tid);
-
-	if (!isnull)
+		SGNTSETNULL(tup);
+	else
 		memcpyDatum(SGNTDATAPTR(tup), &state->attLabelType, label);
 
+	/* The tid field will be filled in later */
+	SGNTSETITEMPOINTER(tup, InvalidBlockNumber, InvalidOffsetNumber);
+
 	return tup;
+}
+
+static Size
+spgFormNodeTupleSize(SpGistState *state, SpGistNodeTuple tuple)
+{
+	Size	size = SGNTHDRSZ;
+
+	if (!SGNTISNULL(tuple))
+	{
+		if (state->attLabelType.attbyval || state->attLabelType.attlen > 0)
+			size += state->attLabelType.attlen;
+		else
+			size += SG_VARSIZE_ANY(SGNTDATAPTR(tuple));
+	}
+
+	return size;
 }
 
 /*
@@ -645,7 +744,7 @@ spgFormInnerTuple(SpGistState *state, bool hasPrefix, Datum prefix,
 
 	/* Note: we rely on node tuple sizes to be maxaligned already */
 	for (i = 0; i < nNodes; i++)
-		size += IndexTupleSize(nodes[i]);
+		size += spgFormNodeTupleSize(state, nodes[i]);
 
 	/*
 	 * Ensure that we can replace the tuple with a dead tuple later.  This
@@ -653,6 +752,8 @@ spgFormInnerTuple(SpGistState *state, bool hasPrefix, Datum prefix,
 	 */
 	if (size < SGDTSIZE)
 		size = SGDTSIZE;
+
+	size = MAXALIGN(size);
 
 	/*
 	 * Inner tuple should be small enough to fit on a page
@@ -678,20 +779,20 @@ spgFormInnerTuple(SpGistState *state, bool hasPrefix, Datum prefix,
 	tup = (SpGistInnerTuple) palloc0(size);
 
 	tup->nNodes = nNodes;
-	tup->prefixSize = prefixSize;
+	tup->hasPrefix = hasPrefix;
 	tup->size = size;
 
 	if (hasPrefix)
 		memcpyDatum(SGITDATAPTR(tup), &state->attPrefixType, prefix);
 
-	ptr = (char *) SGITNODEPTR(tup);
+	ptr = (char *) SGITNODEPTR(state, tup);
 
 	for (i = 0; i < nNodes; i++)
 	{
 		SpGistNodeTuple node = nodes[i];
 
-		memcpy(ptr, node, IndexTupleSize(node));
-		ptr += IndexTupleSize(node);
+		memcpy(ptr, node, spgFormNodeTupleSize(state, node));
+		ptr += spgFormNodeTupleSize(state, node);
 	}
 
 	return tup;
@@ -746,12 +847,12 @@ spgExtractNodeLabels(SpGistState *state, SpGistInnerTuple innerTuple)
 	SpGistNodeTuple node;
 
 	/* Either all the labels must be NULL, or none. */
-	node = SGITNODEPTR(innerTuple);
-	if (IndexTupleHasNulls(node))
+	node = SGITNODEPTR(state, innerTuple);
+	if (SGNTISNULL(node))
 	{
-		SGITITERATE(innerTuple, i, node)
+		SGITITERATE(state, innerTuple, i, node)
 		{
-			if (!IndexTupleHasNulls(node))
+			if (!SGNTISNULL(node))
 				elog(ERROR, "some but not all node labels are null in SPGiST inner tuple");
 		}
 		/* They're all null, so just return NULL */
@@ -760,11 +861,11 @@ spgExtractNodeLabels(SpGistState *state, SpGistInnerTuple innerTuple)
 	else
 	{
 		nodeLabels = (Datum *) palloc(sizeof(Datum) * innerTuple->nNodes);
-		SGITITERATE(innerTuple, i, node)
+		SGITITERATE(state, innerTuple, i, node)
 		{
-			if (IndexTupleHasNulls(node))
+			if (SGNTISNULL(node))
 				elog(ERROR, "some but not all node labels are null in SPGiST inner tuple");
-			nodeLabels[i] = SGNTDATUM(node, state);
+			nodeLabels[i] = SGNTDATUM(state, node);
 		}
 		return nodeLabels;
 	}

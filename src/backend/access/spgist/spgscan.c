@@ -281,7 +281,7 @@ spgLeafTest(Relation index, SpGistScanOpaque so,
 		return true;
 	}
 
-	leafDatum = SGLTDATUM(leafTuple, &so->state);
+	leafDatum = (leafTuple->isnull == 0) ? SGLTDATUM(&so->state, leafTuple) : (Datum)0;
 
 	/* use temp context for calling leaf_consistent */
 	oldCtx = MemoryContextSwitchTo(so->tempCxt);
@@ -483,14 +483,15 @@ redirect:
 			in.level = stackEntry->level;
 			in.returnData = so->want_itup;
 			in.allTheSame = innerTuple->allTheSame;
-			in.hasPrefix = (innerTuple->prefixSize > 0);
-			in.prefixDatum = SGITDATUM(innerTuple, &so->state);
+			in.hasPrefix = innerTuple->hasPrefix;
+			if (in.hasPrefix)
+				in.prefixDatum = SGITDATUM(&so->state, innerTuple);
 			in.nNodes = innerTuple->nNodes;
 			in.nodeLabels = spgExtractNodeLabels(&so->state, innerTuple);
 
 			/* collect node pointers */
 			nodes = (SpGistNodeTuple *) palloc(sizeof(SpGistNodeTuple) * in.nNodes);
-			SGITITERATE(innerTuple, i, node)
+			SGITITERATE(&so->state, innerTuple, i, node)
 			{
 				nodes[i] = node;
 			}
@@ -524,16 +525,19 @@ redirect:
 
 			for (i = 0; i < out.nNodes; i++)
 			{
-				int			nodeN = out.nodeNumbers[i];
+				int				nodeN = out.nodeNumbers[i];
+				ItemPointerData	iptr;
 
+				SGNTGETITEMPOINTER(nodes[nodeN], &iptr);
 				Assert(nodeN >= 0 && nodeN < in.nNodes);
-				if (ItemPointerIsValid(&nodes[nodeN]->t_tid))
+
+				if (ItemPointerIsValid(&iptr))
 				{
 					ScanStackEntry *newEntry;
 
 					/* Create new work item for this node */
 					newEntry = palloc(sizeof(ScanStackEntry));
-					newEntry->ptr = nodes[nodeN]->t_tid;
+					newEntry->ptr = iptr;
 					if (out.levelAdds)
 						newEntry->level = stackEntry->level + out.levelAdds[i];
 					else

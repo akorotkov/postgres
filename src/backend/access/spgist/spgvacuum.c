@@ -762,12 +762,14 @@ spgprocesspending(spgBulkDeleteState *bds)
 					if (innerTuple->tupstate == SPGIST_LIVE)
 					{
 						SpGistNodeTuple node;
-						int			i;
+						int				i;
+						ItemPointerData	iptr;
 
-						SGITITERATE(innerTuple, i, node)
+						SGITITERATE(&bds->spgstate, innerTuple, i, node)
 						{
-							if (ItemPointerIsValid(&node->t_tid))
-								spgAddPendingTID(bds, &node->t_tid);
+							SGNTGETITEMPOINTER(node, &iptr);
+							if (ItemPointerIsValid(&iptr))
+								spgAddPendingTID(bds, &iptr);
 						}
 					}
 					else if (innerTuple->tupstate == SPGIST_REDIRECT)

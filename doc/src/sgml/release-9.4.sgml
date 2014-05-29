@@ -57,6 +57,13 @@
       </para>
      </listitem>
 
+     <listitem>
+      <para>
+       Reduce lock levels of some <link
+       linkend="SQL-ALTERTABLE"><command>ALTER TABLE</></link> commands
+      </para>
+     </listitem>
+
    </itemizedlist>
 
    <para>
@@ -278,7 +285,7 @@
 
     <listitem>
      <para>
-      <link linkend="pgupgrade"><application>Pg_upgrade</></link> now
+      <link linkend="pgupgrade"><application>pg_upgrade</></link> now
       uses <option>-U</> to specify the user name (Bruce Momjian)
      </para>
 
@@ -609,17 +616,18 @@
        </para>
 
        <para>
-        Such keys are faster and have improved security over previous
-        options. The new configuration
-        parameter <link linkend="guc-ssl-ecdh-curve"><varname>ssl_ecdh_curve</></link>
-        controls which curve is used.
+        This allows use of Elliptic Curve keys for server authentication.
+        Such keys are faster and have improved security over <acronym>RSA</> keys.
+        The new configuration parameter
+        <link linkend="guc-ssl-ecdh-curve"><varname>ssl_ecdh_curve</></link>
+        controls which curve is used for <acronym>ECDH</>.
        </para>
       </listitem>
 
       <listitem>
        <para>
         Improve the default <link
-        linkend="guc-ssl-ciphers"><varname>ssl_ciphers</></link> ciphers
+        linkend="guc-ssl-ciphers"><varname>ssl_ciphers</></link> value
         (Marko Kreen)
        </para>
       </listitem>
@@ -934,7 +942,7 @@
        <listitem>
         <para>
          Allow <link
-         linkend="app-pgreceivexlog"><application>pg_recvlogical</></link>
+         linkend="app-pgrecvlogical"><application>pg_recvlogical</></link>
          to receive data logical decoding data (Andres Freund)
         </para>
        </listitem>
@@ -1237,7 +1245,7 @@
        <para>
         Reduce lock levels of some <link
         linkend="SQL-ALTERTABLE"><command>ALTER TABLE</></link> commands
-        (Simon Riggs, Noah Misch)
+        (Simon Riggs, Noah Misch, Robert Haas)
        </para>
 
        <para>
@@ -2343,7 +2351,7 @@
 
       <listitem>
        <para>
-        Allow <application>pgbench</> to process script files of any line length (Sawada
+        Remove line length limit for <application>pgbench</> scripts (Sawada
         Masahiko)
        </para>
 
