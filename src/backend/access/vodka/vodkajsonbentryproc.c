@@ -139,18 +139,19 @@ searchChar(Datum *nodeLabels, int nNodes, uint16 c, int *i)
 	return false;
 }
 
-#define JSONB_VODKA_FLAG_VALUE		0x01
+#define JSONB_VODKA_FLAG_VALUE			0x01
 
-#define JSONB_VODKA_FLAG_NULL		0x00
-#define JSONB_VODKA_FLAG_STRING		0x02
-#define JSONB_VODKA_FLAG_NUMERIC	0x04
-#define JSONB_VODKA_FLAG_BOOL		0x06
-#define JSONB_VODKA_FLAG_TYPE		0x06
-#define JSONB_VODKA_FLAG_TRUE		0x08
-#define JSONB_VODKA_FLAG_NAN		0x08
-#define JSONB_VODKA_FLAG_NEGATIVE	0x10
+#define JSONB_VODKA_FLAG_NULL			0x00
+#define JSONB_VODKA_FLAG_STRING			0x02
+#define JSONB_VODKA_FLAG_NUMERIC		0x04
+#define JSONB_VODKA_FLAG_BOOL			0x06
+#define JSONB_VODKA_FLAG_EMPTY_ARRAY	0x08
+#define JSONB_VODKA_FLAG_EMPTY_OBJECT	0x0A
+#define JSONB_VODKA_FLAG_TYPE			0x0E
+#define JSONB_VODKA_FLAG_TRUE			0x10
+#define JSONB_VODKA_FLAG_NAN			0x10
 
-#define JSONB_VODKA_FLAG_ARRAY		0x02
+#define JSONB_VODKA_FLAG_ARRAY			0x02
 
 typedef enum
 {
@@ -556,18 +557,18 @@ spg_bytea_picksplit(PG_FUNCTION_ARGS)
 
 typedef enum
 {
-	iAny = 1,
-	iAnyArray,
-	iKey,
-	iAnyKey
+	iAny = '*',
+	iAnyArray = '#',
+	iKey = '%',
+	iAnyKey = 'K'
 } PathItemType;
 
 typedef struct PathItem PathItem;
 struct PathItem
 {
-	char		   *s;
 	PathItemType	type;
 	int				len;
+	char		   *s;
 	PathItem	   *parent;
 };
 
