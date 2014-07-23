@@ -26,6 +26,8 @@
 #include "utils/selfuncs.h"
 #include "utils/typcache.h"
 
+bool enable_arraysel_histogram = true;
+
 
 /* Default selectivity constant for "@>" and "<@" operators */
 #define DEFAULT_CONTAIN_SEL 0.005
@@ -49,6 +51,7 @@ static Selectivity mcelem_array_selec(ArrayType *array,
 static Selectivity mcelem_array_contain_overlap_selec(Datum *mcelem, int nmcelem,
 								   float4 *numbers, int nnumbers,
 								   Datum *array_data, int nitems,
+								   float4 *hist, int nhist,
 								   Oid operator, FmgrInfo *cmpfunc);
 static Selectivity mcelem_array_contained_selec(Datum *mcelem, int nmcelem,
 							 float4 *numbers, int nnumbers,
@@ -56,7 +59,7 @@ static Selectivity mcelem_array_contained_selec(Datum *mcelem, int nmcelem,
 							 float4 *hist, int nhist,
 							 Oid operator, FmgrInfo *cmpfunc);
 static float *calc_hist(const float4 *hist, int nhist, int n);
-static float *calc_distr(const float *p, int n, int m, float rest);
+static float *calc_distr(const float *p, int n, int m, float rest, int k);
 static int	floor_log2(uint32 n);
 static bool find_next_mcelem(Datum *mcelem, int nmcelem, Datum value,
 				 int *index, FmgrInfo *cmpfunc);
@@ -153,8 +156,7 @@ scalararraysel_containment(PlannerInfo *root,
 							 &numbers, &nnumbers))
 		{
 			/* For ALL case, also get histogram of distinct-element counts */
-			if (useOr ||
-				!get_attstatsslot(vardata.statsTuple,
+			if (!get_attstatsslot(vardata.statsTuple,
 								  elemtype, vardata.atttypmod,
 								  STATISTIC_KIND_DECHIST, InvalidOid,
 								  NULL,
@@ -174,6 +176,7 @@ scalararraysel_containment(PlannerInfo *root,
 				selec = mcelem_array_contain_overlap_selec(values, nvalues,
 														   numbers, nnumbers,
 														   &constval, 1,
+														   hist, nhist,
 													   OID_ARRAY_CONTAINS_OP,
 														   cmpfunc);
 			else
@@ -195,6 +198,7 @@ scalararraysel_containment(PlannerInfo *root,
 				selec = mcelem_array_contain_overlap_selec(NULL, 0,
 														   NULL, 0,
 														   &constval, 1,
+														   NULL, 0,
 													   OID_ARRAY_CONTAINS_OP,
 														   cmpfunc);
 			else
@@ -218,6 +222,7 @@ scalararraysel_containment(PlannerInfo *root,
 			selec = mcelem_array_contain_overlap_selec(NULL, 0,
 													   NULL, 0,
 													   &constval, 1,
+													   NULL, 0,
 													   OID_ARRAY_CONTAINS_OP,
 													   cmpfunc);
 		else
@@ -387,8 +392,7 @@ calc_arraycontsel(VariableStatData *vardata, Datum constval,
 			 * For "array <@ const" case we also need histogram of distinct
 			 * element counts.
 			 */
-			if (operator != OID_ARRAY_CONTAINED_OP ||
-				!get_attstatsslot(vardata->statsTuple,
+			if (!get_attstatsslot(vardata->statsTuple,
 								  elemtype, vardata->atttypmod,
 								  STATISTIC_KIND_DECHIST, InvalidOid,
 								  NULL,
@@ -502,7 +506,8 @@ mcelem_array_selec(ArrayType *array, TypeCacheEntry *typentry,
 	if (operator == OID_ARRAY_CONTAINS_OP || operator == OID_ARRAY_OVERLAP_OP)
 		selec = mcelem_array_contain_overlap_selec(mcelem, nmcelem,
 												   numbers, nnumbers,
-												 elem_values, nonnull_nitems,
+												   elem_values, nonnull_nitems,
+												   hist, nhist,
 												   operator, cmpfunc);
 	else if (operator == OID_ARRAY_CONTAINED_OP)
 		selec = mcelem_array_contained_selec(mcelem, nmcelem,
@@ -543,14 +548,23 @@ static Selectivity
 mcelem_array_contain_overlap_selec(Datum *mcelem, int nmcelem,
 								   float4 *numbers, int nnumbers,
 								   Datum *array_data, int nitems,
+								   float4 *hist, int nhist,
 								   Oid operator, FmgrInfo *cmpfunc)
 {
-	Selectivity selec,
-				elem_selec;
+	Selectivity selec;
 	int			mcelem_index,
 				i;
 	bool		use_bsearch;
 	float4		minfreq;
+	float4	   *elem_selec;
+	float4		rest;
+	bool	   *mcelem_used;
+
+	elem_selec = (float4 *)palloc(sizeof(float4) * (nmcelem + nnumbers));
+	mcelem_used = (bool *)palloc0(sizeof(bool) * nmcelem);
+
+	if (hist)
+		rest = hist[nhist - 1];
 
 	/*
 	 * There should be three more Numbers than Values, because the last three
@@ -603,6 +617,7 @@ mcelem_array_contain_overlap_selec(Datum *mcelem, int nmcelem,
 	for (i = 0; i < nitems; i++)
 	{
 		bool		match = false;
+		float4		cur_selec;
 
 		/* Ignore any duplicates in the array data. */
 		if (i > 0 &&
@@ -637,7 +652,8 @@ mcelem_array_contain_overlap_selec(Datum *mcelem, int nmcelem,
 		if (match && numbers)
 		{
 			/* MCELEM matches the array item; use its frequency. */
-			elem_selec = numbers[mcelem_index];
+			cur_selec = numbers[mcelem_index];
+			mcelem_used[mcelem_index] = true;
 			mcelem_index++;
 		}
 		else
@@ -646,21 +662,87 @@ mcelem_array_contain_overlap_selec(Datum *mcelem, int nmcelem,
 			 * The element is not in MCELEM.  Punt, but assume that the
 			 * selectivity cannot be more than minfreq / 2.
 			 */
-			elem_selec = Min(DEFAULT_CONTAIN_SEL, minfreq / 2);
+			cur_selec = Min(DEFAULT_CONTAIN_SEL, minfreq / 2);
 		}
+
+		elem_selec[i] = cur_selec;
 
 		/*
 		 * Update overall selectivity using the current element's selectivity
 		 * and an assumption of element occurrence independence.
 		 */
 		if (operator == OID_ARRAY_CONTAINS_OP)
-			selec *= elem_selec;
+			selec *= cur_selec;
 		else
-			selec = selec + elem_selec - selec * elem_selec;
+			selec = selec + cur_selec - selec * cur_selec;
 
 		/* Clamp intermediate results to stay sane despite roundoff error */
 		CLAMP_PROBABILITY(selec);
 	}
+
+	if (enable_arraysel_histogram && numbers && hist)
+	{
+		float4	mult;
+		float  *dist,
+			   *mcelem_dist,
+			   *hist_part;
+		int		elem_count = nitems;
+		int		hist_length = (int)hist[nhist - 2];
+
+		for (i = 0; i < nmcelem; i++)
+		{
+			if (!mcelem_used[i])
+				elem_selec[elem_count++] = numbers[i];
+			rest -= numbers[i];
+		}
+
+		if (operator == OID_ARRAY_CONTAINS_OP)
+		{
+			mult = selec;
+			dist = calc_distr(elem_selec + nitems,
+							  elem_count - nitems,
+							  hist_length - nitems,
+							  rest, 0);
+		}
+		else
+		{
+			dist = calc_distr(elem_selec,
+							  elem_count,
+							  hist_length,
+							  rest, nitems);
+		}
+
+		/*
+		 * Calculate probabilities of each distinct element count for both mcelems
+		 * and constant elements.  At this point, assume independent element
+		 * occurrence.
+		 */
+		mcelem_dist = calc_distr(elem_selec, elem_count, hist_length, rest, 0);
+
+		/* ignore hist[nhist-1], which is the average not a histogram member */
+		hist_part = calc_hist(hist, nhist - 1, hist_length);
+
+		selec = 0.0f;
+		if (operator == OID_ARRAY_CONTAINS_OP)
+		{
+			for (i = nitems; i <= hist_length; i++)
+			{
+				if (mcelem_dist[i] > 0)
+					selec += hist_part[i] * mult * dist[i - nitems] / mcelem_dist[i];
+			}
+		}
+		else
+		{
+			for (i = 0; i <= hist_length; i++)
+			{
+				if (mcelem_dist[i] > 0)
+					selec += hist_part[i] * dist[i] / mcelem_dist[i];
+			}
+		}
+	}
+
+	pfree(elem_selec);
+	pfree(mcelem_used);
 
 	return selec;
 }
@@ -874,50 +956,58 @@ mcelem_array_contained_selec(Datum *mcelem, int nmcelem,
 	 */
 #define EFFORT 100
 
-	if ((nmcelem + unique_nitems) > 0 &&
-		unique_nitems > EFFORT * nmcelem / (nmcelem + unique_nitems))
+	if (enable_arraysel_histogram)
 	{
+		if ((nmcelem + unique_nitems) > 0 &&
+			unique_nitems > EFFORT * nmcelem / (nmcelem + unique_nitems))
+		{
+			/*
+			 * Use the quadratic formula to solve for largest allowable N.  We
+			 * have A = 1, B = nmcelem, C = - EFFORT * nmcelem.
+			 */
+			double		b = (double) nmcelem;
+			int			n;
+
+			n = (int) ((sqrt(b * b + 4 * EFFORT * b) - b) / 2);
+
+			/* Sort, then take just the first n elements */
+			qsort(elem_selec, unique_nitems, sizeof(float),
+				  float_compare_desc);
+			unique_nitems = n;
+		}
+
 		/*
-		 * Use the quadratic formula to solve for largest allowable N.  We
-		 * have A = 1, B = nmcelem, C = - EFFORT * nmcelem.
+		 * Calculate probabilities of each distinct element count for both mcelems
+		 * and constant elements.  At this point, assume independent element
+		 * occurrence.
 		 */
-		double		b = (double) nmcelem;
-		int			n;
+		dist = calc_distr(elem_selec, unique_nitems, unique_nitems, 0.0f, 0);
+		mcelem_dist = calc_distr(numbers, nmcelem, unique_nitems, rest, 0);
 
-		n = (int) ((sqrt(b * b + 4 * EFFORT * b) - b) / 2);
+		/* ignore hist[nhist-1], which is the average not a histogram member */
+		hist_part = calc_hist(hist, nhist - 1, unique_nitems);
 
-		/* Sort, then take just the first n elements */
-		qsort(elem_selec, unique_nitems, sizeof(float),
-			  float_compare_desc);
-		unique_nitems = n;
+		selec = 0.0f;
+		for (i = 0; i <= unique_nitems; i++)
+		{
+			/*
+			 * mult * dist[i] / mcelem_dist[i] gives us probability of qual
+			 * matching from assumption of independent element occurrence with the
+			 * condition that distinct element count = i.
+			 */
+			if (mcelem_dist[i] > 0)
+				selec += hist_part[i] * mult * dist[i] / mcelem_dist[i];
+		}
+
+		pfree(dist);
+		pfree(mcelem_dist);
+		pfree(hist_part);
+	}
+	else
+	{
+		selec = mult;
 	}
 
-	/*
-	 * Calculate probabilities of each distinct element count for both mcelems
-	 * and constant elements.  At this point, assume independent element
-	 * occurrence.
-	 */
-	dist = calc_distr(elem_selec, unique_nitems, unique_nitems, 0.0f);
-	mcelem_dist = calc_distr(numbers, nmcelem, unique_nitems, rest);
-
-	/* ignore hist[nhist-1], which is the average not a histogram member */
-	hist_part = calc_hist(hist, nhist - 1, unique_nitems);
-
-	selec = 0.0f;
-	for (i = 0; i <= unique_nitems; i++)
-	{
-		/*
-		 * mult * dist[i] / mcelem_dist[i] gives us probability of qual
-		 * matching from assumption of independent element occurrence with the
-		 * condition that distinct element count = i.
-		 */
-		if (mcelem_dist[i] > 0)
-			selec += hist_part[i] * mult * dist[i] / mcelem_dist[i];
-	}
-
-	pfree(dist);
-	pfree(mcelem_dist);
-	pfree(hist_part);
 	pfree(elem_selec);
 
 	/* Take into account occurrence of NULL element. */
@@ -1029,7 +1119,7 @@ calc_hist(const float4 *hist, int nhist, int n)
  *	M[i,0] = M[i - 1, 0] * (1 - p[i]) for i > 0.
  */
 static float *
-calc_distr(const float *p, int n, int m, float rest)
+calc_distr(const float *p, int n, int m, float rest, int k)
 {
 	float	   *row,
 			   *prev_row,
@@ -1066,7 +1156,12 @@ calc_distr(const float *p, int n, int m, float rest)
 				val += prev_row[j - 1] * t;
 			row[j] = val;
 		}
+
+		if (i == k)
+			row[0] = 0.0f;
 	}
+	for (j = i; j <= m; j++)
+		row[j] = 0.0f;
 
 	/*
 	 * The presence of many distinct rare (not in "p") elements materially

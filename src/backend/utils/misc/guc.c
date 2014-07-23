@@ -462,6 +462,7 @@ int			tcp_keepalives_count;
  * need to be duplicated in all the different implementations of pg_shmem.c.
  */
 int			huge_pages;
+extern bool	enable_arraysel_histogram;
 
 /*
  * These variables are all dummies that don't do anything, except in some
@@ -1511,6 +1512,16 @@ static struct config_bool ConfigureNamesBool[] =
 		},
 		&data_checksums,
 		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"enable_arraysel_histogram", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Use length histogram in array selectivity."),
+			NULL,
+		},
+		&enable_arraysel_histogram,
+		true,
 		NULL, NULL, NULL
 	},
 
