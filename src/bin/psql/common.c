@@ -270,7 +270,7 @@ ConnectionUp(void)
  * see if it can be restored.
  *
  * Returns true if either the connection was still there, or it could be
- * restored successfully; false otherwise.	If, however, there was no
+ * restored successfully; false otherwise.  If, however, there was no
  * connection and the session is non-interactive, this will exit the program
  * with a code of EXIT_BADCONN.
  */
@@ -630,7 +630,7 @@ StoreQueryTuple(const PGresult *result)
  * command.  In that event, we'll marshal data for the COPY and then cycle
  * through any subsequent PGresult objects.
  *
- * When the command string contained no affected COPY command, this function
+ * When the command string contained no such COPY command, this function
  * degenerates to an AcceptResult() call.
  *
  * Changes its argument to point to the last PGresult of the command string,
@@ -690,18 +690,33 @@ ProcessResult(PGresult **results)
 			 * Marshal the COPY data.  Either subroutine will get the
 			 * connection out of its COPY state, then call PQresultStatus()
 			 * once and report any error.
+			 *
+			 * If pset.copyStream is set, use that as data source/sink,
+			 * otherwise use queryFout or cur_cmd_source as appropriate.
 			 */
+			FILE	   *copystream = pset.copyStream;
+
 			SetCancelConn();
 			if (result_status == PGRES_COPY_OUT)
-				success = handleCopyOut(pset.db, pset.queryFout) && success;
+			{
+				if (!copystream)
+					copystream = pset.queryFout;
+				success = handleCopyOut(pset.db,
+										copystream) && success;
+			}
 			else
-				success = handleCopyIn(pset.db, pset.cur_cmd_source,
+			{
+				if (!copystream)
+					copystream = pset.cur_cmd_source;
+				success = handleCopyIn(pset.db,
+									   copystream,
 									   PQbinaryTuples(*results)) && success;
+			}
 			ResetCancelConn();
 
 			/*
 			 * Call PQgetResult() once more.  In the typical case of a
-			 * single-command string, it will return NULL.	Otherwise, we'll
+			 * single-command string, it will return NULL.  Otherwise, we'll
 			 * have other results to process that may include other COPYs.
 			 */
 			PQclear(*results);

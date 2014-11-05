@@ -72,7 +72,7 @@
 #include "utils/timestamp.h"
 
 /*
- * Maximum data payload in a WAL data message.	Must be >= XLOG_BLCKSZ.
+ * Maximum data payload in a WAL data message.  Must be >= XLOG_BLCKSZ.
  *
  * We don't have a good idea of what a good value would be; there's some
  * overhead per message in both walsender and walreceiver, but on the other
@@ -942,7 +942,7 @@ ProcessStandbyHSFeedbackMessage(void)
 	 * perhaps far enough to make feedbackXmin wrap around.  In that case the
 	 * xmin we set here would be "in the future" and have no effect.  No point
 	 * in worrying about this since it's too late to save the desired data
-	 * anyway.	Assuming that the standby sends us an increasing sequence of
+	 * anyway.  Assuming that the standby sends us an increasing sequence of
 	 * xmins, this could only happen during the first reply cycle, else our
 	 * own xmin would prevent nextXid from advancing so far.
 	 *
@@ -1053,9 +1053,20 @@ WalSndLoop(void)
 			 */
 			if (walsender_ready_to_stop)
 			{
+				XLogRecPtr	replicatedPtr;
+
 				/* ... let's just be real sure we're caught up ... */
 				XLogSend(&caughtup);
-				if (caughtup && sentPtr == MyWalSnd->flush &&
+
+				/*
+				 * Check a write location to see whether all the WAL have
+				 * successfully been replicated if this walsender is connecting
+				 * to a standby such as pg_receivexlog which always returns
+				 * an invalid flush location. Otherwise, check a flush location.
+				 */
+				replicatedPtr = XLogRecPtrIsInvalid(MyWalSnd->flush) ?
+					MyWalSnd->write : MyWalSnd->flush;
+				if (caughtup && sentPtr == replicatedPtr &&
 					!pq_is_send_pending())
 				{
 					/* Inform the standby that XLOG streaming is done */
@@ -1068,6 +1079,27 @@ WalSndLoop(void)
 		}
 
 		/*
+		 * If half of wal_sender_timeout has elapsed without receiving any
+		 * reply from standby, send a keep-alive message requesting an
+		 * immediate reply.
+		 */
+		if (wal_sender_timeout > 0 && !ping_sent)
+		{
+			TimestampTz timeout;
+
+			timeout = TimestampTzPlusMilliseconds(last_reply_timestamp,
+												  wal_sender_timeout / 2);
+			if (GetCurrentTimestamp() >= timeout)
+			{
+				WalSndKeepalive(true);
+				ping_sent = true;
+				/* Try to flush pending output to the client */
+				if (pq_flush_if_writable() != 0)
+					goto send_failure;
+			}
+		}
+
+		/*
 		 * We don't block if not caught up, unless there is unsent data
 		 * pending in which case we'd better block until the socket is
 		 * write-ready.  This test is only needed for the case where XLogSend
@@ -1076,7 +1108,7 @@ WalSndLoop(void)
 		 */
 		if ((caughtup && !streamingDoneSending) || pq_is_send_pending())
 		{
-			TimestampTz timeout = 0;
+			TimestampTz timeout;
 			long		sleeptime = 10000;		/* 10 s */
 			int			wakeEvents;
 
@@ -1085,32 +1117,14 @@ WalSndLoop(void)
 
 			if (pq_is_send_pending())
 				wakeEvents |= WL_SOCKET_WRITEABLE;
-			else if (wal_sender_timeout > 0 && !ping_sent)
-			{
-				/*
-				 * If half of wal_sender_timeout has lapsed without receiving
-				 * any reply from standby, send a keep-alive message to
-				 * standby requesting an immediate reply.
-				 */
-				timeout = TimestampTzPlusMilliseconds(last_reply_timestamp,
-													  wal_sender_timeout / 2);
-				if (GetCurrentTimestamp() >= timeout)
-				{
-					WalSndKeepalive(true);
-					ping_sent = true;
-					/* Try to flush pending output to the client */
-					if (pq_flush_if_writable() != 0)
-						break;
-				}
-			}
 
-			/* Determine time until replication timeout */
+			/*
+			 * If wal_sender_timeout is active, sleep in smaller increments
+			 * to not go over the timeout too much. XXX: Why not just sleep
+			 * until the timeout has elapsed?
+			 */
 			if (wal_sender_timeout > 0)
-			{
-				timeout = TimestampTzPlusMilliseconds(last_reply_timestamp,
-													  wal_sender_timeout);
 				sleeptime = 1 + (wal_sender_timeout / 10);
-			}
 
 			/* Sleep until something happens or we time out */
 			ImmediateInterruptOK = true;
@@ -1124,6 +1138,8 @@ WalSndLoop(void)
 			 * possibility that the client replied just as we reached the
 			 * timeout ... he's supposed to reply *before* that.
 			 */
+			timeout = TimestampTzPlusMilliseconds(last_reply_timestamp,
+												  wal_sender_timeout);
 			if (wal_sender_timeout > 0 && GetCurrentTimestamp() >= timeout)
 			{
 				/*
@@ -1510,7 +1526,7 @@ XLogSend(bool *caughtup)
 		 *
 		 * Attempt to send all data that's already been written out and
 		 * fsync'd to disk.  We cannot go further than what's been written out
-		 * given the current implementation of XLogRead().	And in any case
+		 * given the current implementation of XLogRead().  And in any case
 		 * it's unsafe to send WAL that is not securely down to disk on the
 		 * master: if the master subsequently crashes and restarts, slaves
 		 * must not have applied any WAL that gets lost on the master.

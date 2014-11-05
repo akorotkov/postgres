@@ -70,6 +70,8 @@ typedef struct _psqlSettings
 	FILE	   *queryFout;		/* where to send the query results */
 	bool		queryFoutPipe;	/* queryFout is from a popen() */
 
+	FILE	   *copyStream;		/* Stream to read/write for \copy command */
+
 	printQueryOpt popt;
 
 	char	   *gfname;			/* one-shot file output argument for \g */
@@ -96,7 +98,7 @@ typedef struct _psqlSettings
 
 	/*
 	 * The remaining fields are set by assign hooks associated with entries in
-	 * "vars".	They should not be set directly except by those hook
+	 * "vars".  They should not be set directly except by those hook
 	 * functions.
 	 */
 	bool		autocommit;

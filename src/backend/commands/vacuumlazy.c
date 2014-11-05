@@ -13,7 +13,7 @@
  * We are willing to use at most maintenance_work_mem memory space to keep
  * track of dead tuples.  We initially allocate an array of TIDs of that size,
  * with an upper limit that depends on table size (this limit ensures we don't
- * allocate a huge area uselessly for vacuuming small tables).	If the array
+ * allocate a huge area uselessly for vacuuming small tables).  If the array
  * threatens to overflow, we suspend the heap scan phase and perform a pass of
  * index cleanup and page compaction, then resume the heap scan with an empty
  * TID array.
@@ -464,7 +464,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 	 * Before entering the main loop, establish the invariant that
 	 * next_not_all_visible_block is the next block number >= blkno that's not
 	 * all-visible according to the visibility map, or nblocks if there's no
-	 * such block.	Also, we set up the skipping_all_visible_blocks flag,
+	 * such block.  Also, we set up the skipping_all_visible_blocks flag,
 	 * which is needed because we need hysteresis in the decision: once we've
 	 * started skipping blocks, we may as well skip everything up to the next
 	 * not-all-visible block.
@@ -966,7 +966,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 			/*
 			 * It should never be the case that the visibility map page is set
 			 * while the page-level bit is clear, but the reverse is allowed
-			 * (if checksums are not enabled).	Regardless, set the both bits
+			 * (if checksums are not enabled).  Regardless, set the both bits
 			 * so that we get back in sync.
 			 *
 			 * NB: If the heap page is all-visible but the VM bit is not set,
@@ -1028,8 +1028,8 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		/*
 		 * If we remembered any tuples for deletion, then the page will be
 		 * visited again by lazy_vacuum_heap, which will compute and record
-		 * its post-compaction free space.	If not, then we're done with this
-		 * page, so remember its free space as-is.	(This path will always be
+		 * its post-compaction free space.  If not, then we're done with this
+		 * page, so remember its free space as-is.  (This path will always be
 		 * taken if there are no indexes.)
 		 */
 		if (vacrelstats->num_dead_tuples == prev_dead_count)
@@ -1224,19 +1224,33 @@ lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
 	}
 
 	/*
-	 * Now that we have removed the dead tuples from the page, once again
-	 * check if the page has become all-visible.
+	 * End critical section, so we safely can do visibility tests (which
+	 * possibly need to perform IO and allocate memory!). If we crash now the
+	 * page (including the corresponding vm bit) might not be marked all
+	 * visible, but that's fine. A later vacuum will fix that.
 	 */
-	if (!visibilitymap_test(onerel, blkno, vmbuffer) &&
-		heap_page_is_all_visible(buffer, &visibility_cutoff_xid))
+	END_CRIT_SECTION();
+
+	/*
+	 * Now that we have removed the dead tuples from the page, once again
+	 * check if the page has become all-visible.  The page is already marked
+	 * dirty, exclusively locked, and, if needed, a full page image has been
+	 * emitted in the log_heap_clean() above.
+	 */
+	if (heap_page_is_all_visible(buffer, &visibility_cutoff_xid))
+		PageSetAllVisible(page);
+
+	/*
+	 * All the changes to the heap page have been done. If the all-visible
+	 * flag is now set, also set the VM bit.
+	 */
+	if (PageIsAllVisible(page) &&
+		!visibilitymap_test(onerel, blkno, vmbuffer))
 	{
 		Assert(BufferIsValid(*vmbuffer));
-		PageSetAllVisible(page);
 		visibilitymap_set(onerel, blkno, buffer, InvalidXLogRecPtr, *vmbuffer,
 						  visibility_cutoff_xid);
 	}
-
-	END_CRIT_SECTION();
 
 	return tupindex;
 }

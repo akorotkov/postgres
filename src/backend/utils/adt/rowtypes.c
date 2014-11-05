@@ -18,6 +18,7 @@
 
 #include "access/htup_details.h"
 #include "catalog/pg_type.h"
+#include "funcapi.h"
 #include "libpq/pqformat.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
@@ -277,7 +278,7 @@ record_in(PG_FUNCTION_ARGS)
 	/*
 	 * We cannot return tuple->t_data because heap_form_tuple allocates it as
 	 * part of a larger chunk, and our caller may expect to be able to pfree
-	 * our result.	So must copy the info into a new palloc chunk.
+	 * our result.  So must copy the info into a new palloc chunk.
 	 */
 	result = (HeapTupleHeader) palloc(tuple->t_len);
 	memcpy(result, tuple->t_data, tuple->t_len);
@@ -621,7 +622,7 @@ record_recv(PG_FUNCTION_ARGS)
 	/*
 	 * We cannot return tuple->t_data because heap_form_tuple allocates it as
 	 * part of a larger chunk, and our caller may expect to be able to pfree
-	 * our result.	So must copy the info into a new palloc chunk.
+	 * our result.  So must copy the info into a new palloc chunk.
 	 */
 	result = (HeapTupleHeader) palloc(tuple->t_len);
 	memcpy(result, tuple->t_data, tuple->t_len);
@@ -859,7 +860,7 @@ record_cmp(FunctionCallInfo fcinfo)
 
 	/*
 	 * Scan corresponding columns, allowing for dropped columns in different
-	 * places in the two rows.	i1 and i2 are physical column indexes, j is
+	 * places in the two rows.  i1 and i2 are physical column indexes, j is
 	 * the logical column index.
 	 */
 	i1 = i2 = j = 0;
@@ -1094,7 +1095,7 @@ record_eq(PG_FUNCTION_ARGS)
 
 	/*
 	 * Scan corresponding columns, allowing for dropped columns in different
-	 * places in the two rows.	i1 and i2 are physical column indexes, j is
+	 * places in the two rows.  i1 and i2 are physical column indexes, j is
 	 * the logical column index.
 	 */
 	i1 = i2 = j = 0;

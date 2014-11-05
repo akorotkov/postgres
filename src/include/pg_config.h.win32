@@ -261,6 +261,9 @@
 /* Define to 1 if the system has the type `MINIDUMP_TYPE'. */
 #define HAVE_MINIDUMP_TYPE 1
 
+/* Define to 1 if you have the `mkdtemp' function. */
+/* #undef HAVE_MKDTEMP */
+
 /* Define to 1 if you have the <netinet/in.h> header file. */
 #define HAVE_NETINET_IN_H 1
 
@@ -569,19 +572,19 @@
 #define PACKAGE_NAME "PostgreSQL"
 
 /* Define to the full name and version of this package. */
-#define PACKAGE_STRING "PostgreSQL 9.3.3"
+#define PACKAGE_STRING "PostgreSQL 9.3.5"
 
 /* Define to the version of this package. */
-#define PACKAGE_VERSION "9.3.3"
+#define PACKAGE_VERSION "9.3.5"
 
 /* Define to the name of a signed 64-bit integer type. */
 #define PG_INT64_TYPE long long int
 
 /* PostgreSQL version as a string */
-#define PG_VERSION "9.3.3"
+#define PG_VERSION "9.3.5"
 
 /* PostgreSQL version as a number */
-#define PG_VERSION_NUM 90303
+#define PG_VERSION_NUM 90305
 
 /* Define to the one symbol short name of this package. */
 #define PACKAGE_TARNAME "postgresql"

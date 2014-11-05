@@ -271,11 +271,8 @@ do_copy(const char *args)
 {
 	PQExpBufferData query;
 	FILE	   *copystream;
-	FILE	   *save_file;
-	FILE	  **override_file;
 	struct copy_options *options;
 	bool		success;
-	struct stat st;
 
 	/* parse options */
 	options = parse_slash_copy(args);
@@ -289,8 +286,6 @@ do_copy(const char *args)
 
 	if (options->from)
 	{
-		override_file = &pset.cur_cmd_source;
-
 		if (options->file)
 		{
 			if (options->program)
@@ -310,8 +305,6 @@ do_copy(const char *args)
 	}
 	else
 	{
-		override_file = &pset.queryFout;
-
 		if (options->file)
 		{
 			if (options->program)
@@ -347,6 +340,8 @@ do_copy(const char *args)
 
 	if (!options->program)
 	{
+		struct stat st;
+
 		/* make sure the specified file is not a directory */
 		fstat(fileno(copystream), &st);
 		if (S_ISDIR(st.st_mode))
@@ -370,11 +365,10 @@ do_copy(const char *args)
 	if (options->after_tofrom)
 		appendPQExpBufferStr(&query, options->after_tofrom);
 
-	/* Run it like a user command, interposing the data source or sink. */
-	save_file = *override_file;
-	*override_file = copystream;
+	/* run it like a user command, but with copystream as data source/sink */
+	pset.copyStream = copystream;
 	success = SendQuery(query.data);
-	*override_file = save_file;
+	pset.copyStream = NULL;
 	termPQExpBuffer(&query);
 
 	if (options->file != NULL)
@@ -673,7 +667,7 @@ copyin_cleanup:
 	 * COPY FROM STDIN commands.  We keep trying PQputCopyEnd() in the hope
 	 * it'll work eventually.  (What's actually likely to happen is that in
 	 * attempting to flush the data, libpq will eventually realize that the
-	 * connection is lost.	But that's fine; it will get us out of COPY_IN
+	 * connection is lost.  But that's fine; it will get us out of COPY_IN
 	 * state, which is what we need.)
 	 */
 	while (res = PQgetResult(conn), PQresultStatus(res) == PGRES_COPY_IN)

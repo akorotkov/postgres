@@ -246,7 +246,7 @@ refresh_matview_datafill(DestReceiver *dest, Query *query,
 
 	/* Lock and rewrite, using a copy to preserve the original query. */
 	copied_query = copyObject(query);
-	AcquireRewriteLocks(copied_query, false);
+	AcquireRewriteLocks(copied_query, true, false);
 	rewritten = QueryRewrite(copied_query);
 
 	/* SELECT should never rewrite to more or less than one SELECT query */
@@ -262,7 +262,7 @@ refresh_matview_datafill(DestReceiver *dest, Query *query,
 
 	/*
 	 * Use a snapshot with an updated command ID to ensure this query sees
-	 * results of any previously executed queries.	(This could only matter if
+	 * results of any previously executed queries.  (This could only matter if
 	 * the planner executed an allegedly-stable function that changed the
 	 * database contents, but let's do it anyway to be safe.)
 	 */
