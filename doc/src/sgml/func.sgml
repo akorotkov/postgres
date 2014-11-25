@@ -11642,14 +11642,13 @@ SELECT NULLIF(value, '(none)') ...
       <entry>
        <type>smallint</type>, <type>int</type>,
        <type>bigint</type>, <type>real</type>, <type>double
-       precision</type>, <type>numeric</type>, or
-       <type>interval</type>
+       precision</type>, <type>numeric</type>,
+       <type>interval</type>, or <type>money</>
       </entry>
       <entry>
        <type>bigint</type> for <type>smallint</type> or
        <type>int</type> arguments, <type>numeric</type> for
-       <type>bigint</type> arguments, <type>double precision</type>
-       for floating-point arguments, otherwise the same as the
+       <type>bigint</type> arguments, otherwise the same as the
        argument data type
       </entry>
       <entry>sum of <replaceable class="parameter">expression</replaceable> across all input values</entry>
@@ -14562,7 +14561,7 @@ SELECT pg_type_is_visible('myschema.widget'::regtype);
    <parameter>schema</> is the schema name that the object belongs in, or
    <literal>NULL</> for object types that do not belong to schemas;
    <parameter>name</> is the name of the object, quoted if necessary, only
-   present if it can be used (alongside schema name, if pertinent) as an unique
+   present if it can be used (alongside schema name, if pertinent) as a unique
    identifier of the object, otherwise <literal>NULL</>;
    <parameter>identity</> is the complete object identity, with the precise format
    depending on object type, and each part within the format being
@@ -15596,7 +15595,7 @@ postgres=# SELECT * FROM pg_xlogfile_name_offset(pg_stop_backup());
        <entry><type>bigint</type></entry>
        <entry>
         Disk space used by the specified fork (<literal>'main'</literal>,
-        <literal>'fsm'</literal> or <literal>'vm'</>)
+        <literal>'fsm'</literal>, <literal>'vm'</>, or <literal>'init'</>)
         of the specified table or index
        </entry>
       </row>
@@ -15703,18 +15702,40 @@ postgres=# SELECT * FROM pg_xlogfile_name_offset(pg_stop_backup());
    </para>
 
    <para>
-    <function>pg_relation_size</> accepts the OID or name of a table, index or
-    toast table, and returns the on-disk size in bytes. Specifying
-    <literal>'main'</literal> or leaving out the second argument returns the
-    size of the main data fork of the relation. Specifying
-    <literal>'fsm'</literal> returns the size of the
-    Free Space Map (see <xref linkend="storage-fsm">) associated with the
-    relation. Specifying <literal>'vm'</literal> returns the size of the
-    Visibility Map (see <xref linkend="storage-vm">) associated with the
-    relation.  Note that this function shows the size of only one fork;
-    for most purposes it is more convenient to use the higher-level
-    functions <function>pg_total_relation_size</> or
-    <function>pg_table_size</>.
+    <function>pg_relation_size</> accepts the OID or name of a table, index
+    or toast table, and returns the on-disk size in bytes of one fork of
+    that relation.  (Note that for most purposes it is more convenient to
+    use the higher-level functions <function>pg_total_relation_size</>
+    or <function>pg_table_size</>, which sum the sizes of all forks.)
+    With one argument, it returns the size of the main data fork of the
+    relation.  The second argument can be provided to specify which fork
+    to examine:
+    <itemizedlist spacing="compact">
+     <listitem>
+      <para>
+       <literal>'main'</literal> returns the size of the main
+       data fork of the relation.
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       <literal>'fsm'</literal> returns the size of the Free Space Map
+       (see <xref linkend="storage-fsm">) associated with the relation.
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       <literal>'vm'</literal> returns the size of the Visibility Map
+       (see <xref linkend="storage-vm">) associated with the relation.
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       <literal>'init'</literal> returns the size of the initialization fork,
+       if any, (see <xref linkend="storage-init">) associated with the relation.
+      </para>
+     </listitem>
+    </itemizedlist>
    </para>
 
    <para>
@@ -16311,7 +16332,7 @@ FOR EACH ROW EXECUTE PROCEDURE suppress_redundant_updates_trigger();
         <entry><type>text</type></entry>
         <entry>
          Name of the object, if the combination of schema and name can be
-         used as an unique identifier for the object; otherwise <literal>NULL</>.
+         used as a unique identifier for the object; otherwise <literal>NULL</>.
          No quoting is applied, and name is never schema-qualified.
         </entry>
        </row>

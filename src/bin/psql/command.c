@@ -1074,20 +1074,8 @@ exec_command(const char *cmd,
 		char	   *fname = psql_scan_slash_option(scan_state,
 												   OT_NORMAL, NULL, true);
 
-#if defined(WIN32) && !defined(__CYGWIN__)
-
-		/*
-		 * XXX This does not work for all terminal environments or for output
-		 * containing non-ASCII characters; see comments in simple_prompt().
-		 */
-#define DEVTTY	"con"
-#else
-#define DEVTTY	"/dev/tty"
-#endif
-
 		expand_tilde(&fname);
-		/* This scrolls off the screen when using /dev/tty */
-		success = saveHistory(fname ? fname : DEVTTY, -1, false, false);
+		success = printHistory(fname, pset.popt.topt.pager);
 		if (success && !pset.quiet && fname)
 			printf(gettext("Wrote history to file \"%s/%s\".\n"),
 				   pset.dirname ? pset.dirname : ".", fname);
@@ -1124,12 +1112,7 @@ exec_command(const char *cmd,
 			while ((opt = psql_scan_slash_option(scan_state,
 												 OT_NORMAL, NULL, false)))
 			{
-				newval = realloc(newval, strlen(newval) + strlen(opt) + 1);
-				if (!newval)
-				{
-					psql_error("out of memory\n");
-					exit(EXIT_FAILURE);
-				}
+				newval = pg_realloc(newval, strlen(newval) + strlen(opt) + 1);
 				strcat(newval, opt);
 				free(opt);
 			}

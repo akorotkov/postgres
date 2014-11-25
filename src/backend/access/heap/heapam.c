@@ -949,7 +949,7 @@ heapgettup_pagemode(HeapScanDesc scan,
 #if defined(DISABLE_COMPLEX_MACRO)
 /*
  * This is formatted so oddly so that the correspondence to the macro
- * definition in access/htup.h is maintained.
+ * definition in access/htup_details.h is maintained.
  */
 Datum
 fastgetattr(HeapTuple tup, int attnum, TupleDesc tupleDesc,
@@ -7070,9 +7070,8 @@ heap_xlog_newpage(XLogRecPtr lsn, XLogRecord *record)
 	 * not do anything that assumes we are touching a heap.
 	 */
 	buffer = XLogReadBufferExtended(xlrec->node, xlrec->forknum, xlrec->blkno,
-									RBM_ZERO);
+									RBM_ZERO_AND_LOCK);
 	Assert(BufferIsValid(buffer));
-	LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 	page = (Page) BufferGetPage(buffer);
 
 	Assert(record->xl_len == SizeOfHeapNewpage + BLCKSZ);
