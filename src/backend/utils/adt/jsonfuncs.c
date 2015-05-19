@@ -3898,3 +3898,156 @@ replacePathArray(JsonbIterator **it, Datum *path_elems, bool *path_nulls,
 		}
 	}
 }
+
+typedef struct UnnestState
+{
+	MemoryContext		 ctx;
+	Jsonb				*jb;
+	JsonbIterator		*it;
+	bool				 skipNested;
+	JsonbIteratorToken	 type;
+}
+UnnestState;
+
+static void finiUnnest(UnnestState *state);
+
+static void
+initUnnest(FuncCallContext *funcctx, Datum jsonb, bool recursive,
+			JsonbIteratorToken type)
+{
+	MemoryContext	 oldcontext;
+	UnnestState		*state;
+	JsonbValue		 v;
+	int				 r;
+
+	oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+
+	state = palloc0(sizeof(*state));
+	state->ctx = funcctx->multi_call_memory_ctx;
+	state->jb = DatumGetJsonbCopy(jsonb);
+	state->it = JsonbIteratorInit(&state->jb->root);
+	state->skipNested = !recursive;
+	state->type = type;
+
+	r = JsonbIteratorNext(&state->it, &v, false);
+
+	if (JB_ROOT_IS_SCALAR(state->jb))
+	{
+		r = JsonbIteratorNext(&state->it, &v, true);
+		r = JsonbIteratorNext(&state->it, &v, true);
+		Assert(r == WJB_DONE);
+	}
+
+	MemoryContextSwitchTo(oldcontext);
+
+	if (r == WJB_DONE)
+	{
+		finiUnnest(state);
+		state = NULL;
+	}
+
+	funcctx->user_fctx = (void *) state;
+}
+
+static Jsonb*
+nextUnnest(UnnestState *state)
+{
+	MemoryContext	 oldcontext;
+	JsonbValue		 v;
+	int				 r;
+
+	/*
+	 * Iterator should work in long-lived memory context
+	 */
+	oldcontext = MemoryContextSwitchTo(state->ctx);
+
+	while((r = JsonbIteratorNext(&state->it, &v, state->skipNested)) != WJB_DONE)
+	{
+		if (r == state->type)
+			break;
+	}
+
+	MemoryContextSwitchTo(oldcontext);
+
+	return (r == state->type) ? JsonbValueToJsonb(&v) : NULL;
+}
+
+static void
+finiUnnest(UnnestState *state)
+{
+	if (state)
+	{
+		pfree(state->jb);
+		pfree(state);
+	}
+}
+
+Datum
+jsonb_unnest_element(PG_FUNCTION_ARGS)
+{
+	FuncCallContext *funcctx;
+	UnnestState     *state;
+	Jsonb			*r;
+
+	if (SRF_IS_FIRSTCALL())
+		initUnnest(SRF_FIRSTCALL_INIT(), PG_GETARG_DATUM(0),
+				   PG_GETARG_BOOL(1), WJB_ELEM);
+
+	funcctx = SRF_PERCALL_SETUP();
+	state = funcctx->user_fctx;
+
+	if (state == NULL || (r = nextUnnest(state)) == NULL)
+	{
+		finiUnnest(state);
+		SRF_RETURN_DONE(funcctx);
+	}
+
+	SRF_RETURN_NEXT(funcctx, JsonbGetDatum(r));
+}
+
+Datum
+jsonb_unnest_value(PG_FUNCTION_ARGS)
+{
+	FuncCallContext *funcctx;
+	UnnestState     *state;
+	Jsonb			*r;
+
+	if (SRF_IS_FIRSTCALL())
+		initUnnest(SRF_FIRSTCALL_INIT(), PG_GETARG_DATUM(0),
+				   PG_GETARG_BOOL(1), WJB_VALUE);
+
+	funcctx = SRF_PERCALL_SETUP();
+	state = funcctx->user_fctx;
+
+	if (state == NULL || (r = nextUnnest(state)) == NULL)
+	{
+		finiUnnest(state);
+		SRF_RETURN_DONE(funcctx);
+	}
+
+	SRF_RETURN_NEXT(funcctx, JsonbGetDatum(r));
+}
+
+Datum
+jsonb_unnest_key(PG_FUNCTION_ARGS)
+{
+	FuncCallContext *funcctx;
+	UnnestState     *state;
+	Jsonb			*r;
+
+	if (SRF_IS_FIRSTCALL())
+		initUnnest(SRF_FIRSTCALL_INIT(), PG_GETARG_DATUM(0),
+				   PG_GETARG_BOOL(1), WJB_KEY);
+
+	funcctx = SRF_PERCALL_SETUP();
+	state = funcctx->user_fctx;
+
+	if (state == NULL || (r = nextUnnest(state)) == NULL)
+	{
+		finiUnnest(state);
+		SRF_RETURN_DONE(funcctx);
+	}
+
+	SRF_RETURN_NEXT(funcctx, JsonbGetDatum(r));
+}
+

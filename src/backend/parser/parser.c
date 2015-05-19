@@ -191,8 +191,15 @@ base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner)
 			}
 			break;
 		case ANY:
-			if (next_token == ELEMENT)
-				cur_token = ANY_EL;
+			/* Replace  ANY by ANY_EL if it's followed by ELEMENT or KEY or VALUE */
+			switch (next_token)
+			{
+				case ELEMENT:
+				case KEY:
+				case VALUE_P:
+					cur_token = ANY_EL;
+					break;
+			}
 			break;
 	}
 

@@ -924,6 +924,9 @@ DATA(insert OID = 1286 (  array_fill PGNSP PGUID 12 1 0 0 0 f f f f f f i 3 0 22
 DESCR("array constructor with value");
 DATA(insert OID = 2331 (  unnest		   PGNSP PGUID 12 1 100 0 0 f f f f t t i 1 0 2283 "2277" _null_ _null_ _null_ _null_ _null_ array_unnest _null_ _null_ _null_ ));
 DESCR("expand array to set of rows");
+/* just for compatibility with jsonb_unnest* for any/each element clause */
+DATA(insert OID = 7644 (  unnest_element		   PGNSP PGUID 12 1 100 0 0 f f f f t t i 2 0 2283 "2277 16" _null_ _null_ _null_ _null_ _null_ array_unnest _null_ _null_ _null_ ));
+DESCR("expand array to set of rows");
 DATA(insert OID = 3167 (  array_remove	   PGNSP PGUID 12 1 0 0 0 f f f f f f i 2 0 2277 "2277 2283" _null_ _null_ _null_ _null_ _null_ array_remove _null_ _null_ _null_ ));
 DESCR("remove any occurrences of an element from an array");
 DATA(insert OID = 3168 (  array_replace    PGNSP PGUID 12 1 0 0 0 f f f f f f i 3 0 2277 "2277 2283 2283" _null_ _null_ _null_ _null_ _null_ array_replace _null_ _null_ _null_ ));
@@ -4863,6 +4866,12 @@ DATA(insert OID = 3305 (  jsonb_replace	   PGNSP PGUID 12 1 0 0 0 f f f f t f i 
 DESCR("Replace part of a jsonb");
 DATA(insert OID = 3306 (  jsonb_pretty	   PGNSP PGUID 12 1 0 0 0 f f f f t f i 1 0 25 "3802" _null_ _null_ _null_ _null_ _null_ jsonb_pretty _null_ _null_ _null_ ));
 DESCR("Indented text from jsonb");
+DATA(insert OID = 7645 (  unnest_element		   PGNSP PGUID 12 1 100 0 0 f f f f t t i 2 0 3802 "3802 16" _null_ _null_ _null_ _null_ _null_ jsonb_unnest_element _null_ _null_ _null_ ));
+DESCR("expand elements from jsonb");
+DATA(insert OID = 7646 (  unnest_value		   PGNSP PGUID 12 1 100 0 0 f f f f t t i 2 0 3802 "3802 16" _null_ _null_ _null_ _null_ _null_ jsonb_unnest_value _null_ _null_ _null_ ));
+DESCR("expand values from jsonb");
+DATA(insert OID = 7647 (  unnest_key		   PGNSP PGUID 12 1 100 0 0 f f f f t t i 2 0 3802 "3802 16" _null_ _null_ _null_ _null_ _null_ jsonb_unnest_key _null_ _null_ _null_ ));
+DESCR("expand keys from jsonb");
 /* txid */
 DATA(insert OID = 2939 (  txid_snapshot_in			PGNSP PGUID 12 1  0 0 0 f f f f t f i 1 0 2970 "2275" _null_ _null_ _null_ _null_ _null_ txid_snapshot_in _null_ _null_ _null_ ));
 DESCR("I/O");

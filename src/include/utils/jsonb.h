@@ -65,10 +65,12 @@ typedef enum
 #define JGIN_MAXLENGTH	125		/* max length of text part before hashing */
 
 /* Convenience macros */
-#define DatumGetJsonb(d)	((Jsonb *) PG_DETOAST_DATUM(d))
-#define JsonbGetDatum(p)	PointerGetDatum(p)
-#define PG_GETARG_JSONB(x)	DatumGetJsonb(PG_GETARG_DATUM(x))
-#define PG_RETURN_JSONB(x)	PG_RETURN_POINTER(x)
+#define DatumGetJsonb(d)		((Jsonb *) PG_DETOAST_DATUM(d))
+#define DatumGetJsonbCopy(d)	((Jsonb *) PG_DETOAST_DATUM_COPY(d))
+#define JsonbGetDatum(p)		PointerGetDatum(p)
+#define PG_GETARG_JSONB(x)		DatumGetJsonb(PG_GETARG_DATUM(x))
+#define PG_GETARG_JSONB_COPY(x)	DatumGetJsonbCopy(PG_GETARG_DATUM(x))
+#define PG_RETURN_JSONB(x)		PG_RETURN_POINTER(x)
 
 typedef struct JsonbPair JsonbPair;
 typedef struct JsonbValue JsonbValue;
@@ -399,6 +401,11 @@ extern Datum jsonb_pretty(PG_FUNCTION_ARGS);
 
 /* concatenation */
 extern Datum jsonb_concat(PG_FUNCTION_ARGS);
+
+/* unnesting function */
+extern Datum jsonb_unnest_element(PG_FUNCTION_ARGS);
+extern Datum jsonb_unnest_value(PG_FUNCTION_ARGS);
+extern Datum jsonb_unnest_key(PG_FUNCTION_ARGS);
 
 /* deletion */
 Datum jsonb_delete(PG_FUNCTION_ARGS);

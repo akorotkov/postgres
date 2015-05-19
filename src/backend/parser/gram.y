@@ -176,8 +176,8 @@ static void processCASbits(int cas_bits, int location, const char *constrType,
 			   bool *deferrable, bool *initdeferred, bool *not_valid,
 			   bool *no_inherit, core_yyscan_t yyscanner);
 static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
-static SelectStmt * makeElementSubselect(Node *of, const char *aliasname,
-										 Node *clause, int location);
+static SelectStmt * makeElementSubselect(int kind, bool recursive, Node *of,
+										 const char *aliasname, Node *clause, int location);
 
 %}
 
@@ -291,6 +291,7 @@ static SelectStmt * makeElementSubselect(Node *of, const char *aliasname,
 %type <boolean>	opt_or_replace
 				opt_grant_grant_option opt_grant_admin_option
 				opt_nowait opt_if_exists opt_with_data
+				opt_anywhere
 %type <ival>	opt_nowait_or_skip
 
 %type <list>	OptRoleList AlterOptRoleList
@@ -448,6 +449,7 @@ static SelectStmt * makeElementSubselect(Node *of, const char *aliasname,
 %type <node>	case_expr case_arg when_clause case_default
 %type <list>	when_clause_list
 %type <ival>	sub_type
+%type <ival>	any_or_each any_or_each_kind
 %type <node>	ctext_expr
 %type <value>	NumericOnly
 %type <list>	NumericOnly_list
@@ -563,7 +565,7 @@ static SelectStmt * makeElementSubselect(Node *of, const char *aliasname,
 
 /* ordinary key words in alphabetical order */
 %token <keyword> ABORT_P ABSOLUTE_P ACCESS ACTION ADD_P ADMIN AFTER
-	AGGREGATE ALL ALSO ALTER ALWAYS ANALYSE ANALYZE AND ANY ARRAY AS ASC
+	AGGREGATE ALL ALSO ALTER ALWAYS ANALYSE ANALYZE AND ANY ANYWHERE ARRAY AS ASC
 	ASSERTION ASSIGNMENT ASYMMETRIC AT ATTRIBUTE AUTHORIZATION
 
 	BACKWARD BEFORE BEGIN_P BETWEEN BIGINT BINARY BIT
@@ -12058,7 +12060,7 @@ c_expr:		columnref								{ $$ = $1; }
 				  g->location = @1;
 				  $$ = (Node *)g;
 			  }
-			| ANY_EL ELEMENT OF b_expr AS ColId SATISFIES '(' a_expr ')'
+			| any_or_each any_or_each_kind opt_anywhere OF b_expr AS ColId SATISFIES '(' a_expr ')'
 			  {
 					SubLink	*n = makeNode(SubLink);
 
@@ -12066,22 +12068,34 @@ c_expr:		columnref								{ $$ = $1; }
 					n->subLinkId = 0;
 					n->testexpr = NULL;
 					n->operName = NIL;
-					n->subselect = (Node*)makeElementSubselect($4, $6, $9, @1);
+					n->subselect = (Node*)makeElementSubselect(
+												$2, $3,
+												$5, $7,
+												($1 == EACH) ? makeNotExpr($10, @1) : $10,
+												@1
+									);
 					n->location = @1;
-					$$ = (Node *)n;
+					if ($1 == EACH)
+						$$ = makeNotExpr((Node *)n, @1);
+					else
+						$$ = (Node *)n;
 			  }
-			| EACH ELEMENT OF b_expr AS ColId SATISFIES '(' a_expr ')'
-			  {
-					SubLink	*n = makeNode(SubLink);
+		;
 
-					n->subLinkType = EXISTS_SUBLINK;
-					n->subLinkId = 0;
-					n->testexpr = NULL;
-					n->operName = NIL;
-					n->subselect = (Node*)makeElementSubselect($4, $6, makeNotExpr($9, @1), @1);
-					n->location = @1;
-					$$ = makeNotExpr((Node *)n, @1);;
-			  }
+any_or_each:
+			ANY_EL						{ $$ = ANY_EL; }
+			| EACH						{ $$ = EACH; }
+		;
+
+any_or_each_kind:
+			ELEMENT						{ $$ = ELEMENT; }
+			| KEY						{ $$ = KEY; }
+			| VALUE_P					{ $$ = VALUE_P; }
+		;
+
+opt_anywhere:
+			ANYWHERE					{ $$ = true; }
+			| /* empty */				{ $$ = false; }
 		;
 
 func_application: func_name '(' ')'
@@ -13614,6 +13628,7 @@ unreserved_keyword:
 			| ALSO
 			| ALTER
 			| ALWAYS
+			| ANYWHERE
 			| ASSERTION
 			| ASSIGNMENT
 			| AT
@@ -14858,17 +14873,36 @@ makeRecursiveViewSelect(char *relname, List *aliases, Node *query)
 }
 
 static SelectStmt *
-makeElementSubselect(Node *of, const char *aliasname, Node *clause, int location)
+makeElementSubselect(int kind, bool recursive, Node *of,
+					 const char *aliasname, Node *clause, int location)
 {
 	ResTarget 		*target = makeNode(ResTarget);
 	FuncCall		*func_call;
 	RangeFunction	*table_ref = makeNode(RangeFunction);	
 	SelectStmt 		*subselect = makeNode(SelectStmt);
+	char			*funcname;
 
 	target->val = (Node*)makeIntConst(1, location);
 	target->location = location;
 
-	func_call = makeFuncCall(SystemFuncName("unnest"), list_make1(of), location);
+	switch(kind)
+	{
+		case ELEMENT:
+			funcname = "unnest_element";
+			break;
+		case KEY:
+			funcname = "unnest_key";
+			break;
+		case VALUE_P:
+			funcname = "unnest_value";
+			break;
+		default:
+			elog(ERROR, "unkown ANY_EL");
+	}
+
+	func_call = makeFuncCall(SystemFuncName(funcname),
+							 list_make2(of, makeBoolAConst(recursive, location)),
+							 location);
 
 	table_ref->functions = list_make1(list_make2(func_call, NIL));
 	table_ref->alias = makeAlias(aliasname, NIL);
