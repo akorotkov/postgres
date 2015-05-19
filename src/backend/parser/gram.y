@@ -659,9 +659,9 @@ static SelectStmt * makeElementSubselect(Node *of, const char *aliasname,
  * NOT_LA exists so that productions such as NOT LIKE can be given the same
  * precedence as LIKE; otherwise they'd effectively have the same precedence
  * as NOT, at least with respect to their left-hand subexpression.
- * NULLS_LA and WITH_LA are needed to make the grammar LALR(1).
+ * NULLS_LA, WITH_LA and ANY_EL are needed to make the grammar LALR(1).
  */
-%token		NOT_LA NULLS_LA WITH_LA
+%token		NOT_LA NULLS_LA WITH_LA ANY_EL
 
 
 /* Precedence: lowest to highest */
@@ -726,8 +726,6 @@ static SelectStmt * makeElementSubselect(Node *of, const char *aliasname,
 %left		JOIN CROSS LEFT FULL RIGHT INNER_P NATURAL
 /* kluge to keep xml_whitespace_option from causing shift/reduce conflicts */
 %right		PRESERVE STRIP_P
-%right ELEMENT
-%nonassoc ANY
 
 %%
 
@@ -12060,7 +12058,7 @@ c_expr:		columnref								{ $$ = $1; }
 				  g->location = @1;
 				  $$ = (Node *)g;
 			  }
-			| ANY ELEMENT OF a_expr AS ColId SATISFIES '(' a_expr ')'
+			| ANY_EL ELEMENT OF b_expr AS ColId SATISFIES '(' a_expr ')'
 			  {
 					SubLink	*n = makeNode(SubLink);
 
@@ -12072,7 +12070,7 @@ c_expr:		columnref								{ $$ = $1; }
 					n->location = @1;
 					$$ = (Node *)n;
 			  }
-			| EACH ELEMENT OF a_expr AS ColId SATISFIES '(' a_expr ')'
+			| EACH ELEMENT OF b_expr AS ColId SATISFIES '(' a_expr ')'
 			  {
 					SubLink	*n = makeNode(SubLink);
 

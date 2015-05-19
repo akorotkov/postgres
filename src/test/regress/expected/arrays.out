@@ -943,6 +943,47 @@ SELECT * FROM array_op_test WHERE t <@ '{}' ORDER BY seqno;
    101 | {} | {}
 (1 row)
 
+--each/any element
+SELECT * FROM array_op_test WHERE ANY ELEMENT OF t AS e SATISFIES (e = 'AAAAAAAAAAAAAAAAA764') ORDER BY seqno;
+ seqno |               i                |                                                                     t                                                                     
+-------+--------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------
+    11 | {41,86,74,48,22,74,47,50}      | {AAAAAAAA9523,AAAAAAAAAAAA37562,AAAAAAAAAAAAAAAA14047,AAAAAAAAAAA46154,AAAA41702,AAAAAAAAAAAAAAAAA764,AAAAA62737,39557}
+    23 | {40,90,5,38,72,40,30,10,43,55} | {A6053,AAAAAAAAAAA6119,AA44673,AAAAAAAAAAAAAAAAA764,AA17009,AAAAA17383,AAAAA70514,AAAAA33250,AAAAA95309,AAAAAAAAAAAA37562}
+    52 | {89,0}                         | {AAAAAAAAAAAAAAAAAA47955,AAAAAAA48038,AAAAAAAAAAAAAAAAA43052,AAAAAAAAAAAAA73084,AAAAA70466,AAAAAAAAAAAAAAAAA764,AAAAAAAAAAA46154,AA66862}
+    95 | {47,77}                        | {AAAAAAAAAAAAAAAAA764,AAAAAAAAAAA74076,AAAAAAAAAA18107,AAAAA40681,AAAAAAAAAAAAAAA35875,AAAAA60038,AAAAAAA56483}
+(4 rows)
+
+SELECT * FROM array_op_test WHERE ANY ELEMENT OF i AS e SATISFIES (e = 11) ORDER BY seqno;
+ seqno |               i                |                                                                             t                                                                             
+-------+--------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+     3 | {37,64,95,43,3,41,13,30,11,43} | {AAAAAAAAAA48845,AAAAA75968,AAAAA95309,AAA54451,AAAAAAAAAA22292,AAAAAAA99836,A96617,AA17009,AAAAAAAAAAAAAA95246}
+    16 | {14,63,85,11}                  | {AAAAAA66777}
+    22 | {11,6,56,62,53,30}             | {AAAAAAAA72908}
+    25 | {31,1,10,11,27,79,38}          | {AAAAAAAAAAAAAAAAAA59334,45449}
+    37 | {53,11,81,39,3,78,58,64,74}    | {AAAAAAAAAAAAAAAAAAA17075,AAAAAAA66161,AAAAAAAA23648,AAAAAAAAAAAAAA10611}
+    63 | {11,4,61,87}                   | {AAAAAAAAA27249,AAAAAAAAAAAAAAAAAA32918,AAAAAAAAAAAAAAA13198,AAA20874,39557,51533,AAAAAAAAAAA53908,AAAAAAAAAAAAAA96505,AAAAAAAA78938}
+    84 | {11,83,35,13,96,94}            | {AAAAA95309,AAAAAAAAAAAAAAAAAA32918,AAAAAAAAAAAAAAAAAA24183}
+    93 | {11}                           | {AAAAAAAAAAA176,AAAAAAAAAAAAAA8666,AAAAAAAAAAAAAAA453,AAAAAAAAAAAAA85723,A68938,AAAAAAAAAAAAA9821,AAAAAAA48038,AAAAAAAAAAAAAAAAA59387,AA99927,AAAAA17383}
+(8 rows)
+
+SELECT * FROM array_op_test WHERE EACH ELEMENT OF t AS e SATISFIES (e = 'AAAAAA66777') ORDER BY seqno;
+ seqno |       i       |       t       
+-------+---------------+---------------
+    16 | {14,63,85,11} | {AAAAAA66777}
+   101 | {}            | {}
+   102 | {NULL}        | {NULL}
+   103 |               | 
+(4 rows)
+
+SELECT * FROM array_op_test WHERE EACH ELEMENT OF i AS e SATISFIES (e = 11) ORDER BY seqno;
+ seqno |   i    |                                                                             t                                                                             
+-------+--------+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+    93 | {11}   | {AAAAAAAAAAA176,AAAAAAAAAAAAAA8666,AAAAAAAAAAAAAAA453,AAAAAAAAAAAAA85723,A68938,AAAAAAAAAAAAA9821,AAAAAAA48038,AAAAAAAAAAAAAAAAA59387,AA99927,AAAAA17383}
+   101 | {}     | {}
+   102 | {NULL} | {NULL}
+   103 |        | 
+(4 rows)
+
 -- array casts
 SELECT ARRAY[1,2,3]::text[]::int[]::float8[] AS "{1,2,3}";
  {1,2,3} 

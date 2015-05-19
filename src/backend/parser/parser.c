@@ -107,14 +107,15 @@ base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner)
 	 */
 	switch (cur_token)
 	{
+		case ANY:
 		case NOT:
 			cur_token_length = 3;
 			break;
-		case NULLS_P:
-			cur_token_length = 5;
-			break;
 		case WITH:
 			cur_token_length = 4;
+			break;
+		case NULLS_P:
+			cur_token_length = 5;
 			break;
 		default:
 			return cur_token;
@@ -188,6 +189,10 @@ base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner)
 					cur_token = WITH_LA;
 					break;
 			}
+			break;
+		case ANY:
+			if (next_token == ELEMENT)
+				cur_token = ANY_EL;
 			break;
 	}
 

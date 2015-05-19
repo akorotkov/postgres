@@ -260,6 +260,12 @@ SELECT * FROM array_op_test WHERE t @> '{}' ORDER BY seqno;
 SELECT * FROM array_op_test WHERE t && '{}' ORDER BY seqno;
 SELECT * FROM array_op_test WHERE t <@ '{}' ORDER BY seqno;
 
+--each/any element
+SELECT * FROM array_op_test WHERE ANY ELEMENT OF t AS e SATISFIES (e = 'AAAAAAAAAAAAAAAAA764') ORDER BY seqno;
+SELECT * FROM array_op_test WHERE ANY ELEMENT OF i AS e SATISFIES (e = 11) ORDER BY seqno;
+SELECT * FROM array_op_test WHERE EACH ELEMENT OF t AS e SATISFIES (e = 'AAAAAA66777') ORDER BY seqno;
+SELECT * FROM array_op_test WHERE EACH ELEMENT OF i AS e SATISFIES (e = 11) ORDER BY seqno;
+
 -- array casts
 SELECT ARRAY[1,2,3]::text[]::int[]::float8[] AS "{1,2,3}";
 SELECT ARRAY[1,2,3]::text[]::int[]::float8[] is of (float8[]) as "TRUE";
