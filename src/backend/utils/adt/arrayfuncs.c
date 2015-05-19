@@ -5957,6 +5957,14 @@ array_unnest(PG_FUNCTION_ARGS)
 	}
 }
 
+/*
+ * Just a simplest wrapper to keep opr_sanity clean
+ */
+Datum
+array_unnest_element(PG_FUNCTION_ARGS)
+{
+	return array_unnest(fcinfo);
+}
 
 /*
  * array_replace/array_remove support
