@@ -176,6 +176,8 @@ static void processCASbits(int cas_bits, int location, const char *constrType,
 			   bool *deferrable, bool *initdeferred, bool *not_valid,
 			   bool *no_inherit, core_yyscan_t yyscanner);
 static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
+static SelectStmt * makeElementSubselect(Node *of, const char *aliasname,
+										 Node *clause, int location);
 
 %}
 
@@ -580,7 +582,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	DEFERRABLE DEFERRED DEFINER DELETE_P DELIMITER DELIMITERS DESC
 	DICTIONARY DISABLE_P DISCARD DISTINCT DO DOCUMENT_P DOMAIN_P DOUBLE_P DROP
 
-	EACH ELSE ENABLE_P ENCODING ENCRYPTED END_P ENUM_P ESCAPE EVENT EXCEPT
+	EACH ELEMENT ELSE ENABLE_P ENCODING ENCRYPTED END_P ENUM_P ESCAPE EVENT EXCEPT
 	EXCLUDE EXCLUDING EXCLUSIVE EXECUTE EXISTS EXPLAIN
 	EXTENSION EXTERNAL EXTRACT
 
@@ -624,7 +626,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	RESET RESTART RESTRICT RETURNING RETURNS REVOKE RIGHT ROLE ROLLBACK ROLLUP
 	ROW ROWS RULE
 
-	SAVEPOINT SCHEMA SCROLL SEARCH SECOND_P SECURITY SELECT SEQUENCE SEQUENCES
+	SATISFIES SAVEPOINT SCHEMA SCROLL SEARCH SECOND_P SECURITY SELECT SEQUENCE SEQUENCES
 	SERIALIZABLE SERVER SESSION SESSION_USER SET SETS SETOF SHARE SHOW
 	SIMILAR SIMPLE SKIP SMALLINT SNAPSHOT SOME SQL_P STABLE STANDALONE_P START
 	STATEMENT STATISTICS STDIN STDOUT STORAGE STRICT_P STRIP_P SUBSTRING
@@ -724,6 +726,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %left		JOIN CROSS LEFT FULL RIGHT INNER_P NATURAL
 /* kluge to keep xml_whitespace_option from causing shift/reduce conflicts */
 %right		PRESERVE STRIP_P
+%right ELEMENT
+%nonassoc ANY
 
 %%
 
@@ -12056,6 +12060,30 @@ c_expr:		columnref								{ $$ = $1; }
 				  g->location = @1;
 				  $$ = (Node *)g;
 			  }
+			| ANY ELEMENT OF a_expr AS ColId SATISFIES '(' a_expr ')'
+			  {
+					SubLink	*n = makeNode(SubLink);
+
+					n->subLinkType = EXISTS_SUBLINK;
+					n->subLinkId = 0;
+					n->testexpr = NULL;
+					n->operName = NIL;
+					n->subselect = (Node*)makeElementSubselect($4, $6, $9, @1);
+					n->location = @1;
+					$$ = (Node *)n;
+			  }
+			| EACH ELEMENT OF a_expr AS ColId SATISFIES '(' a_expr ')'
+			  {
+					SubLink	*n = makeNode(SubLink);
+
+					n->subLinkType = EXISTS_SUBLINK;
+					n->subLinkId = 0;
+					n->testexpr = NULL;
+					n->operName = NIL;
+					n->subselect = (Node*)makeElementSubselect($4, $6, makeNotExpr($9, @1), @1);
+					n->location = @1;
+					$$ = makeNotExpr((Node *)n, @1);;
+			  }
 		;
 
 func_application: func_name '(' ')'
@@ -13644,6 +13672,7 @@ unreserved_keyword:
 			| DOUBLE_P
 			| DROP
 			| EACH
+			| ELEMENT
 			| ENABLE_P
 			| ENCODING
 			| ENCRYPTED
@@ -13773,6 +13802,7 @@ unreserved_keyword:
 			| ROLLUP
 			| ROWS
 			| RULE
+			| SATISFIES
 			| SAVEPOINT
 			| SCHEMA
 			| SCROLL
@@ -14827,6 +14857,29 @@ makeRecursiveViewSelect(char *relname, List *aliases, Node *query)
 	s->fromClause = list_make1(makeRangeVar(NULL, relname, -1));
 
 	return (Node *) s;
+}
+
+static SelectStmt *
+makeElementSubselect(Node *of, const char *aliasname, Node *clause, int location)
+{
+	ResTarget 		*target = makeNode(ResTarget);
+	FuncCall		*func_call;
+	RangeFunction	*table_ref = makeNode(RangeFunction);	
+	SelectStmt 		*subselect = makeNode(SelectStmt);
+
+	target->val = (Node*)makeIntConst(1, location);
+	target->location = location;
+
+	func_call = makeFuncCall(SystemFuncName("unnest"), list_make1(of), location);
+
+	table_ref->functions = list_make1(list_make2(func_call, NIL));
+	table_ref->alias = makeAlias(aliasname, NIL);
+
+	subselect->targetList = list_make1(target);
+	subselect->fromClause = list_make1(table_ref);  /* unnest(of) as aliasname */ 
+	subselect->whereClause = clause;
+
+	return subselect;
 }
 
 /* parser_init()
