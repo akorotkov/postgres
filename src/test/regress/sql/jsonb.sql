@@ -519,6 +519,18 @@ SELECT count(*) FROM testjsonb WHERE j ? 'bar';
 SELECT count(*) FROM testjsonb WHERE j ?| ARRAY['public','disabled'];
 SELECT count(*) FROM testjsonb WHERE j ?& ARRAY['public','disabled'];
 
+SELECT count(*) FROM testjsonb WHERE ANY KEY OF j AS k SATISFIES ( k = '"pos"'::jsonb );
+SELECT count(*) FROM testjsonb WHERE ANY KEY OF j AS k SATISFIES ( k = '"age"'::jsonb );
+SELECT count(*) FROM testjsonb WHERE EACH KEY OF j AS k SATISFIES ( k = '"age"'::jsonb );
+SELECT count(*) FROM testjsonb WHERE ANY VALUE OF j AS v SATISFIES ( v = '"CAB"'::jsonb );
+SELECT count(*) FROM testjsonb WHERE ANY VALUE OF j AS v SATISFIES ( v = '"baz"'::jsonb );
+SELECT count(*) FROM testjsonb WHERE ANY VALUE ANYWHERE OF j AS v SATISFIES ( v = '"baz"'::jsonb );
+SELECT count(*) FROM testjsonb WHERE ANY ELEMENT ANYWHERE OF j AS v SATISFIES ( v = '"baz"'::jsonb );
+SELECT count(*) FROM testjsonb WHERE ANY ELEMENT OF j->'array' AS e SATISFIES ( e = '"baz"'::jsonb );
+SELECT count(*) FROM testjsonb WHERE ANY KEY OF j AS k SATISFIES (
+	k->>0 = 'array' AND ANY ELEMENT OF j->(k->>0) AS e SATISFIES ( e = '"baz"'::jsonb )
+);
+
 CREATE INDEX jidx ON testjsonb USING gin (j);
 SET enable_seqscan = off;
 
