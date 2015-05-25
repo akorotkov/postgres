@@ -2118,6 +2118,62 @@ SELECT count(*) FROM testjsonb WHERE j ?& ARRAY['public','disabled'];
     42
 (1 row)
 
+SELECT count(*) FROM testjsonb WHERE ANY KEY OF j AS k SATISFIES ( k = '"pos"'::jsonb );
+ count 
+-------
+   203
+(1 row)
+
+SELECT count(*) FROM testjsonb WHERE ANY KEY OF j AS k SATISFIES ( k = '"age"'::jsonb );
+ count 
+-------
+     2
+(1 row)
+
+SELECT count(*) FROM testjsonb WHERE EACH KEY OF j AS k SATISFIES ( k = '"age"'::jsonb );
+ count 
+-------
+   120
+(1 row)
+
+SELECT count(*) FROM testjsonb WHERE ANY VALUE OF j AS v SATISFIES ( v = '"CAB"'::jsonb );
+ count 
+-------
+    30
+(1 row)
+
+SELECT count(*) FROM testjsonb WHERE ANY VALUE OF j AS v SATISFIES ( v = '"baz"'::jsonb );
+ count 
+-------
+     0
+(1 row)
+
+SELECT count(*) FROM testjsonb WHERE ANY VALUE ANYWHERE OF j AS v SATISFIES ( v = '"baz"'::jsonb );
+ count 
+-------
+     3
+(1 row)
+
+SELECT count(*) FROM testjsonb WHERE ANY ELEMENT ANYWHERE OF j AS v SATISFIES ( v = '"baz"'::jsonb );
+ count 
+-------
+     4
+(1 row)
+
+SELECT count(*) FROM testjsonb WHERE ANY ELEMENT OF j->'array' AS e SATISFIES ( e = '"baz"'::jsonb );
+ count 
+-------
+     4
+(1 row)
+
+SELECT count(*) FROM testjsonb WHERE ANY KEY OF j AS k SATISFIES (
+	k->>0 = 'array' AND ANY ELEMENT OF j->(k->>0) AS e SATISFIES ( e = '"baz"'::jsonb )
+);
+ count 
+-------
+     4
+(1 row)
+
 CREATE INDEX jidx ON testjsonb USING gin (j);
 SET enable_seqscan = off;
 SELECT count(*) FROM testjsonb WHERE j @> '{"wait":null}';
