@@ -1707,12 +1707,12 @@ ProcArrayInstallRestoredXmin(TransactionId xmin, PGPROC *proc)
 	pgxact = &allPgXact[proc->pgprocno];
 
 	/*
-	 * Be certain that the referenced PGPROC has an advertised xmin which
-	 * is no later than the one we're installing, so that the system-wide
-	 * xmin can't go backwards.  Also, make sure it's running in the same
-	 * database, so that the per-database xmin cannot go backwards.
+	 * Be certain that the referenced PGPROC has an advertised xmin which is
+	 * no later than the one we're installing, so that the system-wide xmin
+	 * can't go backwards.  Also, make sure it's running in the same database,
+	 * so that the per-database xmin cannot go backwards.
 	 */
-	xid = pgxact->xmin;		/* fetch just once */
+	xid = pgxact->xmin;			/* fetch just once */
 	if (proc->databaseId == MyDatabaseId &&
 		TransactionIdIsNormal(xid) &&
 		TransactionIdPrecedesOrEquals(xid, xmin))
@@ -2001,7 +2001,7 @@ GetOldestSafeDecodingTransactionId(void)
 	/*
 	 * If there's already a slot pegging the xmin horizon, we can start with
 	 * that value, it's guaranteed to be safe since it's computed by this
-	 * routine initally and has been enforced since.
+	 * routine initially and has been enforced since.
 	 */
 	if (TransactionIdIsValid(procArray->replication_slot_catalog_xmin) &&
 		TransactionIdPrecedes(procArray->replication_slot_catalog_xmin,

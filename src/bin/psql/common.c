@@ -491,7 +491,7 @@ int
 PSQLexecWatch(const char *query, const printQueryOpt *opt)
 {
 	PGresult   *res;
-	double	elapsed_msec = 0;
+	double		elapsed_msec = 0;
 	instr_time	before;
 	instr_time	after;
 
@@ -524,10 +524,9 @@ PSQLexecWatch(const char *query, const printQueryOpt *opt)
 	}
 
 	/*
-	 * If SIGINT is sent while the query is processing, the interrupt
-	 * will be consumed.  The user's intention, though, is to cancel
-	 * the entire watch process, so detect a sent cancellation request and
-	 * exit in this case.
+	 * If SIGINT is sent while the query is processing, the interrupt will be
+	 * consumed.  The user's intention, though, is to cancel the entire watch
+	 * process, so detect a sent cancellation request and exit in this case.
 	 */
 	if (cancel_pressed)
 	{
@@ -894,12 +893,9 @@ PrintQueryResults(PGresult *results)
 				success = StoreQueryTuple(results);
 			else
 				success = PrintQueryTuples(results);
-			/*
-			 * if it's INSERT/UPSERT/UPDATE/DELETE RETURNING, also print status
-			 */
+			/* if it's INSERT/UPDATE/DELETE RETURNING, also print status */
 			cmdstatus = PQcmdStatus(results);
 			if (strncmp(cmdstatus, "INSERT", 6) == 0 ||
-				strncmp(cmdstatus, "UPSERT", 6) == 0 ||
 				strncmp(cmdstatus, "UPDATE", 6) == 0 ||
 				strncmp(cmdstatus, "DELETE", 6) == 0)
 				PrintQueryStatus(results);

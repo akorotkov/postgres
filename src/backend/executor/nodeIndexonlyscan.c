@@ -106,8 +106,8 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		 * away, because the tuple is still visible until the deleting
 		 * transaction commits or the statement ends (if it's our
 		 * transaction). In either case, the lock on the VM buffer will have
-		 * been released (acting as a write barrier) after clearing the
-		 * bit. And for us to have a snapshot that includes the deleting
+		 * been released (acting as a write barrier) after clearing the bit.
+		 * And for us to have a snapshot that includes the deleting
 		 * transaction (making the tuple invisible), we must have acquired
 		 * ProcArrayLock after that time, acting as a read barrier.
 		 *
@@ -164,6 +164,19 @@ IndexOnlyNext(IndexOnlyScanState *node)
 				continue;
 			}
 		}
+
+		/*
+		 * We don't currently support rechecking ORDER BY distances.  (In
+		 * principle, if the index can support retrieval of the originally
+		 * indexed value, it should be able to produce an exact distance
+		 * calculation too.  So it's not clear that adding code here for
+		 * recheck/re-sort would be worth the trouble.  But we should at least
+		 * throw an error if someone tries it.)
+		 */
+		if (scandesc->numberOfOrderBys > 0 && scandesc->xs_recheckorderby)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("lossy distance functions are not supported in index-only scans")));
 
 		/*
 		 * Predicate locks for index-only scans must be acquired at the page
