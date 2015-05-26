@@ -4075,6 +4075,10 @@ DATA(insert OID = 3498 ( bool_alltrue				   PGNSP PGUID 12 1 0 0 0 f f f f t f i
 DESCR("aggregate final function");
 DATA(insert OID = 3499 ( bool_anytrue				   PGNSP PGUID 12 1 0 0 0 f f f f t f i 1 0 16 "2281" _null_ _null_ _null_ _null_ _null_ bool_anytrue _null_ _null_ _null_ ));
 DESCR("aggregate final function");
+DATA(insert OID = 7648 ( bool_alltrue_notnull		   PGNSP PGUID 12 1 0 0 0 f f f f t f i 1 0 16 "2281" _null_ _null_ _null_ _null_ _null_ bool_alltrue_notnull _null_ _null_ _null_ ));
+DESCR("aggregate final function");
+DATA(insert OID = 7649 ( bool_anytrue_notnull		   PGNSP PGUID 12 1 0 0 0 f f f f t f i 1 0 16 "2281" _null_ _null_ _null_ _null_ _null_ bool_anytrue_notnull _null_ _null_ _null_ ));
+DESCR("aggregate final function");
 DATA(insert OID = 2517 ( bool_and					   PGNSP PGUID 12 1 0 0 0 t f f f f f i 1 0 16 "16" _null_ _null_ _null_ _null_ _null_ aggregate_dummy _null_ _null_ _null_ ));
 DESCR("boolean-and aggregate");
 /* ANY, SOME? These names conflict with subquery operators. See doc. */
@@ -4082,6 +4086,10 @@ DATA(insert OID = 2518 ( bool_or					   PGNSP PGUID 12 1 0 0 0 t f f f f f i 1 0
 DESCR("boolean-or aggregate");
 DATA(insert OID = 2519 ( every						   PGNSP PGUID 12 1 0 0 0 t f f f f f i 1 0 16 "16" _null_ _null_ _null_ _null_ _null_ aggregate_dummy _null_ _null_ _null_ ));
 DESCR("boolean-and aggregate");
+DATA(insert OID = 7650 ( bool_and_not_null			   PGNSP PGUID 12 1 0 0 0 t f f f f f i 1 0 16 "16" _null_ _null_ _null_ _null_ _null_ aggregate_dummy _null_ _null_ _null_ ));
+DESCR("boolean-and aggregate");
+DATA(insert OID = 7651 ( bool_or_not_null			   PGNSP PGUID 12 1 0 0 0 t f f f f f i 1 0 16 "16" _null_ _null_ _null_ _null_ _null_ aggregate_dummy _null_ _null_ _null_ ));
+DESCR("boolean-or aggregate");
 
 /* bitwise integer aggregates */
 DATA(insert OID = 2236 ( bit_and					   PGNSP PGUID 12 1 0 0 0 t f f f f f i 1 0 21 "21" _null_ _null_ _null_ _null_ _null_ aggregate_dummy _null_ _null_ _null_ ));

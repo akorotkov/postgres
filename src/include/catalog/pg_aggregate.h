@@ -260,6 +260,8 @@ DATA(insert ( 2829	n 0 float8_regr_accum	float8_corr				-				-				-				f f 0	102
 DATA(insert ( 2517	n 0 booland_statefunc	-			bool_accum		bool_accum_inv	bool_alltrue	f f 58	16		0	2281	16	_null_ _null_ ));
 DATA(insert ( 2518	n 0 boolor_statefunc	-			bool_accum		bool_accum_inv	bool_anytrue	f f 59	16		0	2281	16	_null_ _null_ ));
 DATA(insert ( 2519	n 0 booland_statefunc	-			bool_accum		bool_accum_inv	bool_alltrue	f f 58	16		0	2281	16	_null_ _null_ ));
+DATA(insert ( 7650	n 0 bool_accum	bool_alltrue_notnull			bool_accum		bool_accum_inv	bool_alltrue_notnull	f f 58	2281		16	2281	16	_null_ _null_ ));
+DATA(insert ( 7651	n 0 bool_accum	bool_anytrue_notnull			bool_accum		bool_accum_inv	bool_anytrue_notnull	f f 59	2281		16	2281	16	_null_ _null_ ));
 
 /* bitwise integer */
 DATA(insert ( 2236	n 0 int2and		-					-				-				-				f f 0	21		0	0		0	_null_ _null_ ));
