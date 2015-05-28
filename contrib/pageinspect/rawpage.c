@@ -28,10 +28,6 @@
 
 PG_MODULE_MAGIC;
 
-static bytea *get_raw_page_internal(text *relname, ForkNumber forknum,
-					  BlockNumber blkno);
-
-
 /*
  * get_raw_page
  *
@@ -87,7 +83,7 @@ get_raw_page_fork(PG_FUNCTION_ARGS)
 /*
  * workhorse
  */
-static bytea *
+bytea *
 get_raw_page_internal(text *relname, ForkNumber forknum, BlockNumber blkno)
 {
 	bytea	   *raw_page;

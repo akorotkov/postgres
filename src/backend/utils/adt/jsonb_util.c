@@ -57,6 +57,9 @@ static void appendElement(JsonbParseState *pstate, JsonbValue *scalarVal);
 static int	lengthCompareJsonbStringValue(const void *a, const void *b);
 static int	lengthCompareJsonbPair(const void *a, const void *b, void *arg);
 static void uniqueifyJsonbObject(JsonbValue *object);
+static JsonbValue *pushJsonbValueScalar(JsonbParseState **pstate,
+					 JsonbIteratorToken seq,
+					 JsonbValue *scalarVal);
 
 /*
  * Turn an in-memory JsonbValue into a Jsonb for on-disk storage.
@@ -503,11 +506,48 @@ fillJsonbValue(JsonbContainer *container, int index,
  *
  * Only sequential tokens pertaining to non-container types should pass a
  * JsonbValue.  There is one exception -- WJB_BEGIN_ARRAY callers may pass a
- * "raw scalar" pseudo array to append that.
+ * "raw scalar" pseudo array to append it - the actual scalar should be passed
+ * next and it will be added as the only member of the array.
+ *
+ * All non-scalar types (jvbBinary, jbvArray and jbvObject) passed as
+ * elements or values are unpacked before being added to the result.
  */
 JsonbValue *
 pushJsonbValue(JsonbParseState **pstate, JsonbIteratorToken seq,
-			   JsonbValue *scalarVal)
+			   JsonbValue *jbval)
+{
+	JsonbIterator *it;
+	JsonbValue *res = NULL;
+	JsonbValue	v;
+	JsonbIteratorToken tok;
+
+	if (!jbval || (seq != WJB_ELEM && seq != WJB_VALUE) ||
+		IsAJsonbScalar(jbval))
+	{
+		/* drop through */
+		return pushJsonbValueScalar(pstate, seq, jbval);
+	}
+
+	/* unpack the data and add each piece to the pstate */
+	if (jbval->type == jbvBinary)
+		it = JsonbIteratorInit(jbval->val.binary.data);
+	else
+		it = JsonbIteratorInit(jbval);
+
+	while ((tok = JsonbIteratorNext(&it, &v, false)) != WJB_DONE)
+		res = pushJsonbValueScalar(pstate, tok,
+								   tok < WJB_BEGIN_ARRAY ? &v : NULL);
+
+	return res;
+}
+
+/*
+ * Do the actual pushing, with only scalar or pseudo-scalar-array values
+ * accepted.
+ */
+static JsonbValue *
+pushJsonbValueScalar(JsonbParseState **pstate, JsonbIteratorToken seq,
+					 JsonbValue *scalarVal)
 {
 	JsonbValue *result = NULL;
 
@@ -549,13 +589,11 @@ pushJsonbValue(JsonbParseState **pstate, JsonbIteratorToken seq,
 			appendKey(*pstate, scalarVal);
 			break;
 		case WJB_VALUE:
-			Assert(IsAJsonbScalar(scalarVal) ||
-				   scalarVal->type == jbvBinary);
+			Assert(IsAJsonbScalar(scalarVal));
 			appendValue(*pstate, scalarVal);
 			break;
 		case WJB_ELEM:
-			Assert(IsAJsonbScalar(scalarVal) ||
-				   scalarVal->type == jbvBinary);
+			Assert(IsAJsonbScalar(scalarVal));
 			appendElement(*pstate, scalarVal);
 			break;
 		case WJB_END_OBJECT:
@@ -1197,6 +1235,7 @@ JsonbHashScalarValue(const JsonbValue *scalarVal, uint32 *hash)
 			break;
 		case jbvBool:
 			tmp = scalarVal->val.boolean ? 0x02 : 0x04;
+
 			break;
 		default:
 			elog(ERROR, "invalid jsonb scalar type");
@@ -1270,7 +1309,7 @@ compareJsonbScalarValue(JsonbValue *aScalar, JsonbValue *bScalar)
 			case jbvBool:
 				if (aScalar->val.boolean == bScalar->val.boolean)
 					return 0;
-				else if (aScalar->val.boolean > bScalar->val.boolean)
+				else if (aScalar->val.boolean >bScalar->val.boolean)
 					return 1;
 				else
 					return -1;

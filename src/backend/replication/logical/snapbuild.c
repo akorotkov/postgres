@@ -153,9 +153,8 @@ struct SnapBuild
 	TransactionId xmax;
 
 	/*
-	 * Don't replay commits from an LSN < this LSN. This can be set
-	 * externally but it will also be advanced (never retreat) from within
-	 * snapbuild.c.
+	 * Don't replay commits from an LSN < this LSN. This can be set externally
+	 * but it will also be advanced (never retreat) from within snapbuild.c.
 	 */
 	XLogRecPtr	start_decoding_at;
 
@@ -244,7 +243,7 @@ struct SnapBuild
  * removes knowledge about the previously used resowner, so we save it here.
  */
 static ResourceOwner SavedResourceOwnerDuringExport = NULL;
-static bool	ExportInProgress = false;
+static bool ExportInProgress = false;
 
 /* transaction state manipulation functions */
 static void SnapBuildEndTxn(SnapBuild *builder, XLogRecPtr lsn, TransactionId xid);
@@ -599,7 +598,7 @@ SnapBuildExportSnapshot(SnapBuild *builder)
 
 	ereport(LOG,
 			(errmsg_plural("exported logical decoding snapshot: \"%s\" with %u transaction ID",
-						   "exported logical decoding snapshot: \"%s\" with %u transaction IDs",
+		"exported logical decoding snapshot: \"%s\" with %u transaction IDs",
 						   snap->xcnt,
 						   snapname, snap->xcnt)));
 	return snapname;
@@ -770,7 +769,7 @@ SnapBuildDistributeNewCatalogSnapshot(SnapBuild *builder, XLogRecPtr lsn)
 	/*
 	 * Iterate through all toplevel transactions. This can include
 	 * subtransactions which we just don't yet know to be that, but that's
-	 * fine, they will just get an unneccesary snapshot queued.
+	 * fine, they will just get an unnecessary snapshot queued.
 	 */
 	dlist_foreach(txn_i, &builder->reorder->toplevel_by_lsn)
 	{
@@ -904,8 +903,8 @@ SnapBuildEndTxn(SnapBuild *builder, XLogRecPtr lsn, TransactionId xid)
 			ereport(LOG,
 				  (errmsg("logical decoding found consistent point at %X/%X",
 						  (uint32) (lsn >> 32), (uint32) lsn),
-				errdetail("Transaction ID %u finished; no more running transactions.",
-						  xid)));
+				   errdetail("Transaction ID %u finished; no more running transactions.",
+							 xid)));
 			builder->state = SNAPBUILD_CONSISTENT;
 		}
 	}
@@ -1212,7 +1211,7 @@ SnapBuildFindSnapshot(SnapBuild *builder, XLogRecPtr lsn, xl_running_xacts *runn
 	 *	  to CONSISTENT.
 	 *	  NB: We need to search running.xip when seeing a transaction's end to
 	 *	  make sure it's a toplevel transaction and it's been one of the
-	 *	  intially running ones.
+	 *	  initially running ones.
 	 *	  Interestingly, in contrast to HS, this allows us not to care about
 	 *	  subtransactions - and by extension suboverflowed xl_running_xacts -
 	 *	  at all.
@@ -1232,8 +1231,8 @@ SnapBuildFindSnapshot(SnapBuild *builder, XLogRecPtr lsn, xl_running_xacts *runn
 	{
 		ereport(DEBUG1,
 				(errmsg_internal("skipping snapshot at %X/%X while building logical decoding snapshot, xmin horizon too low",
-						(uint32) (lsn >> 32), (uint32) lsn),
-				 errdetail_internal("initial xmin horizon of %u vs the snapshot's %u",
+								 (uint32) (lsn >> 32), (uint32) lsn),
+		errdetail_internal("initial xmin horizon of %u vs the snapshot's %u",
 				 builder->initial_xmin_horizon, running->oldestRunningXid)));
 		return true;
 	}
@@ -1252,8 +1251,8 @@ SnapBuildFindSnapshot(SnapBuild *builder, XLogRecPtr lsn, xl_running_xacts *runn
 			builder->start_decoding_at = lsn + 1;
 
 		/* As no transactions were running xmin/xmax can be trivially set. */
-		builder->xmin = running->nextXid; /* < are finished */
-		builder->xmax = running->nextXid; /* >= are running */
+		builder->xmin = running->nextXid;		/* < are finished */
+		builder->xmax = running->nextXid;		/* >= are running */
 
 		/* so we can safely use the faster comparisons */
 		Assert(TransactionIdIsNormal(builder->xmin));
@@ -1302,8 +1301,8 @@ SnapBuildFindSnapshot(SnapBuild *builder, XLogRecPtr lsn, xl_running_xacts *runn
 		 * currently running transactions have finished. We'll update both
 		 * while waiting for the pending transactions to finish.
 		 */
-		builder->xmin = running->nextXid; /* < are finished */
-		builder->xmax = running->nextXid;  /* >= are running */
+		builder->xmin = running->nextXid;		/* < are finished */
+		builder->xmax = running->nextXid;		/* >= are running */
 
 		/* so we can safely use the faster comparisons */
 		Assert(TransactionIdIsNormal(builder->xmin));
@@ -1657,7 +1656,7 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 	 * Make sure the snapshot had been stored safely to disk, that's normally
 	 * cheap.
 	 * Note that we do not need PANIC here, nobody will be able to use the
-	 * slot without fsyncing, and saving it won't suceed without an fsync()
+	 * slot without fsyncing, and saving it won't succeed without an fsync()
 	 * either...
 	 * ----
 	 */
@@ -1688,7 +1687,7 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 
 	INIT_CRC32C(checksum);
 	COMP_CRC32C(checksum,
-			   ((char *) &ondisk) + SnapBuildOnDiskNotChecksummedSize,
+				((char *) &ondisk) + SnapBuildOnDiskNotChecksummedSize,
 			SnapBuildOnDiskConstantSize - SnapBuildOnDiskNotChecksummedSize);
 
 	/* read SnapBuild */
@@ -1749,7 +1748,7 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 
 	/*
 	 * We are only interested in consistent snapshots for now, comparing
-	 * whether one imcomplete snapshot is more "advanced" seems to be
+	 * whether one incomplete snapshot is more "advanced" seems to be
 	 * unnecessarily complex.
 	 */
 	if (ondisk.builder.state < SNAPBUILD_CONSISTENT)

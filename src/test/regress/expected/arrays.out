@@ -971,18 +971,14 @@ SELECT * FROM array_op_test WHERE EACH ELEMENT OF t AS e SATISFIES (e = 'AAAAAA6
 -------+---------------+---------------
     16 | {14,63,85,11} | {AAAAAA66777}
    101 | {}            | {}
-   102 | {NULL}        | {NULL}
-   103 |               | 
-(4 rows)
+(2 rows)
 
 SELECT * FROM array_op_test WHERE EACH ELEMENT OF i AS e SATISFIES (e = 11) ORDER BY seqno;
- seqno |   i    |                                                                             t                                                                             
--------+--------+-----------------------------------------------------------------------------------------------------------------------------------------------------------
-    93 | {11}   | {AAAAAAAAAAA176,AAAAAAAAAAAAAA8666,AAAAAAAAAAAAAAA453,AAAAAAAAAAAAA85723,A68938,AAAAAAAAAAAAA9821,AAAAAAA48038,AAAAAAAAAAAAAAAAA59387,AA99927,AAAAA17383}
-   101 | {}     | {}
-   102 | {NULL} | {NULL}
-   103 |        | 
-(4 rows)
+ seqno |  i   |                                                                             t                                                                             
+-------+------+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+    93 | {11} | {AAAAAAAAAAA176,AAAAAAAAAAAAAA8666,AAAAAAAAAAAAAAA453,AAAAAAAAAAAAA85723,A68938,AAAAAAAAAAAAA9821,AAAAAAA48038,AAAAAAAAAAAAAAAAA59387,AA99927,AAAAA17383}
+   101 | {}   | {}
+(2 rows)
 
 -- array casts
 SELECT ARRAY[1,2,3]::text[]::int[]::float8[] AS "{1,2,3}";
@@ -2051,3 +2047,40 @@ SELECT width_bucket(5, ARRAY[3, 4, NULL]);
 ERROR:  thresholds array must not contain NULLs
 SELECT width_bucket(5, ARRAY[ARRAY[1, 2], ARRAY[3, 4]]);
 ERROR:  thresholds must be one-dimensional array
+--anytest
+create table anytest(a int[]);
+insert into anytest values
+   (NULL),
+   ('{}'),
+  ('{NULL}'),
+  ('{1}'),
+  ('{1,NULL}'),
+  ('{2,NULL}'),
+  ('{NULL,1}'),
+  ('{NULL,2}');
+SELECT a, (1 = ANY(a)), ANY  ELEMENT OF a AS v SATISFIES (v = 1) FROM anytest;
+    a     | ?column? | bool_or_not_null 
+----------+----------+------------------
+          |          | 
+ {}       | f        | f
+ {NULL}   |          | 
+ {1}      | t        | t
+ {1,NULL} | t        | t
+ {2,NULL} |          | 
+ {NULL,1} | t        | t
+ {NULL,2} |          | 
+(8 rows)
+
+SELECT a, (1 = ALL(a)), EACH ELEMENT OF a AS v SATISFIES (v = 1) FROM anytest;
+    a     | ?column? | bool_and_not_null 
+----------+----------+-------------------
+          |          | 
+ {}       | t        | t
+ {NULL}   |          | 
+ {1}      | t        | t
+ {1,NULL} |          | 
+ {2,NULL} | f        | f
+ {NULL,1} |          | 
+ {NULL,2} | f        | f
+(8 rows)
+

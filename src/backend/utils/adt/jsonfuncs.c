@@ -110,8 +110,8 @@ static void sn_object_start(void *state);
 static void sn_object_end(void *state);
 static void sn_array_start(void *state);
 static void sn_array_end(void *state);
-static void sn_object_field_start (void *state, char *fname, bool isnull);
-static void sn_array_element_start (void *state, bool isnull);
+static void sn_object_field_start(void *state, char *fname, bool isnull);
+static void sn_array_element_start(void *state, bool isnull);
 static void sn_scalar(void *state, char *token, JsonTokenType tokentype);
 
 /* worker function for populate_recordset and to_recordset */
@@ -126,18 +126,17 @@ static JsonbValue *findJsonbValueFromContainerLen(JsonbContainer *container,
 
 /* functions supporting jsonb_delete, jsonb_replace and jsonb_concat */
 static JsonbValue *IteratorConcat(JsonbIterator **it1, JsonbIterator **it2,
-								  JsonbParseState **state);
-static JsonbValue *walkJsonb(JsonbIterator **it, JsonbParseState **state, bool stop_at_level_zero);
+			   JsonbParseState **state);
 static JsonbValue *replacePath(JsonbIterator **it, Datum *path_elems,
-							   bool *path_nulls, int path_len,
-							   JsonbParseState **st, int level, Jsonb *newval);
+			bool *path_nulls, int path_len,
+			JsonbParseState **st, int level, Jsonb *newval);
 static void replacePathObject(JsonbIterator **it, Datum *path_elems, bool *path_nulls,
-							  int path_len, JsonbParseState **st, int level,
-							  Jsonb *newval, uint32	nelems);
+				  int path_len, JsonbParseState **st, int level,
+				  Jsonb *newval, uint32 nelems);
 static void replacePathArray(JsonbIterator **it, Datum *path_elems, bool *path_nulls,
-							 int path_len, JsonbParseState **st, int level,
-							 Jsonb *newval, uint32 npairs);
-static void addJsonbToParseState(JsonbParseState **jbps, Jsonb * jb);
+				 int path_len, JsonbParseState **st, int level,
+				 Jsonb *newval, uint32 npairs);
+static void addJsonbToParseState(JsonbParseState **jbps, Jsonb *jb);
 
 /* state for json_object_keys */
 typedef struct OkeysState
@@ -250,10 +249,11 @@ typedef struct PopulateRecordsetState
 } PopulateRecordsetState;
 
 /* state for json_strip_nulls */
-typedef struct StripnullState{
+typedef struct StripnullState
+{
 	JsonLexContext *lex;
-	StringInfo  strval;
-	bool skip_next_null;
+	StringInfo	strval;
+	bool		skip_next_null;
 } StripnullState;
 
 /* Turn a jsonb object into a record */
@@ -3045,6 +3045,7 @@ static void
 sn_object_start(void *state)
 {
 	StripnullState *_state = (StripnullState *) state;
+
 	appendStringInfoCharMacro(_state->strval, '{');
 }
 
@@ -3052,6 +3053,7 @@ static void
 sn_object_end(void *state)
 {
 	StripnullState *_state = (StripnullState *) state;
+
 	appendStringInfoCharMacro(_state->strval, '}');
 }
 
@@ -3059,6 +3061,7 @@ static void
 sn_array_start(void *state)
 {
 	StripnullState *_state = (StripnullState *) state;
+
 	appendStringInfoCharMacro(_state->strval, '[');
 }
 
@@ -3066,21 +3069,21 @@ static void
 sn_array_end(void *state)
 {
 	StripnullState *_state = (StripnullState *) state;
+
 	appendStringInfoCharMacro(_state->strval, ']');
 }
 
 static void
-sn_object_field_start (void *state, char *fname, bool isnull)
+sn_object_field_start(void *state, char *fname, bool isnull)
 {
 	StripnullState *_state = (StripnullState *) state;
 
 	if (isnull)
 	{
 		/*
-		 * The next thing must be a scalar or isnull couldn't be true,
-		 * so there is no danger of this state being carried down
-		 * into a nested  object or array. The flag will be reset in the
-		 * scalar action.
+		 * The next thing must be a scalar or isnull couldn't be true, so
+		 * there is no danger of this state being carried down into a nested
+		 * object or array. The flag will be reset in the scalar action.
 		 */
 		_state->skip_next_null = true;
 		return;
@@ -3090,16 +3093,16 @@ sn_object_field_start (void *state, char *fname, bool isnull)
 		appendStringInfoCharMacro(_state->strval, ',');
 
 	/*
-	 * Unfortunately we don't have the quoted and escaped string any more,
-	 * so we have to re-escape it.
+	 * Unfortunately we don't have the quoted and escaped string any more, so
+	 * we have to re-escape it.
 	 */
-	escape_json(_state->strval,fname);
+	escape_json(_state->strval, fname);
 
 	appendStringInfoCharMacro(_state->strval, ':');
 }
 
 static void
-sn_array_element_start (void *state, bool isnull)
+sn_array_element_start(void *state, bool isnull)
 {
 	StripnullState *_state = (StripnullState *) state;
 
@@ -3114,7 +3117,7 @@ sn_scalar(void *state, char *token, JsonTokenType tokentype)
 
 	if (_state->skip_next_null)
 	{
-		Assert (tokentype == JSON_TOKEN_NULL);
+		Assert(tokentype == JSON_TOKEN_NULL);
 		_state->skip_next_null = false;
 		return;
 	}
@@ -3132,7 +3135,7 @@ Datum
 json_strip_nulls(PG_FUNCTION_ARGS)
 {
 	text	   *json = PG_GETARG_TEXT_P(0);
-	StripnullState  *state;
+	StripnullState *state;
 	JsonLexContext *lex;
 	JsonSemAction *sem;
 
@@ -3166,13 +3169,14 @@ json_strip_nulls(PG_FUNCTION_ARGS)
 Datum
 jsonb_strip_nulls(PG_FUNCTION_ARGS)
 {
-	Jsonb * jb = PG_GETARG_JSONB(0);
+	Jsonb	   *jb = PG_GETARG_JSONB(0);
 	JsonbIterator *it;
 	JsonbParseState *parseState = NULL;
 	JsonbValue *res = NULL;
-	int type;
-	JsonbValue v,k;
-	bool last_was_key = false;
+	int			type;
+	JsonbValue	v,
+				k;
+	bool		last_was_key = false;
 
 	if (JB_ROOT_IS_SCALAR(jb))
 		PG_RETURN_POINTER(jb);
@@ -3181,7 +3185,7 @@ jsonb_strip_nulls(PG_FUNCTION_ARGS)
 
 	while ((type = JsonbIteratorNext(&it, &v, false)) != WJB_DONE)
 	{
-		Assert( ! (type == WJB_KEY && last_was_key));
+		Assert(!(type == WJB_KEY && last_was_key));
 
 		if (type == WJB_KEY)
 		{
@@ -3221,48 +3225,38 @@ jsonb_strip_nulls(PG_FUNCTION_ARGS)
  * If the parse state container is an object, the jsonb is pushed as
  * a value, not a key.
  *
- * This needs to be done using an iterator because pushJsonbValue doesn't
- * like getting jbvBinary values, so we can't just push jb as a whole.
+ * If the new value is a root scalar, extract the value using an iterator, and
+ * just add that. Otherwise, add the value as the type appropriate for
+ * the container.
  */
 static void
-addJsonbToParseState(JsonbParseState **jbps, Jsonb * jb)
+addJsonbToParseState(JsonbParseState **jbps, Jsonb *jb)
 {
-
 	JsonbIterator *it;
-	JsonbValue    *o = &(*jbps)->contVal;
-	int            type;
-	JsonbValue     v;
-
-	it = JsonbIteratorInit(&jb->root);
+	JsonbValue *o = &(*jbps)->contVal;
+	int			type;
+	JsonbValue	v;
 
 	Assert(o->type == jbvArray || o->type == jbvObject);
 
 	if (JB_ROOT_IS_SCALAR(jb))
 	{
-		(void) JsonbIteratorNext(&it, &v, false); /* skip array header */
-		(void) JsonbIteratorNext(&it, &v, false); /* fetch scalar value */
+		it = JsonbIteratorInit(&jb->root);
 
-		switch (o->type)
-		{
-			case jbvArray:
-				(void) pushJsonbValue(jbps, WJB_ELEM, &v);
-				break;
-			case jbvObject:
-				(void) pushJsonbValue(jbps, WJB_VALUE, &v);
-				break;
-			default:
-				elog(ERROR, "unexpected parent of nested structure");
-		}
+		(void) JsonbIteratorNext(&it, &v, false);		/* skip array header */
+		(void) JsonbIteratorNext(&it, &v, false);		/* fetch scalar value */
+
+		if (o->type == jbvArray)
+			(void) pushJsonbValue(jbps, WJB_ELEM, &v);
+		else
+			(void) pushJsonbValue(jbps, WJB_VALUE, &v);
 	}
 	else
 	{
-		while ((type = JsonbIteratorNext(&it, &v, false)) != WJB_DONE)
-		{
-			if (type == WJB_KEY || type == WJB_VALUE || type == WJB_ELEM)
-				(void) pushJsonbValue(jbps, type, &v);
-			else
-				(void) pushJsonbValue(jbps, type, NULL);
-		}
+		if (o->type == jbvArray)
+			(void) pushJsonbValue(jbps, WJB_ELEM, &jb->root);
+		else
+			(void) pushJsonbValue(jbps, WJB_VALUE, &jb->root);
 	}
 
 }
@@ -3283,7 +3277,6 @@ jsonb_pretty(PG_FUNCTION_ARGS)
 	PG_RETURN_TEXT_P(cstring_to_text_with_len(str->data, str->len));
 }
 
-
 /*
  * SQL function jsonb_concat (jsonb, jsonb)
  *
@@ -3294,45 +3287,27 @@ jsonb_concat(PG_FUNCTION_ARGS)
 {
 	Jsonb	   *jb1 = PG_GETARG_JSONB(0);
 	Jsonb	   *jb2 = PG_GETARG_JSONB(1);
-	Jsonb	   *out = palloc(VARSIZE(jb1) + VARSIZE(jb2));
 	JsonbParseState *state = NULL;
 	JsonbValue *res;
-	JsonbIterator  *it1,
-				   *it2;
+	JsonbIterator *it1,
+			   *it2;
 
 	/*
 	 * If one of the jsonb is empty, just return other.
 	 */
 	if (JB_ROOT_COUNT(jb1) == 0)
-	{
-		memcpy(out, jb2, VARSIZE(jb2));
-		PG_RETURN_POINTER(out);
-	}
+		PG_RETURN_JSONB(jb2);
 	else if (JB_ROOT_COUNT(jb2) == 0)
-	{
-		memcpy(out, jb1, VARSIZE(jb1));
-		PG_RETURN_POINTER(out);
-	}
+		PG_RETURN_JSONB(jb1);
 
 	it1 = JsonbIteratorInit(&jb1->root);
 	it2 = JsonbIteratorInit(&jb2->root);
 
 	res = IteratorConcat(&it1, &it2, &state);
 
-	if (res == NULL || (res->type == jbvArray && res->val.array.nElems == 0) ||
-		(res->type == jbvObject && res->val.object.nPairs == 0))
-	{
-		SET_VARSIZE(out, VARHDRSZ);
-	}
-	else
-	{
-		if (res->type == jbvArray && res->val.array.nElems > 1)
-			res->val.array.rawScalar = false;
+	Assert(res != NULL);
 
-		out = JsonbValueToJsonb(res);
-	}
-
-	PG_RETURN_JSONB(out);
+	PG_RETURN_JSONB(JsonbValueToJsonb(res));
 }
 
 
@@ -3453,7 +3428,7 @@ jsonb_delete_idx(PG_FUNCTION_ARGS)
 		res = pushJsonbValue(&state, r, r < WJB_BEGIN_ARRAY ? &v : NULL);
 	}
 
-	Assert (res != NULL);
+	Assert(res != NULL);
 
 	PG_RETURN_JSONB(JsonbValueToJsonb(res));
 }
@@ -3497,7 +3472,7 @@ jsonb_replace(PG_FUNCTION_ARGS)
 
 	res = replacePath(&it, path_elems, path_nulls, path_len, &st, 0, newval);
 
-	Assert (res != NULL);
+	Assert(res != NULL);
 
 	PG_RETURN_JSONB(JsonbValueToJsonb(res));
 }
@@ -3541,11 +3516,10 @@ jsonb_delete_path(PG_FUNCTION_ARGS)
 
 	res = replacePath(&it, path_elems, path_nulls, path_len, &st, 0, NULL);
 
-	Assert (res != NULL);
+	Assert(res != NULL);
 
 	PG_RETURN_JSONB(JsonbValueToJsonb(res));
 }
-
 
 /*
  * Iterate over all jsonb objects and merge them into one.
@@ -3574,30 +3548,20 @@ IteratorConcat(JsonbIterator **it1, JsonbIterator **it2,
 	 */
 	if (rk1 == WJB_BEGIN_OBJECT && rk2 == WJB_BEGIN_OBJECT)
 	{
-		int			level = 1;
-
 		/*
 		 * Append the all tokens from v1 to res, except last WJB_END_OBJECT
 		 * (because res will not be finished yet).
 		 */
-		(void) pushJsonbValue(state, r1, NULL);
-		while ((r1 = JsonbIteratorNext(it1, &v1, false)) != 0)
-		{
-			if (r1 == WJB_BEGIN_OBJECT)
-				++level;
-			else if (r1 == WJB_END_OBJECT)
-				--level;
-
-			if (level != 0)
-				res = pushJsonbValue(state, r1, r1 < WJB_BEGIN_ARRAY ? &v1 : NULL);
-		}
+		pushJsonbValue(state, r1, NULL);
+		while ((r1 = JsonbIteratorNext(it1, &v1, true)) != WJB_END_OBJECT)
+			pushJsonbValue(state, r1, &v1 );
 
 		/*
 		 * Append the all tokens from v2 to res, include last WJB_END_OBJECT
 		 * (the concatenation will be completed).
 		 */
-		while ((r2 = JsonbIteratorNext(it2, &v2, false)) != 0)
-			res = pushJsonbValue(state, r2, r2 < WJB_BEGIN_ARRAY ? &v2 : NULL);
+		while ((r2 = JsonbIteratorNext(it2, &v2, true)) != 0)
+			res = pushJsonbValue(state, r2, r2 != WJB_END_OBJECT ? &v2 : NULL);
 	}
 
 	/*
@@ -3605,36 +3569,21 @@ IteratorConcat(JsonbIterator **it1, JsonbIterator **it2,
 	 */
 	else if (rk1 == WJB_BEGIN_ARRAY && rk2 == WJB_BEGIN_ARRAY)
 	{
-		res = pushJsonbValue(state, r1, NULL);
-		for (;;)
-		{
-			r1 = JsonbIteratorNext(it1, &v1, true);
-			if (r1 == WJB_END_OBJECT || r1 == WJB_END_ARRAY)
-				break;
+		pushJsonbValue(state, r1, NULL);
 
-			Assert(r1 == WJB_KEY || r1 == WJB_VALUE || r1 == WJB_ELEM);
+		while ((r1 = JsonbIteratorNext(it1, &v1, true)) != WJB_END_ARRAY)
+		{
+			Assert(r1 == WJB_ELEM);
 			pushJsonbValue(state, r1, &v1);
 		}
 
-		while ((r2 = JsonbIteratorNext(it2, &v2, true)) != 0)
+		while ((r2 = JsonbIteratorNext(it2, &v2, true)) !=  WJB_END_ARRAY)
 		{
-			if (!(r2 == WJB_END_OBJECT || r2 == WJB_END_ARRAY))
-			{
-				if (rk1 == WJB_BEGIN_OBJECT)
-				{
-					pushJsonbValue(state, WJB_KEY, NULL);
-					r2 = JsonbIteratorNext(it2, &v2, true);
-					Assert(r2 == WJB_ELEM);
-					pushJsonbValue(state, WJB_VALUE, &v2);
-				}
-				else
-					pushJsonbValue(state, WJB_ELEM, &v2);
-			}
+			Assert(r2 == WJB_ELEM);
+			pushJsonbValue(state, WJB_ELEM, &v2);
 		}
 
-		res = pushJsonbValue(state,
-				  (rk1 == WJB_BEGIN_OBJECT) ? WJB_END_OBJECT : WJB_END_ARRAY,
-							 NULL /* signal to sort */ );
+		res = pushJsonbValue(state, WJB_END_ARRAY, NULL /* signal to sort */ );
 	}
 	/* have we got array || object or object || array? */
 	else if (((rk1 == WJB_BEGIN_ARRAY && !(*it1)->isScalar) && rk2 == WJB_BEGIN_OBJECT) ||
@@ -3644,22 +3593,27 @@ IteratorConcat(JsonbIterator **it1, JsonbIterator **it2,
 		JsonbIterator **it_array = rk1 == WJB_BEGIN_ARRAY ? it1 : it2;
 		JsonbIterator **it_object = rk1 == WJB_BEGIN_OBJECT ? it1 : it2;
 
-		bool		prepend = (rk1 == WJB_BEGIN_OBJECT) ? true : false;
+		bool		prepend = (rk1 == WJB_BEGIN_OBJECT);
 
 		pushJsonbValue(state, WJB_BEGIN_ARRAY, NULL);
+
 		if (prepend)
 		{
 			pushJsonbValue(state, WJB_BEGIN_OBJECT, NULL);
-			walkJsonb(it_object, state, false);
+			while ((r1 = JsonbIteratorNext(it_object, &v1, true)) != 0)
+				pushJsonbValue(state, r1, r1 != WJB_END_OBJECT ? &v1 : NULL);
 
-			res = walkJsonb(it_array, state, false);
+			while ((r2 = JsonbIteratorNext(it_array, &v2, true)) != 0)
+				res = pushJsonbValue(state, r2, r2 != WJB_END_ARRAY ? &v2 : NULL);
 		}
 		else
 		{
-			walkJsonb(it_array, state, true);
+			while ((r1 = JsonbIteratorNext(it_array, &v1, true)) != WJB_END_ARRAY)
+				pushJsonbValue(state, r1, &v1);
 
 			pushJsonbValue(state, WJB_BEGIN_OBJECT, NULL);
-			walkJsonb(it_object, state, false);
+			while ((r2 = JsonbIteratorNext(it_object, &v2, true)) != 0)
+				pushJsonbValue(state, r2, r2 != WJB_END_OBJECT ? &v2 : NULL);
 
 			res = pushJsonbValue(state, WJB_END_ARRAY, NULL);
 		}
@@ -3677,35 +3631,6 @@ IteratorConcat(JsonbIterator **it1, JsonbIterator **it2,
 
 	return res;
 }
-
-/*
- * copy elements from the iterator to the parse state
- * stopping at level zero if required.
- */
-static JsonbValue *
-walkJsonb(JsonbIterator **it, JsonbParseState **state, bool stop_at_level_zero)
-{
-	uint32		r,
-				level = 1;
-	JsonbValue  v;
-	JsonbValue *res = NULL;
-
-	while ((r = JsonbIteratorNext(it, &v, false)) != WJB_DONE)
-	{
-		if (r == WJB_BEGIN_OBJECT || r == WJB_BEGIN_ARRAY)
-			++level;
-		else if (r == WJB_END_OBJECT || r == WJB_END_ARRAY)
-			--level;
-
-		if (stop_at_level_zero && level == 0)
-			break;
-
-		res = pushJsonbValue(state, r, r < WJB_BEGIN_ARRAY ? &v : NULL);
-	}
-
-	return res;
-}
-
 
 /*
  * do most of the heavy work for jsonb_replace
@@ -3758,7 +3683,7 @@ replacePath(JsonbIterator **it, Datum *path_elems,
 static void
 replacePathObject(JsonbIterator **it, Datum *path_elems, bool *path_nulls,
 				  int path_len, JsonbParseState **st, int level,
-				  Jsonb *newval, uint32	nelems)
+				  Jsonb *newval, uint32 nelems)
 {
 	JsonbValue	v;
 	int			i;
@@ -3770,7 +3695,8 @@ replacePathObject(JsonbIterator **it, Datum *path_elems, bool *path_nulls,
 
 	for (i = 0; i < nelems; i++)
 	{
-		int		r = JsonbIteratorNext(it, &k, true);
+		int			r = JsonbIteratorNext(it, &k, true);
+
 		Assert(r == WJB_KEY);
 
 		if (!done &&
@@ -3780,7 +3706,7 @@ replacePathObject(JsonbIterator **it, Datum *path_elems, bool *path_nulls,
 		{
 			if (level == path_len - 1)
 			{
-				r = JsonbIteratorNext(it, &v, true);		/* skip */
+				r = JsonbIteratorNext(it, &v, true);	/* skip */
 				if (newval != NULL)
 				{
 					(void) pushJsonbValue(st, WJB_KEY, &k);
@@ -3801,7 +3727,7 @@ replacePathObject(JsonbIterator **it, Datum *path_elems, bool *path_nulls,
 			(void) pushJsonbValue(st, r, r < WJB_BEGIN_ARRAY ? &v : NULL);
 			if (r == WJB_BEGIN_ARRAY || r == WJB_BEGIN_OBJECT)
 			{
-				int		walking_level = 1;
+				int			walking_level = 1;
 
 				while (walking_level != 0)
 				{
@@ -3859,13 +3785,13 @@ replacePathArray(JsonbIterator **it, Datum *path_elems, bool *path_nulls,
 	/* iterate over the array elements */
 	for (i = 0; i < npairs; i++)
 	{
-		int		r;
+		int			r;
 
 		if (i == idx && level < path_len)
 		{
 			if (level == path_len - 1)
 			{
-				r = JsonbIteratorNext(it, &v, true);		/* skip */
+				r = JsonbIteratorNext(it, &v, true);	/* skip */
 				if (newval != NULL)
 					addJsonbToParseState(st, newval);
 			}
@@ -3881,7 +3807,7 @@ replacePathArray(JsonbIterator **it, Datum *path_elems, bool *path_nulls,
 
 			if (r == WJB_BEGIN_ARRAY || r == WJB_BEGIN_OBJECT)
 			{
-				int		walking_level = 1;
+				int			walking_level = 1;
 
 				while (walking_level != 0)
 				{

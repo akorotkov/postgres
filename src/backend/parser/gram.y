@@ -176,7 +176,7 @@ static void processCASbits(int cas_bits, int location, const char *constrType,
 			   bool *deferrable, bool *initdeferred, bool *not_valid,
 			   bool *no_inherit, core_yyscan_t yyscanner);
 static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
-static SelectStmt * makeElementSubselect(int kind, bool recursive, Node *of,
+static SelectStmt * makeElementSubselect(int any_or_each, int kind, bool recursive, Node *of,
 										 const char *aliasname, Node *clause, int location);
 
 %}
@@ -9488,9 +9488,9 @@ InsertStmt:
 
 /*
  * Can't easily make AS optional here, because VALUES in insert_rest would
- * have a shift/reduce conflict with a values as an optional alias. We could
+ * have a shift/reduce conflict with VALUES as an optional alias.  We could
  * easily allow unreserved_keywords as optional aliases, but that'd be an odd
- * divergance from other places.  So just require AS for now.
+ * divergence from other places.  So just require AS for now.
  */
 insert_target:
 			qualified_name
@@ -12064,21 +12064,13 @@ c_expr:		columnref								{ $$ = $1; }
 			  {
 					SubLink	*n = makeNode(SubLink);
 
-					n->subLinkType = EXISTS_SUBLINK;
+					n->subLinkType = EXPR_SUBLINK;
 					n->subLinkId = 0;
 					n->testexpr = NULL;
 					n->operName = NIL;
-					n->subselect = (Node*)makeElementSubselect(
-												$2, $3,
-												$5, $7,
-												($1 == EACH) ? makeNotExpr($10, @1) : $10,
-												@1
-									);
+					n->subselect = (Node*)makeElementSubselect($1, $2, $3, $5, $7, $10, @1);
 					n->location = @1;
-					if ($1 == EACH)
-						$$ = makeNotExpr((Node *)n, @1);
-					else
-						$$ = (Node *)n;
+					$$ = (Node *)n;
 			  }
 		;
 
@@ -14873,43 +14865,90 @@ makeRecursiveViewSelect(char *relname, List *aliases, Node *query)
 }
 
 static SelectStmt *
-makeElementSubselect(int kind, bool recursive, Node *of,
+makeElementSubselect(int any_or_each, int kind, bool recursive, Node *of,
 					 const char *aliasname, Node *clause, int location)
 {
 	ResTarget 		*target = makeNode(ResTarget);
-	FuncCall		*func_call;
+	FuncCall		*unnest_call, *agg_call, *count_call;
 	RangeFunction	*table_ref = makeNode(RangeFunction);	
 	SelectStmt 		*subselect = makeNode(SelectStmt);
-	char			*funcname;
+	char			*unnest_name, *agg_name;
+	CaseExpr		*c = makeNode(CaseExpr);
+	CaseWhen		*w = makeNode(CaseWhen);
+	NullTest		*n = makeNode(NullTest);;
 
-	target->val = (Node*)makeIntConst(1, location);
+	/* SELECT (CASE 
+	 *  			WHEN (COUNT(*) = 0 AND of IS NOT NULL) THEN '?'::bool 
+	 *			ELSE BOOL_OR_AND(clause) END ) FROM unnest_*(of) AS aliasname */
+
+	switch(any_or_each)
+	{
+		case ANY_EL:
+			agg_name = "bool_or_not_null";
+			break;
+		case EACH:
+			agg_name = "bool_and_not_null";
+			break;
+		default:
+			elog(ERROR, "unkown ANY or ALL");
+	}
+			 
+	agg_call = makeFuncCall(SystemFuncName(agg_name),
+							list_make1(clause), location);
+
+	count_call = makeFuncCall(SystemFuncName("count"), NIL, location);
+	count_call->agg_star = true;
+
+	n->arg = (Expr *) of;
+	n->nulltesttype = IS_NOT_NULL;
+	n->location = location;
+
+	w->expr = (Expr *)makeAndExpr(
+		(Node*)makeSimpleA_Expr(AEXPR_OP, "=", 
+			(Node*)count_call,
+			(Node*)makeIntConst(0, location),
+			location
+		),
+		(Node*)n,
+		location
+	);	
+	w->result = (Expr *) makeBoolAConst((any_or_each == EACH) ? true : false, location); 
+	w->location = location;
+
+
+	c->casetype = InvalidOid;
+	c->arg = NULL;
+	c->args = list_make1(w);
+	c->defresult = (Expr*)agg_call;
+	c->location = location;
+
+
+	target->val = (Node*)c;
 	target->location = location;
+	subselect->targetList = list_make1(target);
 
 	switch(kind)
 	{
 		case ELEMENT:
-			funcname = "unnest_element";
+			unnest_name = "unnest_element";
 			break;
 		case KEY:
-			funcname = "unnest_key";
+			unnest_name = "unnest_key";
 			break;
 		case VALUE_P:
-			funcname = "unnest_value";
+			unnest_name = "unnest_value";
 			break;
 		default:
 			elog(ERROR, "unkown ANY_EL");
 	}
 
-	func_call = makeFuncCall(SystemFuncName(funcname),
-							 list_make2(of, makeBoolAConst(recursive, location)),
-							 location);
+	unnest_call = makeFuncCall(SystemFuncName(unnest_name),
+							   list_make2(of, makeBoolAConst(recursive, location)),
+							   location);
 
-	table_ref->functions = list_make1(list_make2(func_call, NIL));
+	table_ref->functions = list_make1(list_make2(unnest_call, NIL));
 	table_ref->alias = makeAlias(aliasname, NIL);
-
-	subselect->targetList = list_make1(target);
-	subselect->fromClause = list_make1(table_ref);  /* unnest(of) as aliasname */ 
-	subselect->whereClause = clause;
+	subselect->fromClause = list_make1(table_ref);
 
 	return subselect;
 }

@@ -88,8 +88,9 @@ gistbeginscan(PG_FUNCTION_ARGS)
 	so->qual_ok = true;			/* in case there are zero keys */
 	if (scan->numberOfOrderBys > 0)
 	{
-		scan->xs_orderbyvals = palloc(sizeof(Datum) * scan->numberOfOrderBys);
+		scan->xs_orderbyvals = palloc0(sizeof(Datum) * scan->numberOfOrderBys);
 		scan->xs_orderbynulls = palloc(sizeof(bool) * scan->numberOfOrderBys);
+		memset(scan->xs_orderbynulls, true, sizeof(bool) * scan->numberOfOrderBys);
 	}
 
 	scan->opaque = so;
@@ -153,8 +154,8 @@ gistrescan(PG_FUNCTION_ARGS)
 	}
 
 	/*
-	 * If we're doing an index-only scan, on the first call, also initialize
-	 * a tuple descriptor to represent the returned index tuples and create a
+	 * If we're doing an index-only scan, on the first call, also initialize a
+	 * tuple descriptor to represent the returned index tuples and create a
 	 * memory context to hold them during the scan.
 	 */
 	if (scan->xs_want_itup && !scan->xs_itupdesc)
@@ -168,7 +169,7 @@ gistrescan(PG_FUNCTION_ARGS)
 		 * descriptor. Instead, construct a descriptor with the original data
 		 * types.
 		 */
-		natts =  RelationGetNumberOfAttributes(scan->indexRelation);
+		natts = RelationGetNumberOfAttributes(scan->indexRelation);
 		so->giststate->fetchTupdesc = CreateTemplateTupleDesc(natts, false);
 		for (attno = 1; attno <= natts; attno++)
 		{
@@ -284,10 +285,12 @@ gistrescan(PG_FUNCTION_ARGS)
 					 GIST_DISTANCE_PROC, skey->sk_attno,
 					 RelationGetRelationName(scan->indexRelation));
 
+			fmgr_info_copy(&(skey->sk_func), finfo, so->giststate->scanCxt);
+
 			/*
-			 * Look up the datatype returned by the original ordering operator.
-			 * GiST always uses a float8 for the distance function, but the
-			 * ordering operator could be anything else.
+			 * Look up the datatype returned by the original ordering
+			 * operator. GiST always uses a float8 for the distance function,
+			 * but the ordering operator could be anything else.
 			 *
 			 * XXX: The distance function is only allowed to be lossy if the
 			 * ordering operator's result type is float4 or float8.  Otherwise
@@ -297,7 +300,6 @@ gistrescan(PG_FUNCTION_ARGS)
 			 * first time.
 			 */
 			so->orderByTypes[i] = get_func_rettype(skey->sk_func.fn_oid);
-			fmgr_info_copy(&(skey->sk_func), finfo, so->giststate->scanCxt);
 
 			/* Restore prior fn_extra pointers, if not first time */
 			if (!first_time)

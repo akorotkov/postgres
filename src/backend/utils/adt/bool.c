@@ -311,6 +311,7 @@ typedef struct BoolAggState
 {
 	int64		aggcount;		/* number of non-null values aggregated */
 	int64		aggtrue;		/* number of values aggregated that are true */
+	int64		aggnull;		/* number of values aggregated that are null */
 } BoolAggState;
 
 static BoolAggState *
@@ -326,6 +327,7 @@ makeBoolAggState(FunctionCallInfo fcinfo)
 												sizeof(BoolAggState));
 	state->aggcount = 0;
 	state->aggtrue = 0;
+	state->aggnull = 0;
 
 	return state;
 }
@@ -347,6 +349,10 @@ bool_accum(PG_FUNCTION_ARGS)
 		if (PG_GETARG_BOOL(1))
 			state->aggtrue++;
 	}
+	else
+	{
+		state->aggnull++;
+	}
 
 	PG_RETURN_POINTER(state);
 }
@@ -367,6 +373,10 @@ bool_accum_inv(PG_FUNCTION_ARGS)
 		state->aggcount--;
 		if (PG_GETARG_BOOL(1))
 			state->aggtrue--;
+	}
+	else
+	{
+		state->aggnull--;
 	}
 
 	PG_RETURN_POINTER(state);
@@ -396,6 +406,44 @@ bool_anytrue(PG_FUNCTION_ARGS)
 
 	/* if there were no non-null values, return NULL */
 	if (state == NULL || state->aggcount == 0)
+		PG_RETURN_NULL();
+
+	/* true if any non-null value is true */
+	PG_RETURN_BOOL(state->aggtrue > 0);
+}
+
+Datum
+bool_alltrue_notnull(PG_FUNCTION_ARGS)
+{
+	BoolAggState *state;
+
+	state = PG_ARGISNULL(0) ? NULL : (BoolAggState *) PG_GETARG_POINTER(0);
+
+	/* if there were no non-null values, return NULL */
+	if (state == NULL || state->aggcount == 0)
+		PG_RETURN_NULL();
+
+	/* If all values are true except some NULLs then return NULL */
+	if (state->aggtrue == state->aggcount && state->aggnull > 0)
+		PG_RETURN_NULL();
+
+	/* true if all non-null values are true */
+	PG_RETURN_BOOL(state->aggtrue == state->aggcount);
+}
+
+Datum
+bool_anytrue_notnull(PG_FUNCTION_ARGS)
+{
+	BoolAggState *state;
+
+	state = PG_ARGISNULL(0) ? NULL : (BoolAggState *) PG_GETARG_POINTER(0);
+
+	/* if there were no non-null values, return NULL */
+	if (state == NULL || state->aggcount == 0)
+		PG_RETURN_NULL();
+
+	/* If all values are false except some NULLs then return NULL */
+	if (state->aggtrue == 0 && state->aggnull > 0)
 		PG_RETURN_NULL();
 
 	/* true if any non-null value is true */

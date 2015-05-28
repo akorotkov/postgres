@@ -1353,14 +1353,16 @@ SELECT DISTINCT proname, oprname
 FROM pg_operator AS o, pg_aggregate AS a, pg_proc AS p
 WHERE a.aggfnoid = p.oid AND a.aggsortop = o.oid
 ORDER BY 1, 2;
- proname  | oprname 
-----------+---------
- bool_and | <
- bool_or  | >
- every    | <
- max      | >
- min      | <
-(5 rows)
+      proname      | oprname 
+-------------------+---------
+ bool_and          | <
+ bool_and_not_null | <
+ bool_or           | >
+ bool_or_not_null  | >
+ every             | <
+ max               | >
+ min               | <
+(7 rows)
 
 -- Check datatypes match
 SELECT a.aggfnoid::oid, o.oid
@@ -1393,14 +1395,16 @@ WHERE a.aggfnoid = p.oid AND a.aggsortop = o.oid AND
     amopopr = o.oid AND
     amopmethod = (SELECT oid FROM pg_am WHERE amname = 'btree')
 ORDER BY 1, 2;
- proname  | oprname | amopstrategy 
-----------+---------+--------------
- bool_and | <       |            1
- bool_or  | >       |            5
- every    | <       |            1
- max      | >       |            5
- min      | <       |            1
-(5 rows)
+      proname      | oprname | amopstrategy 
+-------------------+---------+--------------
+ bool_and          | <       |            1
+ bool_and_not_null | <       |            1
+ bool_or           | >       |            5
+ bool_or_not_null  | >       |            5
+ every             | <       |            1
+ max               | >       |            5
+ min               | <       |            1
+(7 rows)
 
 -- Check that there are not aggregates with the same name and different
 -- numbers of arguments.  While not technically wrong, we have a project policy

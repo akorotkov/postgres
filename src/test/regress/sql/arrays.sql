@@ -602,3 +602,20 @@ SELECT width_bucket(5, '{}');
 SELECT width_bucket('5'::text, ARRAY[3, 4]::integer[]);
 SELECT width_bucket(5, ARRAY[3, 4, NULL]);
 SELECT width_bucket(5, ARRAY[ARRAY[1, 2], ARRAY[3, 4]]);
+
+
+--anytest
+
+create table anytest(a int[]);
+insert into anytest values
+   (NULL),
+   ('{}'),
+  ('{NULL}'),
+  ('{1}'),
+  ('{1,NULL}'),
+  ('{2,NULL}'),
+  ('{NULL,1}'),
+  ('{NULL,2}');
+
+SELECT a, (1 = ANY(a)), ANY  ELEMENT OF a AS v SATISFIES (v = 1) FROM anytest;
+SELECT a, (1 = ALL(a)), EACH ELEMENT OF a AS v SATISFIES (v = 1) FROM anytest;
