@@ -131,6 +131,10 @@ InitBufferPool(void)
 		BufferDescriptors[NBuffers - 1].freeNext = FREENEXT_END_OF_LIST;
 	}
 
+	/* Init bufmgr LWLocks */
+	LWLockCreateTranche("BufferLWLocks", NUM_BUFFER_PARTITIONS,
+		&BufferLWLockArray);
+
 	/* Init other shared buffer-management stuff */
 	StrategyInitialize(!foundDescs);
 }
