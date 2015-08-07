@@ -57,21 +57,6 @@ int			max_locks_per_xact; /* set by guc.c */
 #define NLOCKENTS() \
 	mul_size(max_locks_per_xact, add_size(MaxBackends, max_prepared_xacts))
 
-/* Lock names. For monitoring purposes */
-const char *LOCK_NAMES[] =
-{
-	"Relation",
-	"RelationExtend",
-	"Page",
-	"Tuple",
-	"Transaction",
-	"VirtualTransaction",
-	"SpeculativeToken",
-	"Object",
-	"Userlock",
-	"Advisory"
-};
-
 /*
  * Data structures defining the semantics of the standard lock methods.
  *
@@ -117,6 +102,20 @@ static const LOCKMASK LockConflicts[] = {
 	(1 << ShareLock) | (1 << ShareRowExclusiveLock) |
 	(1 << ExclusiveLock) | (1 << AccessExclusiveLock)
 
+};
+
+/* Lock names. For monitoring purposes */
+const char *LOCK_NAMES[] =
+{
+	"Relation",
+	"RelationExtend",
+	"Page",
+	"Tuple",
+	"Transaction",
+	"VirtualTransaction",
+	"Object",
+	"Userlock",
+	"Advisory"
 };
 
 /* Names of lock modes, for debug printouts */
@@ -3313,6 +3312,9 @@ LockShmemSize(void)
 	/* proclock hash table */
 	max_table_size *= 2;
 	size = add_size(size, hash_estimate_size(max_table_size, sizeof(PROCLOCK)));
+
+	/* Lock Manager LWLock structures */
+	size = add_size(size, LWLockTrancheShmemSize(NUM_LOCK_PARTITIONS));
 
 	/*
 	 * Since NLOCKENTS is only an estimate, add 10% safety margin.
