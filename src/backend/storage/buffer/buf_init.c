@@ -21,6 +21,7 @@
 BufferDesc *BufferDescriptors;
 char	   *BufferBlocks;
 int32	   *PrivateRefCount;
+LWLockPadded      *BufferLWLockArray;
 
 
 /*
@@ -72,8 +73,9 @@ int32	   *PrivateRefCount;
 void
 InitBufferPool(void)
 {
-	bool		foundBufs,
-				foundDescs;
+	bool          foundBufs;
+	bool          foundDescs;
+	LWLockPadded *lwlocks_array;
 
 	BufferDescriptors = (BufferDesc *)
 		ShmemInitStruct("Buffer Descriptors",
@@ -82,6 +84,10 @@ InitBufferPool(void)
 	BufferBlocks = (char *)
 		ShmemInitStruct("Buffer Blocks",
 						NBuffers * (Size) BLCKSZ, &foundBufs);
+
+	/* Init LWLocks for buffer headers */
+	LWLockCreateTranche("BufferMgrLocks", 2 * NBuffers,
+		&lwlocks_array);
 
 	if (foundDescs || foundBufs)
 	{
@@ -117,8 +123,8 @@ InitBufferPool(void)
 			 */
 			buf->freeNext = i + 1;
 
-			buf->io_in_progress_lock = LWLockAssign();
-			buf->content_lock = LWLockAssign();
+			buf->io_in_progress_lock = &lwlocks_array[i * 2].lock;
+			buf->content_lock = &lwlocks_array[i * 2 + 1].lock;
 		}
 
 		/* Correct last entry of linked list */
@@ -173,6 +179,10 @@ BufferShmemSize(void)
 
 	/* size of stuff controlled by freelist.c */
 	size = add_size(size, StrategyShmemSize());
+
+	/* size of LWLock structures required for buffers */
+	size = add_size(size, LWLockTrancheShmemSize(NUM_BUFFER_PARTITIONS));
+	size = add_size(size, LWLockTrancheShmemSize(2 * NBuffers));
 
 	return size;
 }

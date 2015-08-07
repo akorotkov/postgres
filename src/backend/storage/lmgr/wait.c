@@ -11,9 +11,10 @@
 static slock_t *WaitCounterLock;
 
 void *WaitShmem;
-bool WaitsOn;
-bool WaitsHistoryOn;
-int WaitsFlushPeriod;
+bool  WaitsOn;
+bool  WaitsHistoryOn;
+bool  WaitsInitialized = false;
+int   WaitsFlushPeriod;
 
 #define SHMEM_WAIT_CELLS ((BackendWaitCells *)((char *)WaitCounterLock \
 			+ MAXALIGN(sizeof(slock_t))))
@@ -56,7 +57,8 @@ const int WAIT_OFFSETS[] =
 	WAIT_LOCKS_OFFSET,
 	WAIT_IO_OFFSET,
 	WAIT_LATCH_OFFSET,
-	WAIT_NETWORK_OFFSET
+	WAIT_NETWORK_OFFSET,
+	WAIT_ALLOC_OFFSET
 };
 
 /* Returns event name for wait */
@@ -232,7 +234,7 @@ StartWait(int classId, int eventId, int p1, int p2, int p3, int p4, int p5)
 
 	Assert(classId > 0 && classId < WAITS_COUNT);
 
-	if (!MyProc)
+	if (!MyProc || !WaitsInitialized)
 		return;
 
 	/* preventing nested waits */
@@ -282,8 +284,6 @@ StartWait(int classId, int eventId, int p1, int p2, int p3, int p4, int p5)
 		then keep the value */
 	if (waits->readIdx == -1)
 		waits->readIdx = waits->writeIdx;
-
-	pgstat_report_wait_start(classId, eventId);
 }
 
 /* Stops current wait, calculates interval of wait, and flushes
@@ -299,7 +299,7 @@ StopWait()
 	ProcWaits *waits;
 	ProcWait  *curwait;
 
-	if (!MyProc)
+	if (!MyProc || !WaitsInitialized)
 		return;
 
 	waits = &MyProc->waits;
@@ -340,9 +340,6 @@ StopWait()
 	INSTR_TIME_SUBTRACT(currentTimeCopy, waits->flushTime);
 	if ((long) INSTR_TIME_GET_MICROSEC(currentTimeCopy) >= (1000L * WaitsFlushPeriod))
 		flush_waits(waits);
-
-	/* Clear wait event */
-	pgstat_report_wait_end();
 }
 
 
@@ -371,10 +368,11 @@ WaitsAllocateShmem()
 	WaitCounterLock = (slock_t *)((char *)WaitShmem + sizeof(int));
 
 	cells = SHMEM_WAIT_CELLS;
-	for (i=0; i < MaxBackends; i++) 
+	for (i=0; i < MaxBackends; i++)
 		pg_atomic_init_flag(&cells->isTaken);
 
 	SpinLockInit(WaitCounterLock);
+
 }
 
 /* Marks reserved block in shared memory used by process as free, so new
@@ -411,4 +409,6 @@ WaitsInitProcessFields(PGPROC *proc)
 			sizeof(WaitCell) * WAIT_EVENTS_COUNT);
 	proc->waits.readIdx = -1;
 	init_backend_shmem_cells(proc);
+
+	WaitsInitialized = true;
 }

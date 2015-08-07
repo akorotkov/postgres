@@ -53,6 +53,10 @@ typedef bits16 BufFlags;
  */
 #define BM_MAX_USAGE_COUNT	5
 
+/* Number of partitions of the shared buffer mapping hashtable */
+#define NUM_BUFFER_PARTITIONS  128
+
+
 /*
  * Buffer tag identifies which disk block the buffer contains.
  *
@@ -104,10 +108,8 @@ typedef struct buftag
 #define BufTableHashPartition(hashcode) \
 	((hashcode) % NUM_BUFFER_PARTITIONS)
 #define BufMappingPartitionLock(hashcode) \
-	(&MainLWLockArray[BUFFER_MAPPING_LWLOCK_OFFSET + \
-		BufTableHashPartition(hashcode)].lock)
-#define BufMappingPartitionLockByIndex(i) \
-	(&MainLWLockArray[BUFFER_MAPPING_LWLOCK_OFFSET + (i)].lock)
+	(&BufferLWLockArray[BufTableHashPartition(hashcode)].lock)
+#define BufMappingPartitionLockByIndex(i) (&BufferLWLockArray[i].lock)
 
 /*
  *	BufferDesc -- shared descriptor/state data for a single shared buffer.
@@ -175,6 +177,7 @@ typedef struct sbufdesc
 
 /* in buf_init.c */
 extern PGDLLIMPORT BufferDesc *BufferDescriptors;
+extern PGDLLIMPORT LWLockPadded *BufferLWLockArray;
 
 /* in localbuf.c */
 extern BufferDesc *LocalBufferDescriptors;

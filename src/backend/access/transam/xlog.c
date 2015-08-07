@@ -58,6 +58,7 @@
 #include "storage/reinit.h"
 #include "storage/smgr.h"
 #include "storage/spin.h"
+#include "storage/wait.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/ps_status.h"
@@ -2446,6 +2447,8 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 			from = XLogCtl->pages + startidx * (Size) XLOG_BLCKSZ;
 			nbytes = npages * (Size) XLOG_BLCKSZ;
 			nleft = nbytes;
+
+			WAIT_START(WAIT_IO, WAIT_XLOG_WRITE, 0, 0, 0, 0, 0);
 			do
 			{
 				errno = 0;
@@ -2464,6 +2467,8 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 				nleft -= written;
 				from += written;
 			} while (nleft > 0);
+
+			WAIT_STOP();
 
 			/* Update state for write */
 			openLogOff += nbytes;
@@ -3177,6 +3182,8 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 	 */
 	zbuffer = (char *) MAXALIGN(zbuffer_raw);
 	memset(zbuffer, 0, XLOG_BLCKSZ);
+
+	WAIT_START(WAIT_IO, WAIT_XLOG_WRITE, 0, 0, 0, 0, 0);
 	for (nbytes = 0; nbytes < XLogSegSize; nbytes += XLOG_BLCKSZ)
 	{
 		errno = 0;
@@ -3199,7 +3206,9 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 					 errmsg("could not write to file \"%s\": %m", tmppath)));
 		}
 	}
+	WAIT_STOP();
 
+	WAIT_START(WAIT_IO, WAIT_XLOG_FSYNC, 0, 0, 0, 0, 0);
 	if (pg_fsync(fd) != 0)
 	{
 		close(fd);
@@ -3207,6 +3216,8 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 				(errcode_for_file_access(),
 				 errmsg("could not fsync file \"%s\": %m", tmppath)));
 	}
+
+	WAIT_STOP();
 
 	if (close(fd))
 		ereport(ERROR,
@@ -4877,11 +4888,12 @@ XLOGShmemInit(void)
 
 	XLogCtl->Insert.WALInsertLockTrancheId = LWLockNewTrancheId();
 
-	XLogCtl->Insert.WALInsertLockTranche.name = "WALInsertLocks";
+	strcpy(XLogCtl->Insert.WALInsertLockTranche.name, "WALInsertLocks");
 	XLogCtl->Insert.WALInsertLockTranche.array_base = WALInsertLocks;
 	XLogCtl->Insert.WALInsertLockTranche.array_stride = sizeof(WALInsertLockPadded);
 
-	LWLockRegisterTranche(XLogCtl->Insert.WALInsertLockTrancheId, &XLogCtl->Insert.WALInsertLockTranche);
+	LWLockRegisterTranche(XLogCtl->Insert.WALInsertLockTrancheId,
+		&XLogCtl->Insert.WALInsertLockTranche);
 	for (i = 0; i < NUM_XLOGINSERT_LOCKS; i++)
 	{
 		LWLockInitialize(&WALInsertLocks[i].l.lock,
@@ -9718,6 +9730,7 @@ assign_xlog_sync_method(int new_sync_method, void *extra)
 void
 issue_xlog_fsync(int fd, XLogSegNo segno)
 {
+	WAIT_START(WAIT_IO, WAIT_XLOG_FSYNC, 0, 0, 0, 0, 0);
 	switch (sync_method)
 	{
 		case SYNC_METHOD_FSYNC:
@@ -9753,6 +9766,7 @@ issue_xlog_fsync(int fd, XLogSegNo segno)
 			elog(PANIC, "unrecognized wal_sync_method: %d", sync_method);
 			break;
 	}
+	WAIT_STOP();
 }
 
 /*
@@ -10838,8 +10852,10 @@ retry:
 		goto next_record_is_invalid;
 	}
 
+	WAIT_START(WAIT_IO, WAIT_XLOG_READ, 0, 0, 0, 0, 0);
 	if (read(readFile, readBuf, XLOG_BLCKSZ) != XLOG_BLCKSZ)
 	{
+		WAIT_STOP();
 		char		fname[MAXFNAMELEN];
 
 		XLogFileName(fname, curFileTLI, readSegNo);
@@ -10849,6 +10865,7 @@ retry:
 						fname, readOff)));
 		goto next_record_is_invalid;
 	}
+	WAIT_STOP();
 
 	Assert(targetSegNo == readSegNo);
 	Assert(targetPageOff == readOff);

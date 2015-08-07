@@ -54,6 +54,7 @@
 #include "storage/latch.h"
 #include "storage/pmsignal.h"
 #include "storage/shmem.h"
+#include "storage/wait.h"
 
 /* Are we currently in WaitLatch? The signal handler would like to know. */
 static volatile sig_atomic_t waiting = false;
@@ -262,6 +263,8 @@ WaitLatchOrSocket(volatile Latch *latch, int wakeEvents, pgsocket sock,
 		tvp = NULL;
 #endif
 	}
+
+	WAIT_START(WAIT_LATCH, 0, 0, 0, 0, 0, 0);
 
 	waiting = true;
 	do
@@ -482,6 +485,7 @@ WaitLatchOrSocket(volatile Latch *latch, int wakeEvents, pgsocket sock,
 		}
 	} while (result == 0);
 	waiting = false;
+	WAIT_STOP();
 
 	return result;
 }

@@ -56,6 +56,7 @@
 #include "access/xlog.h"
 #include "storage/fd.h"
 #include "storage/shmem.h"
+#include "storage/wait.h"
 #include "miscadmin.h"
 
 
@@ -156,15 +157,20 @@ SimpleLruShmemSize(int nslots, int nlsns)
 	if (nlsns > 0)
 		sz += MAXALIGN(nslots * nlsns * sizeof(XLogRecPtr));	/* group_lsn[] */
 
+	/* size of lwlocks */
+	sz = add_size(sz, LWLockTrancheShmemSize(nslots));
+
 	return BUFFERALIGN(sz) + BLCKSZ * nslots;
 }
 
 void
 SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
-			  LWLock *ctllock, const char *subdir)
+			  LWLock *ctllock, const char *subdir,
+			  const char *lwlocks_tranche)
 {
-	SlruShared	shared;
-	bool		found;
+	SlruShared    shared;
+	bool          found;
+	LWLockPadded *lwlock_array;
 
 	shared = (SlruShared) ShmemInitStruct(name,
 										  SimpleLruShmemSize(nslots, nlsns),
@@ -212,13 +218,18 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 		}
 
 		ptr += BUFFERALIGN(offset);
+
+		/* Create tranche and lwlocks required for slots */
+		LWLockCreateTranche(lwlocks_tranche, nslots, &lwlock_array);
+
+		/* Initialize slots */
 		for (slotno = 0; slotno < nslots; slotno++)
 		{
 			shared->page_buffer[slotno] = ptr;
 			shared->page_status[slotno] = SLRU_PAGE_EMPTY;
 			shared->page_dirty[slotno] = false;
 			shared->page_lru_count[slotno] = 0;
-			shared->buffer_locks[slotno] = LWLockAssign();
+			shared->buffer_locks[slotno] = &lwlock_array[slotno].lock;
 			ptr += BLCKSZ;
 		}
 	}
@@ -663,6 +674,8 @@ SlruPhysicalReadPage(SlruCtl ctl, int pageno, int slotno)
 	}
 
 	errno = 0;
+	WAIT_START(WAIT_IO, WAIT_SLRU_READ, pageno,
+		shared->buffer_locks[0]->tranche, 0, 0, 0);
 	if (read(fd, shared->page_buffer[slotno], BLCKSZ) != BLCKSZ)
 	{
 		slru_errcause = SLRU_READ_FAILED;
@@ -670,6 +683,7 @@ SlruPhysicalReadPage(SlruCtl ctl, int pageno, int slotno)
 		CloseTransientFile(fd);
 		return false;
 	}
+	WAIT_STOP();
 
 	if (CloseTransientFile(fd))
 	{
@@ -822,6 +836,8 @@ SlruPhysicalWritePage(SlruCtl ctl, int pageno, int slotno, SlruFlush fdata)
 	}
 
 	errno = 0;
+	WAIT_START(WAIT_IO, WAIT_SLRU_WRITE, pageno,
+		shared->buffer_locks[0]->tranche, 0, 0, 0);
 	if (write(fd, shared->page_buffer[slotno], BLCKSZ) != BLCKSZ)
 	{
 		/* if write didn't set errno, assume problem is no disk space */
@@ -833,6 +849,7 @@ SlruPhysicalWritePage(SlruCtl ctl, int pageno, int slotno, SlruFlush fdata)
 			CloseTransientFile(fd);
 		return false;
 	}
+	WAIT_STOP();
 
 	/*
 	 * If not part of Flush, need to fsync now.  We assume this happens
@@ -840,6 +857,8 @@ SlruPhysicalWritePage(SlruCtl ctl, int pageno, int slotno, SlruFlush fdata)
 	 */
 	if (!fdata)
 	{
+		WAIT_START(WAIT_IO, WAIT_SLRU_FSYNC, pageno,
+			shared->buffer_locks[0]->tranche, 0, 0, 0);
 		if (ctl->do_fsync && pg_fsync(fd))
 		{
 			slru_errcause = SLRU_FSYNC_FAILED;
@@ -847,6 +866,7 @@ SlruPhysicalWritePage(SlruCtl ctl, int pageno, int slotno, SlruFlush fdata)
 			CloseTransientFile(fd);
 			return false;
 		}
+		WAIT_STOP();
 
 		if (CloseTransientFile(fd))
 		{

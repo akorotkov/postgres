@@ -49,6 +49,7 @@
 #include "storage/procarray.h"
 #include "storage/procsignal.h"
 #include "storage/spin.h"
+#include "storage/wait.h"
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
 
@@ -112,6 +113,10 @@ ProcGlobalShmemSize(void)
 	size = add_size(size, mul_size(NUM_AUXILIARY_PROCS, sizeof(PGXACT)));
 	size = add_size(size, mul_size(max_prepared_xacts, sizeof(PGXACT)));
 
+	/* LWLocks */
+	size = add_size(size,
+		LWLockTrancheShmemSize(MaxBackends + NUM_AUXILIARY_PROCS));
+
 	return size;
 }
 
@@ -155,12 +160,13 @@ ProcGlobalSemas(void)
 void
 InitProcGlobal(void)
 {
-	PGPROC	   *procs;
-	PGXACT	   *pgxacts;
-	int			i,
-				j;
-	bool		found;
-	uint32		TotalProcs = MaxBackends + NUM_AUXILIARY_PROCS + max_prepared_xacts;
+	PGPROC       *procs;
+	PGXACT       *pgxacts;
+	LWLockPadded *lwlocks_array;
+	int           i, j;
+	bool          found;
+	uint32        TotalProcs = MaxBackends + NUM_AUXILIARY_PROCS
+		+ max_prepared_xacts;
 
 	/* Create the ProcGlobal shared structure */
 	ProcGlobal = (PROC_HDR *)
@@ -210,6 +216,10 @@ InitProcGlobal(void)
 	MemSet(pgxacts, 0, TotalProcs * sizeof(PGXACT));
 	ProcGlobal->allPgXact = pgxacts;
 
+	/* Create LWLocks */
+	LWLockCreateTranche("ProcessLocks", MaxBackends + NUM_AUXILIARY_PROCS,
+		&lwlocks_array);
+
 	for (i = 0; i < TotalProcs; i++)
 	{
 		/* Common initialization for all PGPROCs, regardless of type. */
@@ -223,7 +233,7 @@ InitProcGlobal(void)
 		{
 			PGSemaphoreCreate(&(procs[i].sem));
 			InitSharedLatch(&(procs[i].procLatch));
-			procs[i].backendLock = LWLockAssign();
+			procs[i].backendLock = &lwlocks_array[i].lock;
 		}
 		procs[i].pgprocno = i;
 
@@ -387,6 +397,8 @@ InitProcess(void)
 #endif
 	MyProc->recoveryConflictPending = false;
 
+	WaitsInitProcessFields(MyProc);
+
 	/* Initialize fields for sync rep */
 	MyProc->waitLSN = 0;
 	MyProc->syncRepState = SYNC_REP_NOT_WAITING;
@@ -538,6 +550,9 @@ InitAuxiliaryProcess(void)
 	MyProc->lwWaitLink = NULL;
 	MyProc->waitLock = NULL;
 	MyProc->waitProcLock = NULL;
+
+	WaitsInitProcessFields(MyProc);
+
 #ifdef USE_ASSERT_CHECKING
 	if (assert_enabled)
 	{

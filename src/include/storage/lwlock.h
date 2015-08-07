@@ -31,12 +31,21 @@ struct PGPROC;
  * be an array of lwlocks, but rather some larger data structure that includes
  * one or more lwlocks per element.
  */
+
+#define NUM_LWLOCK_TRANCHES 64
+#define LWLOCK_MAX_TRANCHE_NAME 64
+
 typedef struct LWLockTranche
 {
-	const char *name;
+	char name[LWLOCK_MAX_TRANCHE_NAME];
 	void	   *array_base;
 	Size		array_stride;
 } LWLockTranche;
+
+extern PGDLLIMPORT LWLockTranche **LWLockTrancheArray;
+
+#define LWLOCK_TRANCHE_NAME(tranche_id) \
+	(LWLockTrancheArray[tranche_id]->name)
 
 /*
  * Code outside of lwlock.c should not manipulate the contents of this
@@ -127,33 +136,8 @@ extern PGDLLIMPORT LWLockPadded *MainLWLockArray;
 #define AutoFileLock				(&MainLWLockArray[35].lock)
 #define ReplicationSlotAllocationLock	(&MainLWLockArray[36].lock)
 #define ReplicationSlotControlLock		(&MainLWLockArray[37].lock)
+
 #define NUM_INDIVIDUAL_LWLOCKS		38
-
-/*
- * It's a bit odd to declare NUM_BUFFER_PARTITIONS and NUM_LOCK_PARTITIONS
- * here, but we need them to figure out offsets within MainLWLockArray, and
- * having this file include lock.h or bufmgr.h would be backwards.
- */
-
-/* Number of partitions of the shared buffer mapping hashtable */
-#define NUM_BUFFER_PARTITIONS  16
-
-/* Number of partitions the shared lock tables are divided into */
-#define LOG2_NUM_LOCK_PARTITIONS  4
-#define NUM_LOCK_PARTITIONS  (1 << LOG2_NUM_LOCK_PARTITIONS)
-
-/* Number of partitions the shared predicate lock tables are divided into */
-#define LOG2_NUM_PREDICATELOCK_PARTITIONS  4
-#define NUM_PREDICATELOCK_PARTITIONS  (1 << LOG2_NUM_PREDICATELOCK_PARTITIONS)
-
-/* Offsets for various chunks of preallocated lwlocks. */
-#define BUFFER_MAPPING_LWLOCK_OFFSET	NUM_INDIVIDUAL_LWLOCKS
-#define LOCK_MANAGER_LWLOCK_OFFSET		\
-	(BUFFER_MAPPING_LWLOCK_OFFSET + NUM_BUFFER_PARTITIONS)
-#define PREDICATELOCK_MANAGER_LWLOCK_OFFSET \
-	(LOCK_MANAGER_LWLOCK_OFFSET + NUM_LOCK_PARTITIONS)
-#define NUM_FIXED_LWLOCKS \
-	(PREDICATELOCK_MANAGER_LWLOCK_OFFSET + NUM_PREDICATELOCK_PARTITIONS)
 
 typedef enum LWLockMode
 {
@@ -206,8 +190,12 @@ extern LWLock *LWLockAssign(void);
  * registration in the main shared memory segment wouldn't work for that case.
  */
 extern int	LWLockNewTrancheId(void);
-extern void LWLockRegisterTranche(int, LWLockTranche *);
-extern void LWLockInitialize(LWLock *, int tranche_id);
+extern void LWLockRegisterTranche(int tranche_id, LWLockTranche *tranche);
+extern void LWLockInitialize(LWLock *lock, int tranche_id);
+extern void LWLockCreateTranche(const char *tranche_name, int locks_count,
+	LWLockPadded **array);
+extern Size LWLockTrancheShmemSize(int locks_count);
+extern Size LWLockTranchesCount(void);
 
 /*
  * Prior to PostgreSQL 9.4, we used an enum type called LWLockId to refer

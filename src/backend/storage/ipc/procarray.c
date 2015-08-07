@@ -55,6 +55,7 @@
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "storage/spin.h"
+#include "storage/wait.h"
 #include "utils/builtins.h"
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
@@ -334,6 +335,8 @@ ProcArrayRemove(PGPROC *proc, TransactionId latestXid)
 	if (proc->pid != 0)
 		DisplayXidCache();
 #endif
+
+	WaitsFreeBackendCells(proc);
 
 	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
 

@@ -5,6 +5,7 @@
 #include "storage/lwlock.h"
 #include "storage/proc.h"
 #include "portability/instr_time.h"
+#include "port/atomics.h"
 
 /*
    Waits logging
@@ -100,7 +101,7 @@ typedef struct
  */
 typedef struct
 {
-	/* indicates that block is buzy (by backend or user query) at current time */
+	/* indicates that block is busy (by backend or user query) at current time */
 	volatile pg_atomic_flag isBusy;
 	/* marks that block is already taken by backend in shared memory */
 	volatile pg_atomic_flag isTaken;

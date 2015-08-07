@@ -73,6 +73,7 @@
 #include "postmaster/syslogger.h"
 #include "storage/ipc.h"
 #include "storage/proc.h"
+#include "storage/wait.h"
 #include "tcop/tcopprot.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
@@ -1898,6 +1899,8 @@ write_syslog(int level, const char *line)
 	 */
 	seq++;
 
+	WAIT_START(WAIT_NETWORK, WAIT_SYSLOG, 0, 0, 0, 0, 0);
+
 	/*
 	 * Our problem here is that many syslog implementations don't handle long
 	 * messages in an acceptable manner. While this function doesn't help that
@@ -1971,6 +1974,7 @@ write_syslog(int level, const char *line)
 		/* message short enough */
 		syslog(level, "[%lu] %s", seq, line);
 	}
+	WAIT_STOP();
 }
 #endif   /* HAVE_SYSLOG */
 

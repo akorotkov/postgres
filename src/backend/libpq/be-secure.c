@@ -77,6 +77,7 @@
 #include "libpq/libpq.h"
 #include "tcop/tcopprot.h"
 #include "utils/memutils.h"
+#include "storage/wait.h"
 
 
 #ifdef USE_SSL
@@ -253,6 +254,8 @@ secure_read(Port *port, void *ptr, size_t len)
 {
 	ssize_t		n;
 
+	WAIT_START(WAIT_NETWORK, WAIT_NETWORK_READ, 0, 0, 0, 0, 0);
+
 #ifdef USE_SSL
 	if (port->ssl)
 	{
@@ -319,6 +322,8 @@ rloop:
 		client_read_ended();
 	}
 
+	WAIT_STOP();
+
 	return n;
 }
 
@@ -329,6 +334,8 @@ ssize_t
 secure_write(Port *port, void *ptr, size_t len)
 {
 	ssize_t		n;
+
+	WAIT_START(WAIT_NETWORK, WAIT_NETWORK_WRITE, 0, 0, 0, 0, 0);
 
 #ifdef USE_SSL
 	if (port->ssl)
@@ -456,6 +463,8 @@ wloop:
 	else
 #endif
 		n = send(port->sock, ptr, len, 0);
+
+	WAIT_STOP();
 
 	return n;
 }
