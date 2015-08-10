@@ -52,7 +52,7 @@ void
 AllocateCollectorMem(void)
 {
 	bool found;
-	Size segsize= CollectorShmemSize();
+	Size segsize = CollectorShmemSize();
 
 	pgsw = ShmemInitStruct("pg_stat_wait", segsize, &found);
 
@@ -96,7 +96,7 @@ RegisterWaitsCollector(void)
 	/* set up common data for all our workers */
 	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |
 		BGWORKER_BACKEND_DATABASE_CONNECTION;
-	worker.bgw_start_time = BgWorkerStart_RecoveryFinished;
+	worker.bgw_start_time = BgWorkerStart_ConsistentState;
 	worker.bgw_restart_time = BGW_NEVER_RESTART;
 	worker.bgw_main = collector_main;
 	worker.bgw_notify_pid = 0;
@@ -233,6 +233,7 @@ collector_main(Datum main_arg)
 	BackgroundWorkerUnblockSignals();
 
 	hdr->latch = &MyProc->procLatch;
+
 	CurrentResourceOwner = ResourceOwnerCreate(NULL, "pg_stat_wait collector");
 	collector_context = AllocSetContextCreate(TopMemoryContext,
 			"pg_stat_wait context",
