@@ -162,6 +162,8 @@ pg_wait_event_list(PG_FUNCTION_ARGS)
 
 		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
 		funcctx->user_fctx = palloc0(sizeof(WaitEventContext));
+
+		((WaitEventContext *)funcctx->user_fctx)->class_cnt = 1;
 		MemoryContextSwitchTo(oldcontext);
 	}
 
