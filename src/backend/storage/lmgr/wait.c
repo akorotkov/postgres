@@ -21,13 +21,17 @@ int   WaitsFlushPeriod;
 
 const char *WAIT_CLASSES[] =
 {
-	"",
+	"CPU",
 	"LWLocks",
 	"Locks",
 	"Storage",
 	"Latch",
-	"Network",
-	"Allocations"
+	"Network"
+};
+
+const char *WAIT_CPU_NAMES[] =
+{
+	"MemAllocation"
 };
 
 const char *WAIT_IO_NAMES[] =
@@ -52,13 +56,12 @@ const char *WAIT_NETWORK_NAMES[] =
 
 const int WAIT_OFFSETS[] =
 {
-	0, /* skip */
+	WAIT_CPU_OFFSET,
 	WAIT_LWLOCKS_OFFSET,
 	WAIT_LOCKS_OFFSET,
 	WAIT_IO_OFFSET,
 	WAIT_LATCH_OFFSET,
-	WAIT_NETWORK_OFFSET,
-	WAIT_ALLOC_OFFSET
+	WAIT_NETWORK_OFFSET
 };
 
 /* Returns event name for wait */
@@ -68,11 +71,11 @@ WaitsEventName(int classId, int eventId)
 	static char *empty = "";
 	switch (classId)
 	{
+		case WAIT_CPU: return WAIT_CPU_NAMES[eventId];
 		case WAIT_LOCK: return LOCK_NAMES[eventId];
 		case WAIT_LWLOCK: return LWLOCK_TRANCHE_NAME(eventId);
 		case WAIT_IO: return WAIT_IO_NAMES[eventId];
 		case WAIT_NETWORK: return WAIT_NETWORK_NAMES[eventId];
-		case WAIT_ALLOC: /* fallthrough */;
 		case WAIT_LATCH: return WAIT_CLASSES[classId];
 	};
 	return empty;
@@ -231,8 +234,6 @@ StartWait(int classId, int eventId, int p1, int p2, int p3, int p4, int p5)
 {
 	ProcWaits		         *waits;
 	ProcWait		         *curwait;
-
-	Assert(classId > 0 && classId < WAITS_COUNT);
 
 	if (!MyProc || !WaitsInitialized)
 		return;

@@ -496,7 +496,7 @@ AllocSetContextCreate(MemoryContext parent,
 		Size		blksize = MAXALIGN(minContextSize);
 		AllocBlock	block;
 
-		WAIT_START(WAIT_ALLOC, 0, 0, 0, 0, 0, 0);
+		WAIT_START(WAIT_CPU, WAIT_MALLOC, 0, 0, 0, 0, 0);
 		block = (AllocBlock) malloc(blksize);
 		WAIT_STOP();
 		if (block == NULL)
@@ -677,7 +677,7 @@ AllocSetAlloc(MemoryContext context, Size size)
 	{
 		chunk_size = MAXALIGN(size);
 		blksize = chunk_size + ALLOC_BLOCKHDRSZ + ALLOC_CHUNKHDRSZ;
-		WAIT_START(WAIT_ALLOC, 0, 0, 0, 0, 0, 0);
+		WAIT_START(WAIT_CPU, WAIT_MALLOC, 0, 0, 0, 0, 0);
 		block = (AllocBlock) malloc(blksize);
 		WAIT_STOP();
 		if (block == NULL)
@@ -860,7 +860,7 @@ AllocSetAlloc(MemoryContext context, Size size)
 			blksize <<= 1;
 
 		/* Try to allocate it */
-		WAIT_START(WAIT_ALLOC, 0, 0, 0, 0, 0, 0);
+		WAIT_START(WAIT_CPU, WAIT_MALLOC, 0, 0, 0, 0, 0);
 		block = (AllocBlock) malloc(blksize);
 
 		/*

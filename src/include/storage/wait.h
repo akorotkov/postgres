@@ -22,24 +22,32 @@
 
    Monitored waits by now:
 
-   1) Heavy-weight locks (lock.c)
-   2) LW-Locks (lwlock.c)
-   3) IO read-write (md.c)
-   4) Network (be-secure.c)
-   5) Latches (pg_latch.c)
+   1) CPU events. For now it is on memory chunks allocation
+   2) Heavy-weight locks (lock.c)
+   3) LW-Locks (lwlock.c)
+   4) IO read-write (md.c)
+   5) Network (be-secure.c)
+   6) Latches (pg_latch.c)
  */
 
 enum WaitClasses
 {
-	WAIT_LWLOCK = 1,
+	WAIT_CPU,
+	WAIT_LWLOCK,
 	WAIT_LOCK,
 	WAIT_IO,
 	WAIT_LATCH,
 	WAIT_NETWORK,
-	WAIT_ALLOC,
 	/* Last item as count */
 	WAITS_COUNT
 } WaitClasses;
+
+enum WaitCPUEvents
+{
+	WAIT_MALLOC,
+	/* Last item as count */
+	WAIT_CPU_EVENTS_COUNT
+} WaitCPUEvents;
 
 enum WaitIOEvents
 {
@@ -69,13 +77,13 @@ enum WaitNetworkEvents
 #define WAIT_LOCKS_COUNT           (LOCKTAG_LAST_TYPE + 1)
 
 /* Waits in arrays in backends and in shared memory located by offsets */
-#define WAIT_LWLOCKS_OFFSET  0
+#define WAIT_CPU_OFFSET 0
+#define WAIT_LWLOCKS_OFFSET  (WAIT_CPU_OFFSET + WAIT_CPU_EVENTS_COUNT)
 #define WAIT_LOCKS_OFFSET    (WAIT_LWLOCKS_OFFSET + WAIT_LWLOCKS_COUNT)
 #define WAIT_IO_OFFSET       (WAIT_LOCKS_OFFSET + WAIT_LOCKS_COUNT)
 #define WAIT_LATCH_OFFSET    (WAIT_IO_OFFSET + WAIT_IO_EVENTS_COUNT)
 #define WAIT_NETWORK_OFFSET  (WAIT_LATCH_OFFSET + 1)
-#define WAIT_ALLOC_OFFSET    (WAIT_NETWORK_OFFSET + WAIT_NETWORK_EVENTS_COUNT)
-#define WAIT_EVENTS_COUNT    (WAIT_ALLOC_OFFSET + 1)
+#define WAIT_EVENTS_COUNT    (WAIT_NETWORK_OFFSET + WAIT_NETWORK_EVENTS_COUNT)
 
 #define WAIT_START(classId, eventId, p1, p2, p3, p4, p5) \
 	do { \

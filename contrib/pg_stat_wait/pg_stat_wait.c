@@ -91,7 +91,7 @@ pg_wait_class_list(PG_FUNCTION_ARGS)
 		TupleDesc			tupdesc;
 
 		funcctx = SRF_FIRSTCALL_INIT();
-		funcctx->max_calls = WAITS_COUNT - 1;
+		funcctx->max_calls = WAITS_COUNT;
 
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 
@@ -119,7 +119,7 @@ pg_wait_class_list(PG_FUNCTION_ARGS)
 		MemSet(values, 0, sizeof(values));
 		MemSet(nulls, 0, sizeof(nulls));
 
-		idx = funcctx->call_cntr + 1;
+		idx = funcctx->call_cntr;
 		values[0] = Int32GetDatum(idx);
 		values[1] = CStringGetDatum(WAIT_CLASSES[idx]);
 
@@ -163,7 +163,6 @@ pg_wait_event_list(PG_FUNCTION_ARGS)
 		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
 		funcctx->user_fctx = palloc0(sizeof(WaitEventContext));
 
-		((WaitEventContext *)funcctx->user_fctx)->class_cnt = 1;
 		MemoryContextSwitchTo(oldcontext);
 	}
 
@@ -185,7 +184,9 @@ pg_wait_event_list(PG_FUNCTION_ARGS)
 		values[1] = Int32GetDatum(ctx->event_cnt);
 		values[2] = CStringGetDatum(WaitsEventName(ctx->class_cnt, ctx->event_cnt));
 
-		if (ctx->class_cnt == WAIT_LWLOCK && ctx->event_cnt < (LWLockTranchesCount()-1))
+		if (ctx->class_cnt == WAIT_CPU && ctx->event_cnt < (WAIT_CPU_EVENTS_COUNT-1))
+			ctx->event_cnt++;
+		else if (ctx->class_cnt == WAIT_LWLOCK && ctx->event_cnt < (LWLockTranchesCount()-1))
 			ctx->event_cnt++;
 		else if (ctx->class_cnt == WAIT_LOCK && ctx->event_cnt < (WAIT_LOCKS_COUNT-1))
 			ctx->event_cnt++;
@@ -456,7 +457,7 @@ pg_stat_wait_get_profile(PG_FUNCTION_ARGS)
 
 		if (params->eventIdx == WAIT_EVENTS_COUNT)
 		{
-			params->classIdx = WAIT_LWLOCK;
+			params->classIdx = 0;
 			params->eventIdx = 0;
 			params->backendIdx++;
 			Assert(params->backendIdx <= MaxBackends);
