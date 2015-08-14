@@ -62,9 +62,6 @@ typedef struct
 {
 	Latch       *latch;
 	SHMRequest  request;
-	int         historySize;
-	int         historyPeriod;
-	bool        historySkipLatch;
 } CollectorShmqHeader;
 
 extern PGDLLIMPORT char *WAIT_LOCK_NAMES[];
@@ -72,6 +69,10 @@ extern PGDLLIMPORT char *WAIT_LWLOCK_NAMES[];
 extern PGDLLIMPORT char *WAIT_IO_NAMES[];
 extern PGDLLIMPORT char *WAIT_NETWORK_NAMES[];
 extern PGDLLIMPORT const int WAIT_OFFSETS[];
+extern PGDLLIMPORT int         historySize;
+extern PGDLLIMPORT int         historyPeriod;
+extern PGDLLIMPORT bool        historySkipLatch;
+
 
 Size CollectorShmemSize(void);
 void AllocateCollectorMem(void);

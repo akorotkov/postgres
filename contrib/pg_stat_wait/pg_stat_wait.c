@@ -49,7 +49,21 @@ _PG_init(void)
 		return;
 
 	DefineCustomBoolVariable("pg_stat_wait.history", "Collect waits history",
-			NULL, &WaitsHistoryOn, false, PGC_SUSET, 0, NULL, NULL, NULL);
+			NULL, &WaitsHistoryOn, false, PGC_POSTMASTER, 0, NULL, NULL, NULL);
+
+	DefineCustomIntVariable("pg_stat_wait.history_size",
+			"Sets size of waits history.", NULL,
+			&historySize, 5000, 100, INT_MAX,
+			PGC_POSTMASTER, 0, NULL, NULL, NULL);
+
+	DefineCustomIntVariable("pg_stat_wait.history_period",
+			"Sets period of waits history sampling.", NULL,
+			&historyPeriod, 10, 1, INT_MAX,
+			PGC_POSTMASTER, 0, NULL, NULL, NULL);
+
+	DefineCustomBoolVariable("pg_stat_wait.history_skip_latch",
+			"Skip latch events in waits history", NULL,
+			&historySkipLatch, false, PGC_POSTMASTER, 0, NULL, NULL, NULL);
 
 	if (WaitsHistoryOn)
 	{

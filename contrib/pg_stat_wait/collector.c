@@ -27,6 +27,10 @@ shm_toc *toc;
 shm_mq *mq;
 static volatile sig_atomic_t shutdown_requested = false;
 
+int         historySize;
+int         historyPeriod;
+bool        historySkipLatch;
+
 static void handle_sigterm(SIGNAL_ARGS);
 static void collector_main(Datum main_arg);
 
@@ -66,20 +70,6 @@ AllocateCollectorMem(void)
 
 		mq_mem = shm_toc_allocate(toc, COLLECTOR_QUEUE_SIZE);
 		shm_toc_insert(toc, 1, mq_mem);
-
-		DefineCustomIntVariable("pg_stat_wait.history_size",
-				"Sets size of waits history.", NULL,
-				&hdr->historySize, 5000, 100, INT_MAX,
-				PGC_SUSET, 0, NULL, NULL, NULL);
-
-		DefineCustomIntVariable("pg_stat_wait.history_period",
-				"Sets period of waits history sampling.", NULL,
-				&hdr->historyPeriod, 10, 1, INT_MAX,
-				PGC_SUSET, 0, NULL, NULL, NULL);
-
-		DefineCustomBoolVariable("pg_stat_wait.history_skip_latch",
-				"Skip latch events in waits history", NULL,
-				&hdr->historySkipLatch, false, PGC_SUSET, 0, NULL, NULL, NULL);
 	}
 	else
 	{
@@ -185,7 +175,7 @@ write_waits_history(History *observations, TimestampTz current_ts)
 
 		if (stateOk)
 		{
-			if (hdr->historySkipLatch && item.classId == WAIT_LATCH)
+			if (historySkipLatch && item.classId == WAIT_LATCH)
 				continue;
 
 			item.ts = current_ts;
@@ -241,7 +231,7 @@ collector_main(Datum main_arg)
 			ALLOCSET_DEFAULT_INITSIZE,
 			ALLOCSET_DEFAULT_MAXSIZE);
 	old_context = MemoryContextSwitchTo(collector_context);
-	AllocHistory(&observations, hdr->historySize);
+	AllocHistory(&observations, historySize);
 	MemoryContextSwitchTo(old_context);
 
 	while (1)
@@ -258,7 +248,7 @@ collector_main(Datum main_arg)
 
 		rc = WaitLatch(&MyProc->procLatch,
 			WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
-			hdr->historyPeriod);
+			historyPeriod);
 
 		if (rc & WL_POSTMASTER_DEATH)
 			exit(1);
