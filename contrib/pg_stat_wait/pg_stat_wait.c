@@ -511,12 +511,12 @@ PG_FUNCTION_INFO_V1(pg_stat_wait_reset_profile);
 Datum
 pg_stat_wait_reset_profile(PG_FUNCTION_ARGS)
 {
-	int i;
+	int i, j;
 	BackendWaitCells *cells = (BackendWaitCells *)((char *)WaitShmem
 			+ sizeof(int) +  /* counter */
 			+ MAXALIGN(sizeof(slock_t))); /* lock */
 
-	for(i=0; i < MaxBackends; i++)
+	for(i = 0; i < MaxBackends; i++)
 	{
 		BackendWaitCells *item = cells + i;
 		do
@@ -524,10 +524,10 @@ pg_stat_wait_reset_profile(PG_FUNCTION_ARGS)
 			/* wait until backend is updating this block */
 		} while (!pg_atomic_test_set_flag(&item->isBusy));
 
-		for (i=0; i < WAIT_EVENTS_COUNT; i++)
+		for (j = 0; j < WAIT_EVENTS_COUNT; j++)
 		{
-			item->cells[i].interval = 0;
-			item->cells[i].count = 0;
+			item->cells[j].interval = 0;
+			item->cells[j].count = 0;
 		}
 		pg_atomic_clear_flag(&item->isBusy);
 	}
