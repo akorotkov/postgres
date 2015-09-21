@@ -669,6 +669,8 @@ static int	emode_for_corrupt_record(int emode, XLogRecPtr RecPtr);
 static void XLogFileClose(void);
 static void PreallocXlogFiles(XLogRecPtr endptr);
 static void RemoveOldXlogFiles(XLogSegNo segno, XLogRecPtr endptr);
+static void RemoveXlogFile(const char *segname, XLogRecPtr endptr);
+static void RemoveNonParentXlogFiles(XLogRecPtr switchpoint, TimeLineID newTLI);
 static void UpdateLastRemovedPtr(char *filename);
 static void ValidateXLOGDirectoryStructure(void);
 static void CleanupBackupHistory(void);
@@ -2876,7 +2878,7 @@ UpdateLastRemovedPtr(char *filename)
 }
 
 /*
- * Recycle or remove all log files older or equal to passed segno
+ * Recycle or remove all log files older or equal to passed segno.
  *
  * endptr is current (or recent) end of xlog; this is used to determine
  * whether we want to recycle rather than delete no-longer-wanted log files.
@@ -2884,24 +2886,9 @@ UpdateLastRemovedPtr(char *filename)
 static void
 RemoveOldXlogFiles(XLogSegNo segno, XLogRecPtr endptr)
 {
-	XLogSegNo	endlogSegNo;
-	int			max_advance;
 	DIR		   *xldir;
 	struct dirent *xlde;
 	char		lastoff[MAXFNAMELEN];
-	char		path[MAXPGPATH];
-
-#ifdef WIN32
-	char		newpath[MAXPGPATH];
-#endif
-	struct stat statbuf;
-
-	/*
-	 * Initialize info about where to try to recycle to.  We allow recycling
-	 * segments up to XLOGfileslop segments beyond the current XLOG location.
-	 */
-	XLByteToPrevSeg(endptr, endlogSegNo);
-	max_advance = XLOGfileslop;
 
 	xldir = AllocateDir(XLOGDIR);
 	if (xldir == NULL)
@@ -2922,6 +2909,11 @@ RemoveOldXlogFiles(XLogSegNo segno, XLogRecPtr endptr)
 
 	while ((xlde = ReadDir(xldir, XLOGDIR)) != NULL)
 	{
+		/* Ignore files that are not XLOG segments */
+		if (strlen(xlde->d_name) != 24 ||
+			strspn(xlde->d_name, "0123456789ABCDEF") != 24)
+			continue;
+
 		/*
 		 * We ignore the timeline part of the XLOG segment identifiers in
 		 * deciding whether a segment is still needed.  This ensures that we
@@ -2933,92 +2925,110 @@ RemoveOldXlogFiles(XLogSegNo segno, XLogRecPtr endptr)
 		 * We use the alphanumeric sorting property of the filenames to decide
 		 * which ones are earlier than the lastoff segment.
 		 */
-		if (strlen(xlde->d_name) == 24 &&
-			strspn(xlde->d_name, "0123456789ABCDEF") == 24 &&
-			strcmp(xlde->d_name + 8, lastoff + 8) <= 0)
+		if (strcmp(xlde->d_name + 8, lastoff + 8) <= 0)
 		{
 			if (XLogArchiveCheckDone(xlde->d_name))
 			{
-				snprintf(path, MAXPGPATH, XLOGDIR "/%s", xlde->d_name);
-
 				/* Update the last removed location in shared memory first */
 				UpdateLastRemovedPtr(xlde->d_name);
 
-				/*
-				 * Before deleting the file, see if it can be recycled as a
-				 * future log segment. Only recycle normal files, pg_standby
-				 * for example can create symbolic links pointing to a
-				 * separate archive directory.
-				 */
-				if (lstat(path, &statbuf) == 0 && S_ISREG(statbuf.st_mode) &&
-					InstallXLogFileSegment(&endlogSegNo, path,
-										   true, &max_advance, true))
-				{
-					ereport(DEBUG2,
-							(errmsg("recycled transaction log file \"%s\"",
-									xlde->d_name)));
-					CheckpointStats.ckpt_segs_recycled++;
-					/* Needn't recheck that slot on future iterations */
-					if (max_advance > 0)
-					{
-						endlogSegNo++;
-						max_advance--;
-					}
-				}
-				else
-				{
-					/* No need for any more future segments... */
-					int			rc;
-
-					ereport(DEBUG2,
-							(errmsg("removing transaction log file \"%s\"",
-									xlde->d_name)));
-
-#ifdef WIN32
-
-					/*
-					 * On Windows, if another process (e.g another backend)
-					 * holds the file open in FILE_SHARE_DELETE mode, unlink
-					 * will succeed, but the file will still show up in
-					 * directory listing until the last handle is closed. To
-					 * avoid confusing the lingering deleted file for a live
-					 * WAL file that needs to be archived, rename it before
-					 * deleting it.
-					 *
-					 * If another process holds the file open without
-					 * FILE_SHARE_DELETE flag, rename will fail. We'll try
-					 * again at the next checkpoint.
-					 */
-					snprintf(newpath, MAXPGPATH, "%s.deleted", path);
-					if (rename(path, newpath) != 0)
-					{
-						ereport(LOG,
-								(errcode_for_file_access(),
-								 errmsg("could not rename old transaction log file \"%s\": %m",
-										path)));
-						continue;
-					}
-					rc = unlink(newpath);
-#else
-					rc = unlink(path);
-#endif
-					if (rc != 0)
-					{
-						ereport(LOG,
-								(errcode_for_file_access(),
-								 errmsg("could not remove old transaction log file \"%s\": %m",
-										path)));
-						continue;
-					}
-					CheckpointStats.ckpt_segs_removed++;
-				}
-
-				XLogArchiveCleanup(xlde->d_name);
+				RemoveXlogFile(xlde->d_name, endptr);
 			}
 		}
 	}
 
 	FreeDir(xldir);
+}
+
+/*
+ * Recycle or remove a log file that's no longer needed.
+ *
+ * endptr is current (or recent) end of xlog; this is used to determine
+ * whether we want to recycle rather than delete no-longer-wanted log files.
+ */
+static void
+RemoveXlogFile(const char *segname, XLogRecPtr endptr)
+{
+	char		path[MAXPGPATH];
+#ifdef WIN32
+	char		newpath[MAXPGPATH];
+#endif
+	struct stat statbuf;
+	XLogSegNo	endlogSegNo;
+	int			max_advance;
+
+	/*
+	 * Initialize info about where to try to recycle to.  We allow recycling
+	 * segments up to XLOGfileslop segments beyond the current XLOG location.
+	 */
+	XLByteToPrevSeg(endptr, endlogSegNo);
+	max_advance = XLOGfileslop;
+
+	snprintf(path, MAXPGPATH, XLOGDIR "/%s", segname);
+
+	/*
+	 * Before deleting the file, see if it can be recycled as a future log
+	 * segment. Only recycle normal files, pg_standby for example can create
+	 * symbolic links pointing to a separate archive directory.
+	 */
+	if (lstat(path, &statbuf) == 0 && S_ISREG(statbuf.st_mode) &&
+		InstallXLogFileSegment(&endlogSegNo, path,
+							   true, &max_advance, true))
+	{
+		ereport(DEBUG2,
+				(errmsg("recycled transaction log file \"%s\"", segname)));
+		CheckpointStats.ckpt_segs_recycled++;
+		/* Needn't recheck that slot on future iterations */
+		if (max_advance > 0)
+		{
+			endlogSegNo++;
+			max_advance--;
+		}
+	}
+	else
+	{
+		/* No need for any more future segments... */
+		int			rc;
+
+		ereport(DEBUG2,
+				(errmsg("removing transaction log file \"%s\"", segname)));
+
+#ifdef WIN32
+		/*
+		 * On Windows, if another process (e.g another backend) holds the file
+		 * open in FILE_SHARE_DELETE mode, unlink will succeed, but the file
+		 * will still show up in directory listing until the last handle is
+		 * closed. To avoid confusing the lingering deleted file for a live
+		 * WAL file that needs to be archived, rename it before deleting it.
+		 *
+		 * If another process holds the file open without FILE_SHARE_DELETE
+		 * flag, rename will fail. We'll try again at the next checkpoint.
+		 */
+		snprintf(newpath, MAXPGPATH, "%s.deleted", path);
+		if (rename(path, newpath) != 0)
+		{
+			ereport(LOG,
+					(errcode_for_file_access(),
+					 errmsg("could not rename old transaction log file \"%s\": %m",
+							path)));
+			return;
+		}
+		rc = unlink(newpath);
+#else
+		rc = unlink(path);
+#endif
+		if (rc != 0)
+		{
+			ereport(LOG,
+					(errcode_for_file_access(),
+					 errmsg("could not remove old transaction log file \"%s\": %m",
+							path)));
+			return;
+		}
+		CheckpointStats.ckpt_segs_removed++;
+	}
+
+	XLogArchiveCleanup(segname);
 }
 
 /*
@@ -4475,6 +4485,75 @@ exitArchiveRecovery(TimeLineID endTLI, XLogSegNo endLogSegNo)
 }
 
 /*
+ * Remove WAL files that are not part of the given timeline's history.
+ *
+ * This is called during recovery, whenever we switch to follow a new
+ * timeline, and at the end of recovery when we create a new timeline. We
+ * wouldn't otherwise care about extra WAL files lying in pg_xlog, but they
+ * can be pre-allocated or recycled WAL segments on the old timeline that we
+ * haven't used yet, and contain garbage. If we just leave them in pg_xlog,
+ * they will eventually be archived, and we can't let that happen. Files that
+ * belong to our timeline history are valid, because we have successfully
+ * replayed them, but from others we can't be sure.
+ *
+ * 'switchpoint' is the current point in WAL where we switch to new timeline,
+ * and 'newTLI' is the new timeline we switch to.
+ */
+static void
+RemoveNonParentXlogFiles(XLogRecPtr switchpoint, TimeLineID newTLI)
+{
+	DIR		   *xldir;
+	struct dirent *xlde;
+	char		switchseg[MAXFNAMELEN];
+	XLogSegNo	endLogSegNo;
+
+	XLByteToPrevSeg(switchpoint, endLogSegNo);
+
+	xldir = AllocateDir(XLOGDIR);
+	if (xldir == NULL)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not open transaction log directory \"%s\": %m",
+						XLOGDIR)));
+
+	/*
+	 * Construct a filename of the last segment to be kept.
+	 */
+	XLogFileName(switchseg, newTLI, endLogSegNo);
+
+	elog(DEBUG2, "attempting to remove WAL segments newer than log file %s",
+		 switchseg);
+
+	while ((xlde = ReadDir(xldir, XLOGDIR)) != NULL)
+	{
+		/* Ignore files that are not XLOG segments */
+		if (strlen(xlde->d_name) != 24 ||
+			strspn(xlde->d_name, "0123456789ABCDEF") != 24)
+			continue;
+
+		/*
+		 * Remove files that are on a timeline older than the new one we're
+		 * switching to, but with a segment number >= the first segment on
+		 * the new timeline.
+		 */
+		if (strncmp(xlde->d_name, switchseg, 8) < 0 &&
+			strcmp(xlde->d_name + 8, switchseg + 8) > 0)
+		{
+			/*
+			 * If the file has already been marked as .ready, however, don't
+			 * remove it yet. It should be OK to remove it - files that are
+			 * not part of our timeline history are not required for recovery
+			 * - but seems safer to let them be archived and removed later.
+			 */
+			if (!XLogArchiveIsReady(xlde->d_name))
+				RemoveXlogFile(xlde->d_name, switchpoint);
+		}
+	}
+
+	FreeDir(xldir);
+}
+
+/*
  * For point-in-time recovery, this function decides whether we want to
  * stop applying the XLOG at or after the current record.
  *
@@ -4958,6 +5037,18 @@ StartupXLOG(void)
 	RelationCacheInitFileRemove();
 
 	/*
+	 * If we previously crashed, there might be data which we had written,
+	 * intending to fsync it, but which we had not actually fsync'd yet.
+	 * Therefore, a power failure in the near future might cause earlier
+	 * unflushed writes to be lost, even though more recent data written to
+	 * disk from here on would be persisted.  To avoid that, fsync the entire
+	 * data directory.
+	 */
+	if (ControlFile->state != DB_SHUTDOWNED &&
+		ControlFile->state != DB_SHUTDOWNED_IN_RECOVERY)
+		SyncDataDirectory();
+
+	/*
 	 * Initialize on the assumption we want to recover to the latest timeline
 	 * that's active according to pg_control.
 	 */
@@ -5329,11 +5420,17 @@ StartupXLOG(void)
 		/*
 		 * Set backupStartPoint if we're starting recovery from a base backup.
 		 *
-		 * Set backupEndPoint and use minRecoveryPoint as the backup end
+		 * Also set backupEndPoint and use minRecoveryPoint as the backup end
 		 * location if we're starting recovery from a base backup which was
-		 * taken from the standby. In this case, the database system status in
-		 * pg_control must indicate DB_IN_ARCHIVE_RECOVERY. If not, which
-		 * means that backup is corrupted, so we cancel recovery.
+		 * taken from a standby. In this case, the database system status in
+		 * pg_control must indicate that the database was already in
+		 * recovery. Usually that will be DB_IN_ARCHIVE_RECOVERY but also can
+		 * be DB_SHUTDOWNED_IN_RECOVERY if recovery previously was interrupted
+		 * before reaching this point; e.g. because restore_command or
+		 * primary_conninfo were faulty.
+		 *
+		 * Any other state indicates that the backup somehow became corrupted
+		 * and we can't sensibly continue with recovery.
 		 */
 		if (haveBackupLabel)
 		{
@@ -5342,7 +5439,8 @@ StartupXLOG(void)
 
 			if (backupFromStandby)
 			{
-				if (dbstate_at_startup != DB_IN_ARCHIVE_RECOVERY)
+				if (dbstate_at_startup != DB_IN_ARCHIVE_RECOVERY &&
+					dbstate_at_startup != DB_SHUTDOWNED_IN_RECOVERY)
 					ereport(FATAL,
 							(errmsg("backup_label contains data inconsistent with control file"),
 							 errhint("This means that the backup is corrupted and you will "
@@ -5640,9 +5738,9 @@ StartupXLOG(void)
 				 */
 				if (record->xl_rmid == RM_XLOG_ID)
 				{
+					uint8		info = record->xl_info & ~XLR_INFO_MASK;
 					TimeLineID	newTLI = ThisTimeLineID;
 					TimeLineID	prevTLI = ThisTimeLineID;
-					uint8		info = record->xl_info & ~XLR_INFO_MASK;
 
 					if (info == XLOG_CHECKPOINT_SHUTDOWN)
 					{
@@ -5710,12 +5808,21 @@ StartupXLOG(void)
 				/* Allow read-only connections if we're consistent now */
 				CheckRecoveryConsistency();
 
-				/*
-				 * If this record was a timeline switch, wake up any
-				 * walsenders to notice that we are on a new timeline.
-				 */
-				if (switchedTLI && AllowCascadeReplication())
-					WalSndWakeup();
+				if (switchedTLI)
+				{
+					/*
+					 * Before we go further on the new timeline, clean up any
+					 * (possibly bogus) future WAL segments on the old one.
+					 */
+					RemoveNonParentXlogFiles(EndRecPtr, ThisTimeLineID);
+
+					/*
+					 * Wake up any walsenders to notice that we are on a new
+					 * timeline.
+					 */
+					if (AllowCascadeReplication())
+						WalSndWakeup();
+				}
 
 				/* Exit loop if we reached inclusive recovery target */
 				if (!recoveryContinue)
@@ -6053,6 +6160,12 @@ StartupXLOG(void)
 	}
 
 	/*
+	 * Clean up any (possibly bogus) future WAL segments on the old timeline.
+	 */
+	if (ArchiveRecoveryRequested)
+		RemoveNonParentXlogFiles(EndOfLog, ThisTimeLineID);
+
+	/*
 	 * Preallocate additional log files, if wanted.
 	 */
 	PreallocXlogFiles(EndOfLog);
@@ -6329,7 +6442,7 @@ HotStandbyActive(void)
 bool
 HotStandbyActiveInReplay(void)
 {
-	Assert(AmStartupProcess());
+	Assert(AmStartupProcess() || !IsPostmasterEnvironment);
 	return LocalHotStandbyActive;
 }
 
@@ -7263,7 +7376,7 @@ CreateEndOfRecoveryRecord(void)
 	if (!RecoveryInProgress())
 		elog(ERROR, "can only be used to end recovery");
 
-	xlrec.end_time = time(NULL);
+	xlrec.end_time = GetCurrentTimestamp();
 
 	LWLockAcquire(WALInsertLock, LW_SHARED);
 	xlrec.ThisTimeLineID = ThisTimeLineID;
@@ -7288,7 +7401,7 @@ CreateEndOfRecoveryRecord(void)
 	 * changes to this point.
 	 */
 	LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
-	ControlFile->time = (pg_time_t) xlrec.end_time;
+	ControlFile->time = (pg_time_t) time(NULL);
 	ControlFile->minRecoveryPoint = recptr;
 	ControlFile->minRecoveryPointTLI = ThisTimeLineID;
 	UpdateControlFile();

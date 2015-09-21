@@ -966,7 +966,13 @@ init_ssl_system(PGconn *conn)
 			SSL_load_error_strings();
 		}
 
-		SSL_context = SSL_CTX_new(TLSv1_method());
+		/*
+		 * We use SSLv23_method() because it can negotiate use of the highest
+		 * mutually supported protocol version, while alternatives like
+		 * TLSv1_2_method() permit only one specific version.  Note that we
+		 * don't actually allow SSL v2 or v3, only TLS protocols (see below).
+		 */
+		SSL_context = SSL_CTX_new(SSLv23_method());
 		if (!SSL_context)
 		{
 			char	   *err = SSLerrmessage();
@@ -980,6 +986,9 @@ init_ssl_system(PGconn *conn)
 #endif
 			return -1;
 		}
+
+		/* Disable old protocol versions */
+		SSL_CTX_set_options(SSL_context, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3);
 
 		/*
 		 * Disable OpenSSL's moving-write-buffer sanity check, because it
@@ -1074,7 +1083,7 @@ initialize_SSL(PGconn *conn)
 
 	/* Read the client certificate file */
 	if (conn->sslcert && strlen(conn->sslcert) > 0)
-		strncpy(fnbuf, conn->sslcert, sizeof(fnbuf));
+		strlcpy(fnbuf, conn->sslcert, sizeof(fnbuf));
 	else if (have_homedir)
 		snprintf(fnbuf, sizeof(fnbuf), "%s/%s", homedir, USER_CERT_FILE);
 	else
@@ -1265,7 +1274,7 @@ initialize_SSL(PGconn *conn)
 #endif   /* USE_SSL_ENGINE */
 		{
 			/* PGSSLKEY is not an engine, treat it as a filename */
-			strncpy(fnbuf, conn->sslkey, sizeof(fnbuf));
+			strlcpy(fnbuf, conn->sslkey, sizeof(fnbuf));
 		}
 	}
 	else if (have_homedir)
@@ -1328,7 +1337,7 @@ initialize_SSL(PGconn *conn)
 	 * verification after the connection has been completed.
 	 */
 	if (conn->sslrootcert && strlen(conn->sslrootcert) > 0)
-		strncpy(fnbuf, conn->sslrootcert, sizeof(fnbuf));
+		strlcpy(fnbuf, conn->sslrootcert, sizeof(fnbuf));
 	else if (have_homedir)
 		snprintf(fnbuf, sizeof(fnbuf), "%s/%s", homedir, ROOT_CERT_FILE);
 	else
@@ -1366,7 +1375,7 @@ initialize_SSL(PGconn *conn)
 		if ((cvstore = SSL_CTX_get_cert_store(SSL_context)) != NULL)
 		{
 			if (conn->sslcrl && strlen(conn->sslcrl) > 0)
-				strncpy(fnbuf, conn->sslcrl, sizeof(fnbuf));
+				strlcpy(fnbuf, conn->sslcrl, sizeof(fnbuf));
 			else if (have_homedir)
 				snprintf(fnbuf, sizeof(fnbuf), "%s/%s", homedir, ROOT_CRL_FILE);
 			else

@@ -820,7 +820,9 @@ ExecOpenScanRelation(EState *estate, Index scanrelid, int eflags)
 		{
 			ExecRowMark *erm = lfirst(l);
 
-			if (erm->rti == scanrelid)
+			/* Keep this check in sync with InitPlan! */
+			if (erm->rti == scanrelid &&
+				erm->relation != NULL)
 			{
 				lockmode = NoLock;
 				break;
@@ -1322,8 +1324,10 @@ retry:
 					(errcode(ERRCODE_EXCLUSION_VIOLATION),
 					 errmsg("could not create exclusion constraint \"%s\"",
 							RelationGetRelationName(index)),
-					 errdetail("Key %s conflicts with key %s.",
-							   error_new, error_existing),
+					 error_new && error_existing ?
+						errdetail("Key %s conflicts with key %s.",
+								  error_new, error_existing) :
+						errdetail("Key conflicts exist."),
 					 errtableconstraint(heap,
 										RelationGetRelationName(index))));
 		else
@@ -1331,8 +1335,10 @@ retry:
 					(errcode(ERRCODE_EXCLUSION_VIOLATION),
 					 errmsg("conflicting key value violates exclusion constraint \"%s\"",
 							RelationGetRelationName(index)),
-					 errdetail("Key %s conflicts with existing key %s.",
-							   error_new, error_existing),
+					 error_new && error_existing ?
+						errdetail("Key %s conflicts with existing key %s.",
+								  error_new, error_existing) :
+						errdetail("Key conflicts with existing key."),
 					 errtableconstraint(heap,
 										RelationGetRelationName(index))));
 	}

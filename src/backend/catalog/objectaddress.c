@@ -2028,14 +2028,17 @@ getObjectDescription(const ObjectAddress *object)
 				HeapTuple	tup;
 				Oid			useid;
 				char	   *usename;
+				Form_pg_user_mapping umform;
+				ForeignServer *srv;
 
 				tup = SearchSysCache1(USERMAPPINGOID,
 									  ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(tup))
 					elog(ERROR, "cache lookup failed for user mapping %u",
 						 object->objectId);
-
-				useid = ((Form_pg_user_mapping) GETSTRUCT(tup))->umuser;
+				umform = (Form_pg_user_mapping) GETSTRUCT(tup);
+				useid = umform->umuser;
+				srv = GetForeignServer(umform->umserver);
 
 				ReleaseSysCache(tup);
 
@@ -2044,7 +2047,8 @@ getObjectDescription(const ObjectAddress *object)
 				else
 					usename = "public";
 
-				appendStringInfo(&buffer, _("user mapping for %s"), usename);
+				appendStringInfo(&buffer, _("user mapping for %s on server %s"), usename,
+								 srv->servername);
 				break;
 			}
 
@@ -2785,6 +2789,7 @@ getObjectIdentity(const ObjectAddress *object)
 			{
 				HeapTuple	conTup;
 				Form_pg_conversion conForm;
+				char	   *schema;
 
 				conTup = SearchSysCache1(CONVOID,
 										 ObjectIdGetDatum(object->objectId));
@@ -2792,8 +2797,11 @@ getObjectIdentity(const ObjectAddress *object)
 					elog(ERROR, "cache lookup failed for conversion %u",
 						 object->objectId);
 				conForm = (Form_pg_conversion) GETSTRUCT(conTup);
-				appendStringInfo(&buffer, "%s",
-								 quote_identifier(NameStr(conForm->conname)));
+				schema = get_namespace_name(conForm->connamespace);
+				appendStringInfoString(&buffer,
+								quote_qualified_identifier(schema,
+														   NameStr(conForm->conname)));
+				pfree(schema);
 				ReleaseSysCache(conTup);
 				break;
 			}
@@ -3193,6 +3201,8 @@ getObjectIdentity(const ObjectAddress *object)
 			{
 				HeapTuple	tup;
 				Oid			useid;
+				Form_pg_user_mapping umform;
+				ForeignServer *srv;
 				const char *usename;
 
 				tup = SearchSysCache1(USERMAPPINGOID,
@@ -3200,8 +3210,9 @@ getObjectIdentity(const ObjectAddress *object)
 				if (!HeapTupleIsValid(tup))
 					elog(ERROR, "cache lookup failed for user mapping %u",
 						 object->objectId);
-
-				useid = ((Form_pg_user_mapping) GETSTRUCT(tup))->umuser;
+				umform = (Form_pg_user_mapping) GETSTRUCT(tup);
+				useid = umform->umuser;
+				srv = GetForeignServer(umform->umserver);
 
 				ReleaseSysCache(tup);
 
@@ -3210,7 +3221,8 @@ getObjectIdentity(const ObjectAddress *object)
 				else
 					usename = "public";
 
-				appendStringInfo(&buffer, "%s", usename);
+				appendStringInfo(&buffer, "%s on server %s", usename,
+								 srv->servername);
 				break;
 			}
 
