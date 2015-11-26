@@ -19,7 +19,7 @@ include $(top_builddir)/src/Makefile.global
 include $(top_srcdir)/contrib/contrib-global.mk
 endif
 
-check: regresscheck
+check: isolationcheck
 
 submake-regress:
 	$(MAKE) -C $(top_builddir)/src/test/regress all

@@ -20,7 +20,7 @@
 
 #include "pg_stat_wait.h"
 
-CollectorShmqHeader *hdr;
+CollectorShmqHeader *hdr = NULL;
 
 static void *pgsw;
 shm_toc *toc;
@@ -52,13 +52,18 @@ CollectorShmemSize(void)
 	return size;
 }
 
-void
-AllocateCollectorMem(void)
+CollectorShmqHeader *
+GetCollectorMem(bool init)
 {
 	bool found;
 	Size segsize = CollectorShmemSize();
 
 	pgsw = ShmemInitStruct("pg_stat_wait", segsize, &found);
+	if (!init && !found)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+						errmsg("A collector memory wasn't initialized yet")));
+	}
 
 	if (!found)
 	{
@@ -76,6 +81,7 @@ AllocateCollectorMem(void)
 		toc = shm_toc_attach(PG_STAT_WAIT_MAGIC, pgsw);
 		hdr = shm_toc_lookup(toc, 0);
 	}
+	return hdr;
 }
 
 void

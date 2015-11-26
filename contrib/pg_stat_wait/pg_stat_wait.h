@@ -75,7 +75,7 @@ extern PGDLLIMPORT bool        historySkipLatch;
 
 
 Size CollectorShmemSize(void);
-void AllocateCollectorMem(void);
+CollectorShmqHeader *GetCollectorMem(bool init);
 void RegisterWaitsCollector(void);
 void AllocHistory(History *, int);
 int GetCurrentWaitsState(PGPROC *, HistoryItem *, int);

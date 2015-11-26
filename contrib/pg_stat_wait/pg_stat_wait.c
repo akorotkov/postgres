@@ -18,7 +18,6 @@ PG_MODULE_MAGIC;
 void		_PG_init(void);
 void		_PG_fini(void);
 
-extern CollectorShmqHeader *hdr;
 extern shm_toc			   *toc;
 
 static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
@@ -35,7 +34,7 @@ pgsw_shmem_startup(void)
 		if (prev_shmem_startup_hook)
 			prev_shmem_startup_hook();
 
-		AllocateCollectorMem();
+		GetCollectorMem(true);
 	}
 }
 
@@ -582,12 +581,15 @@ PG_FUNCTION_INFO_V1(pg_stat_wait_get_history);
 Datum
 pg_stat_wait_get_history(PG_FUNCTION_ARGS)
 {
-	History *observations;
-	FuncCallContext *funcctx;
+	History				*observations;
+	FuncCallContext		*funcctx;
+	CollectorShmqHeader	*hdr;
 
 	if (!WaitsHistoryOn)
 		ereport(ERROR, (errcode(ERRCODE_CONFIG_FILE_ERROR),
 						errmsg("Waits history turned off")));
+
+	hdr = GetCollectorMem(false);
 
 	if (SRF_IS_FIRSTCALL())
 	{
