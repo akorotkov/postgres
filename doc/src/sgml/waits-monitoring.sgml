@@ -1,0 +1,562 @@
+<chapter id="waits-monitoring">
+<title>Waits monitoring in PostgreSQL</title>
+<indexterm zone="waits-monitoring">
+  <primary>waits-monitoring</primary></indexterm>
+<para>
+  Processes of <productname>PostgreSQL</productname> can spend much time
+  on different types of waits which include
+
+  <itemizedlist>
+    <listitem><para>CPU</para></listitem>
+    <listitem><para>Storage</para></listitem>
+    <listitem><para>Network</para></listitem>
+    <listitem><para>Heavyweight locks</para></listitem>
+    <listitem><para>Lightweight locks (LWLocks) </para></listitem>
+    <listitem><para>Latches</para></listitem>
+  </itemizedlist>
+
+  These classes contain many events that are described in
+  <link linkend="waits-events">events</link> section.
+</para>
+
+<para>
+  There are three types of monitoring implemented in
+  <productname>pg_stat_wait</productname> extension:
+
+  <itemizedlist>
+    <listitem><para>Profiling</para></listitem>
+    <listitem><para>History</para></listitem>
+    <listitem><para>Tracing</para></listitem>
+  </itemizedlist>
+
+  Each of them has its strenghts and weaknesses and is used in different
+  situations.
+</para>
+
+<section id="waits-events">
+  <title> Wait events and parameters </title>
+  <para> Like was said above, each class has many events. Each wait
+    can have up to five parameters and these parameters mean different things
+    depending on type of the wait.
+  </para>
+  <table>
+    <title>Events</title>
+    <tgroup cols="4">
+      <thead>
+        <row>
+          <entry>Class</entry>
+          <entry>Event</entry>
+          <entry>Description</entry>
+          <entry>Parameters</entry>
+        </row>
+      </thead>
+      <tbody>
+        <row>
+          <entry>CPU</entry>
+          <entry>MemAllocation</entry>
+          <entry>Memory chunks allocation</entry>
+          <entry>none</entry>
+        </row>
+        <row>
+          <entry>Heavyweight locks</entry>
+          <entry>Relation</entry>
+          <entry>Lock on relation</entry>
+          <entry>
+            <itemizedlist>
+              <listitem><para>p1 - lock mode</para></listitem>
+              <listitem><para>p2 - database oid</para></listitem>
+              <listitem><para>p3 - relation oid</para></listitem>
+            </itemizedlist>
+          </entry>
+        </row>
+        <row>
+          <entry></entry>
+          <entry>RelationExtend</entry>
+          <entry>Lock on increasing of relation size</entry>
+          <entry>
+            <itemizedlist>
+              <listitem><para>p1 - lock mode</para></listitem>
+              <listitem><para>p2 - database oid</para></listitem>
+              <listitem><para>p3 - relation oid</para></listitem>
+            </itemizedlist>
+          </entry>
+        </row>
+        <row>
+          <entry></entry>
+          <entry>Page</entry>
+          <entry>Lock on relation page</entry>
+          <entry>
+            <itemizedlist>
+              <listitem><para>p1 - lock mode</para></listitem>
+              <listitem><para>p2 - database oid</para></listitem>
+              <listitem><para>p3 - relation oid</para></listitem>
+              <listitem><para>p4 - block number</para></listitem>
+            </itemizedlist>
+          </entry>
+        </row>
+        <row>
+          <entry></entry>
+          <entry>Tuple</entry>
+          <entry>Lock on relation tuple</entry>
+          <entry>
+            <itemizedlist>
+              <listitem><para>p1 - lock mode</para></listitem>
+              <listitem><para>p2 - database oid</para></listitem>
+              <listitem><para>p3 - relation oid</para></listitem>
+              <listitem><para>p4 - block number</para></listitem>
+              <listitem><para>p5 - offset</para></listitem>
+            </itemizedlist>
+          </entry>
+        </row>
+        <row>
+          <entry></entry>
+          <entry>Transaction</entry>
+          <entry>Transaction lock</entry>
+          <entry>
+            <itemizedlist>
+              <listitem><para>p1 - lock mode</para></listitem>
+              <listitem><para>p2 - xid</para></listitem>
+            </itemizedlist>
+          </entry>
+        </row>
+        <row>
+          <entry></entry>
+          <entry>VirtualTransaction</entry>
+          <entry>Virtual transaction lock</entry>
+          <entry>
+            <itemizedlist>
+              <listitem><para>p1 - lock mode</para></listitem>
+              <listitem><para>p2 - backend id</para></listitem>
+              <listitem><para>p3 - local transaction id</para></listitem>
+            </itemizedlist>
+          </entry>
+        </row>
+        <row>
+          <entry></entry>
+          <entry>Object</entry>
+          <entry>Lock on system catalog object</entry>
+          <entry>
+            <itemizedlist>
+              <listitem><para>p1 - lock mode</para></listitem>
+              <listitem><para>p2 - database oid</para></listitem>
+              <listitem><para>p3 - class oid</para></listitem>
+              <listitem><para>p4 - object id</para></listitem>
+              <listitem><para>p5 - object subid</para></listitem>
+            </itemizedlist>
+          </entry>
+        </row>
+        <row>
+          <entry></entry>
+          <entry>User</entry>
+          <entry>User lock</entry>
+          <entry>
+            <itemizedlist>
+              <listitem><para>p1 - lock mode</para></listitem>
+              <listitem><para>p2-p5 - user parameters</para></listitem>
+            </itemizedlist>
+          </entry>
+        </row>
+        <row>
+          <entry></entry>
+          <entry>Advisory</entry>
+          <entry>Advisory locks</entry>
+          <entry>
+            <itemizedlist>
+              <listitem><para>p1 - lock mode</para></listitem>
+              <listitem><para>p2 - database oid</para></listitem>
+              <listitem><para>p3 - lock type (32/64bit)</para></listitem>
+              <listitem><para>p4-p5 - key</para></listitem>
+            </itemizedlist>
+          </entry>
+        </row>
+        <row>
+          <entry>Storage</entry>
+          <entry>SMGR_READ</entry>
+          <entry>Storage manager reads</entry>
+          <entry>
+            <itemizedlist>
+              <listitem><para>p1 - namespace oid</para></listitem>
+              <listitem><para>p2 - database oid</para></listitem>
+              <listitem><para>p3 - relfilenode oid</para></listitem>
+              <listitem><para>p4 - block number</para></listitem>
+              <listitem><para>p5 - fork number</para></listitem>
+            </itemizedlist>
+          </entry>
+        </row>
+        <row>
+          <entry></entry>
+          <entry>SMGR_WRITE</entry>
+          <entry>Storage manager writes</entry>
+          <entry>
+            <itemizedlist>
+              <listitem><para>p1 - namespace oid</para></listitem>
+              <listitem><para>p2 - database oid</para></listitem>
+              <listitem><para>p3 - relfilenode oid</para></listitem>
+              <listitem><para>p4 - block number</para></listitem>
+              <listitem><para>p5 - fork number</para></listitem>
+            </itemizedlist>
+          </entry>
+        </row>
+        <row>
+          <entry></entry>
+          <entry>SMGR_FSYNC</entry>
+          <entry>Storage manager fsync calls</entry>
+          <entry>
+            <itemizedlist>
+              <listitem><para>p1 - namespace oid</para></listitem>
+              <listitem><para>p2 - database oid</para></listitem>
+              <listitem><para>p3 - relfilenode oid</para></listitem>
+              <listitem><para>p4 - fork number</para></listitem>
+            </itemizedlist>
+          </entry>
+        </row>
+        <row>
+          <entry></entry>
+          <entry>XLOG_READ</entry>
+          <entry>WAL reads</entry>
+          <entry></entry>
+        </row>
+        <row>
+          <entry></entry>
+          <entry>XLOG_WRITE</entry>
+          <entry>WAL writes</entry>
+          <entry></entry>
+        </row>
+        <row>
+          <entry></entry>
+          <entry>XLOG_FSYNC</entry>
+          <entry>WAL fsync calls</entry>
+          <entry></entry>
+        </row>
+        <row>
+          <entry></entry>
+          <entry>SLRU_READ</entry>
+          <entry>SLRU buffer page reads</entry>
+          <entry>
+            <itemizedlist>
+              <listitem><para>p1 - page number</para></listitem>
+              <listitem><para>p2 - LWLocks tranche id</para></listitem>
+            </itemizedlist>
+          </entry>
+        </row>
+        <row>
+          <entry></entry>
+          <entry>SLRU_WRITE</entry>
+          <entry>SLRU buffer page writes</entry>
+          <entry>
+            <itemizedlist>
+              <listitem><para>p1 - page number</para></listitem>
+              <listitem><para>p2 - LWLocks tranche id</para></listitem>
+            </itemizedlist>
+          </entry>
+        </row>
+        <row>
+          <entry></entry>
+          <entry>SLRU_FSYNC</entry>
+          <entry>SLRU buffer page fsync calls</entry>
+          <entry>
+            <itemizedlist>
+              <listitem><para>p1 - page number</para></listitem>
+              <listitem><para>p2 - LWLocks tranche id</para></listitem>
+            </itemizedlist>
+          </entry>
+        </row>
+        <row>
+          <entry>Latch</entry>
+          <entry>Latch</entry>
+          <entry><productname>PostgreSQL</productname> backend sleeps</entry>
+          <entry></entry>
+        </row>
+        <row>
+          <entry>Network</entry>
+          <entry>READ</entry>
+          <entry></entry>
+          <entry></entry>
+        </row>
+        <row>
+          <entry></entry>
+          <entry>WRITE</entry>
+          <entry></entry>
+          <entry></entry>
+        </row>
+        <row>
+          <entry></entry>
+          <entry>SYSLOG</entry>
+          <entry>Syslog writes</entry>
+          <entry></entry>
+        </row>
+      </tbody>
+    </tgroup>
+  </table>
+
+  <para>
+  There are also many events for LWLock types. They can be viewed from
+  descripting functions. They have only one parameter: lock mode
+  in <literal>p1</literal>.
+  </para>
+
+  <table id="functions-descriptions">
+    <title>Descripting functions</title>
+    <tgroup cols="3">
+      <thead>
+        <row>
+          <entry>Name</entry>
+          <entry>Return type</entry>
+          <entry>Description</entry>
+        </row>
+      </thead>
+      <tbody>
+        <row>
+          <entry>pg_stat_wait_get_class_list()</entry>
+          <entry>int class_id, cstring name</entry>
+          <entry>Returns a list of wait classes</entry>
+        </row>
+        <row>
+          <entry>pg_stat_wait_get_event_list()</entry>
+          <entry>int event_id, int class_id, cstring name</entry>
+          <entry>Returns a list of wait events</entry>
+        </row>
+      </tbody>
+    </tgroup>
+  </table>
+
+  <para>
+  There are also a few views based on functions above:
+  </para>
+
+  <table id="views-descriptions">
+    <title>Descripting views</title>
+    <tgroup cols="3">
+      <thead>
+        <row>
+          <entry>Name</entry>
+          <entry>Return type</entry>
+          <entry>Description</entry>
+        </row>
+      </thead>
+      <tbody>
+        <row>
+          <entry>pg_wait_event</entry>
+          <entry>int class_id, int event_id, text name</entry>
+          <entry>Returns a list of wait events</entry>
+        </row>
+        <row>
+          <entry>pg_wait_class</entry>
+          <entry>int class_id, text name</entry>
+          <entry>Returns a list of wait classes</entry>
+        </row>
+        <row>
+          <entry>pg_wait_events</entry>
+          <entry>int class_id, text class_name, int event_id,
+          text event_name</entry>
+          <entry>Returns a list of wait classes and events</entry>
+        </row>
+      </tbody>
+    </tgroup>
+  </table>
+</section>
+
+<section id="profiling">
+<title>Profiling</title>
+<para>
+  Profiling functions and views show aggregated counts and times for each type of
+  wait, grouped by backend pid.
+</para>
+<para>
+  The profiling is performed using gettimeofday() for each wait. The time and
+  count are accumulated in the corresponding fields until the user resets them.
+
+  <table id="functions-profiling">
+    <title>Functions</title>
+    <tgroup cols="3">
+      <thead>
+        <row>
+          <entry>Name</entry>
+          <entry>Return type</entry>
+          <entry>Description</entry>
+        </row>
+      </thead>
+      <tbody>
+        <row>
+          <entry>pg_stat_wait_get_profile(int pid, bool reset)</entry>
+          <entry>
+            int pid, int class_id, int event_id,
+            int8 wait_time, int wait_count
+          </entry>
+          <entry>
+  Returns a profile of the specified backend. If pid is NULL, returns profile of
+  all currently running backends. If <literal>reset</literal>
+  is <literal>true</literal> then it resets the current
+  profile to zero afterwards.
+          </entry>
+        </row>
+      </tbody>
+    </tgroup>
+  </table>
+</para>
+<para>
+  There is also <literal>pg_stat_wait_profile</literal> view that returns
+  same data with additional fields like class and event names.
+</para>
+</section>
+
+<section id="waits-history">
+<title>History</title>
+<para>
+  History contains a limited number of the latest wait events. This data is
+  collected by a bg-worker which periodically samples the current state of
+  backends. It has several advantages over profiling:
+
+  <itemizedlist>
+    <listitem><para>doesn't affect to performance</para></listitem>
+    <listitem><para>contains detailed information about specific wait event,
+    not just wait type
+    </para></listitem>
+  </itemizedlist>
+
+  <table id="functions-history">
+    <title>Functions</title>
+    <tgroup cols="3">
+      <thead>
+        <row>
+          <entry>Name</entry>
+          <entry>Return type</entry>
+          <entry>Description</entry>
+        </row>
+      </thead>
+      <tbody>
+        <row>
+          <entry>pg_stat_wait_get_history()</entry>
+          <entry>int pid, timestamptz sample_ts, int class_id, int event_id,
+            int8 wait_time, int p1, int p2, int p3, int p4, int p5
+          </entry>
+          <entry>
+            Returns records from waits history
+          </entry>
+        </row>
+        <row>
+          <entry>pg_stat_wait_get_current()</entry>
+          <entry>int pid, timestamptz sample_ts, int class_id, int event_id,
+            int8 wait_time, int p1, int p2, int p3, int p4, int p5
+          </entry>
+          <entry>
+          Returns current waits from backends. Contains inconsistent data because reads
+          data right from backend internal structures and they can be changed while
+          reading.
+          </entry>
+        </row>
+      </tbody>
+    </tgroup>
+  </table>
+
+  <literal>pg_stat_wait_current</literal> and <literal>pg_stat_wait_history</literal>
+  views return the same information, but in more readable format.
+</para>
+</section>
+
+<section id="waits-tracing">
+<title>Tracing</title>
+<para>
+  Tracing can be used when you don't need performance, but need a full
+  picture of waits. In contrast to <link linkend="waits-history">history</link>,
+  the trace contains every wait event because it is obtained without sampling.
+
+  <table id="functions-tracing">
+    <title>Trace functions</title>
+    <tgroup cols="3">
+      <thead>
+        <row>
+          <entry>Name</entry>
+          <entry>Return type</entry>
+          <entry>Description</entry>
+        </row>
+      </thead>
+      <tbody>
+        <row>
+          <entry>pg_start_trace(int pid, text filename)</entry>
+          <entry>void</entry>
+          <entry>Start tracing of a backend to a file</entry>
+        </row>
+        <row>
+          <entry>pg_is_in_trace(int pid)</entry>
+          <entry>bool</entry>
+          <entry>Check if the backend is already being traced</entry>
+        </row>
+        <row>
+          <entry>pg_stop_trace(int pid)</entry>
+          <entry>bool</entry>
+          <entry>Stop tracing of a backend</entry>
+        </row>
+      </tbody>
+    </tgroup>
+  </table>
+</para>
+</section>
+
+<section id="waits-installation">
+<title>Installation and configuration</title>
+<para>
+  Installation includes three steps:
+  <itemizedlist>
+    <listitem><para> Compile and install <literal>pg_stat_wait</literal>
+        extension </para></listitem>
+    <listitem><para> Add <filename>pg_stat_wait.so</filename>
+        to <literal>shared_preload_libraries</literal>
+        configuration parameter</para></listitem>
+    <listitem><para> Set <literal>waits_monitoring</literal>
+        to <literal>on</literal></para></listitem>
+    <listitem><para>
+        Enable view functions with
+        "<command>CREATE EXTENSION pg_stat_wait</command>" command
+    </para></listitem>
+  </itemizedlist>
+
+  <table id="configuration-parameters">
+    <title>Configuration parameters</title>
+    <tgroup cols="4">
+      <thead>
+        <row>
+          <entry>Name</entry>
+          <entry>Type</entry>
+          <entry>Default</entry>
+          <entry>Description</entry>
+        </row>
+      </thead>
+      <tbody>
+        <row>
+          <entry>waits_monitoring</entry>
+          <entry>bool</entry>
+          <entry>off</entry>
+          <entry>Enables waits monitoring. Profiling is always enabled if
+          <literal>waits_monitoring</literal> is <literal>on</literal></entry>
+        </row>
+        <row>
+          <entry>pg_stat_wait.history</entry>
+          <entry>bool</entry>
+          <entry>off</entry>
+          <entry>Enables waits history</entry>
+        </row>
+        <row>
+          <entry>pg_stat_wait.history_period</entry>
+          <entry>bool</entry>
+          <entry>10</entry>
+          <entry>Sampling time for history in milliseconds</entry>
+        </row>
+        <row>
+          <entry>pg_stat_wait.history_size</entry>
+          <entry>int</entry>
+          <entry>5000</entry>
+          <entry>Count of items in waits history</entry>
+        </row>
+        <row>
+          <entry>pg_stat_wait.history_skip_latch</entry>
+          <entry>bool</entry>
+          <entry>off</entry>
+          <entry>Skip latches in waits history</entry>
+        </row>
+      </tbody>
+    </tgroup>
+  </table>
+</para>
+</section>
+</chapter>
