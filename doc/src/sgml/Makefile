@@ -50,7 +50,8 @@ DBTOEPUB ?= dbtoepub
 
 
 GENERATED_SGML = bookindex.sgml version.sgml \
-	features-supported.sgml features-unsupported.sgml errcodes-table.sgml
+	features-supported.sgml features-unsupported.sgml errcodes-table.sgml \
+	waits-monitoring.sgml
 
 ALLSGML := $(wildcard $(srcdir)/*.sgml $(srcdir)/ref/*.sgml) $(GENERATED_SGML)
 
