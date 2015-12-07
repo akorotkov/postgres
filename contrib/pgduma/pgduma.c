@@ -1,5 +1,5 @@
 /*
- * pgduma/pgduma.c
+ * contrib/pgduma/pgduma.c
  */
 #include "postgres.h"
 #include "fmgr.h"
@@ -99,6 +99,9 @@ readVarbyte(char *ptr, int *value)
 	return ptr;
 }
 
+/*
+ * Compress tsvector position using varbyte encoding.
+ */
 static char *
 compress_pos(char *target, uint16 pos, uint16 prev)
 {
@@ -126,6 +129,9 @@ compress_pos(char *target, uint16 pos, uint16 prev)
 	return ptr;
 }
 
+/*
+ * Get length of tsvector position compressed using varbyte encoding.
+ */
 static int
 compress_pos_length(uint16 pos, uint16 prev)
 {
@@ -142,6 +148,9 @@ compress_pos_length(uint16 pos, uint16 prev)
 	return length;
 }
 
+/*
+ * Decompress tsvector position using varbyte encoding.
+ */
 static char *
 decompress_pos(char *ptr, uint16 *pos)
 {
@@ -170,6 +179,9 @@ decompress_pos(char *ptr, uint16 *pos)
 }
 
 #ifdef NOT_USED
+/*
+ * Count number of compressed tsvector positions.
+ */
 static int
 count_pos(char *ptr, int len)
 {
@@ -183,6 +195,9 @@ count_pos(char *ptr, int len)
 }
 #endif
 
+/*
+ * Check if at least one of tsvectors in array matches tsquery.
+ */
 Datum
 tsvector_array_match_tsquery(PG_FUNCTION_ARGS)
 {
@@ -207,6 +222,10 @@ tsvector_array_match_tsquery(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(false);
 }
 
+/*
+ * Distance between array of tsvectors and tsquery: minimal distance between
+ * array element and tsquery. Distance is 1.0 / ts_rank(tsvector, tsquery).
+ */
 Datum
 tsvector_array_tsquery_distance(PG_FUNCTION_ARGS)
 {

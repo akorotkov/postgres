@@ -1,9 +1,12 @@
-# pgduma/Makefile
+# contrib/pgduma/Makefile
 
 MODULE_big = pgduma
 OBJS = pgduma.o
+
 EXTENSION = pgduma
 DATA = pgduma--1.0.sql
+
+REGRESS=pgduma
 
 ifdef USE_PGXS
 PG_CONFIG = pg_config

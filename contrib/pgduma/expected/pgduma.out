@@ -1,0 +1,144 @@
+CREATE EXTENSION pgduma;
+CREATE TABLE lawsearch_test (i integer, t tsvector[]);
+\copy lawsearch_test from 'data/pgduma.data'
+SELECT i FROM lawsearch_test WHERE t @@ 'wr|qh' ORDER BY t >< 'wr|qh' LIMIT 10;
+  i  
+-----
+ 220
+ 299
+ 366
+ 206
+ 261
+   4
+ 400
+ 148
+ 433
+ 424
+(10 rows)
+
+SELECT i FROM lawsearch_test WHERE t @@ 'eq&yt' ORDER BY t >< 'eq&yt' LIMIT 10;
+  i  
+-----
+ 201
+ 844
+ 413
+ 654
+ 364
+   4
+ 703
+ 869
+ 721
+ 490
+(10 rows)
+
+SELECT i FROM lawsearch_test WHERE t @@ '(eq&yt)|(wr&qh)' ORDER BY t >< '(eq&yt)|(wr&qh)' LIMIT 10;
+  i  
+-----
+   4
+ 708
+ 456
+ 402
+  52
+ 449
+ 219
+ 259
+ 460
+ 689
+(10 rows)
+
+CREATE INDEX lawsearch_test_idx ON lawsearch_test USING gin (t);
+SET enable_seqscan TO off;
+SELECT i FROM lawsearch_test WHERE t @@ 'wr|qh' ORDER BY t >< 'wr|qh' LIMIT 10;
+  i  
+-----
+ 220
+ 299
+ 366
+ 206
+ 261
+   4
+ 400
+ 148
+ 433
+ 424
+(10 rows)
+
+SELECT i FROM lawsearch_test WHERE t @@ 'eq&yt' ORDER BY t >< 'eq&yt' LIMIT 10;
+  i  
+-----
+   4
+  31
+  52
+  56
+  82
+ 157
+ 201
+ 204
+ 219
+ 259
+(10 rows)
+
+SELECT i FROM lawsearch_test WHERE t @@ '(eq&yt)|(wr&qh)' ORDER BY t >< '(eq&yt)|(wr&qh)' LIMIT 10;
+  i  
+-----
+  56
+ 844
+ 201
+ 654
+ 148
+  31
+ 204
+ 873
+ 869
+ 752
+(10 rows)
+
+VACUUM lawsearch_test;
+DELETE FROM lawsearch_test;
+\copy lawsearch_test from 'data/pgduma.data'
+VACUUM lawsearch_test;
+SELECT i FROM lawsearch_test WHERE t @@ 'wr|qh' ORDER BY t >< 'wr|qh' LIMIT 10;
+  i  
+-----
+ 220
+ 299
+ 366
+ 206
+ 261
+   4
+ 400
+ 148
+ 433
+ 424
+(10 rows)
+
+SELECT i FROM lawsearch_test WHERE t @@ 'eq&yt' ORDER BY t >< 'eq&yt' LIMIT 10;
+  i  
+-----
+   4
+  31
+  52
+  56
+  82
+ 157
+ 201
+ 204
+ 219
+ 259
+(10 rows)
+
+SELECT i FROM lawsearch_test WHERE t @@ '(eq&yt)|(wr&qh)' ORDER BY t >< '(eq&yt)|(wr&qh)' LIMIT 10;
+  i  
+-----
+  56
+ 844
+ 201
+ 654
+ 148
+  31
+ 204
+ 873
+ 869
+ 752
+(10 rows)
+
