@@ -3475,23 +3475,19 @@ create index test2_idx_gin on test2 using gin (t gin_trgm_ops);
 set enable_seqscan=off;
 explain (costs off)
   select * from test2 where t like '%BCD%';
-                QUERY PLAN                
-------------------------------------------
- Bitmap Heap Scan on test2
-   Recheck Cond: (t ~~ '%BCD%'::text)
-   ->  Bitmap Index Scan on test2_idx_gin
-         Index Cond: (t ~~ '%BCD%'::text)
-(4 rows)
+               QUERY PLAN                
+-----------------------------------------
+ Index Scan using test2_idx_gin on test2
+   Index Cond: (t ~~ '%BCD%'::text)
+(2 rows)
 
 explain (costs off)
   select * from test2 where t ilike '%BCD%';
-                QUERY PLAN                 
--------------------------------------------
- Bitmap Heap Scan on test2
-   Recheck Cond: (t ~~* '%BCD%'::text)
-   ->  Bitmap Index Scan on test2_idx_gin
-         Index Cond: (t ~~* '%BCD%'::text)
-(4 rows)
+               QUERY PLAN                
+-----------------------------------------
+ Index Scan using test2_idx_gin on test2
+   Index Cond: (t ~~* '%BCD%'::text)
+(2 rows)
 
 select * from test2 where t like '%BCD%';
  t 
@@ -3536,23 +3532,19 @@ select * from test2 where t like '  z foo%';
 
 explain (costs off)
   select * from test2 where t ~ '[abc]{3}';
-                 QUERY PLAN                 
---------------------------------------------
- Bitmap Heap Scan on test2
-   Recheck Cond: (t ~ '[abc]{3}'::text)
-   ->  Bitmap Index Scan on test2_idx_gin
-         Index Cond: (t ~ '[abc]{3}'::text)
-(4 rows)
+               QUERY PLAN                
+-----------------------------------------
+ Index Scan using test2_idx_gin on test2
+   Index Cond: (t ~ '[abc]{3}'::text)
+(2 rows)
 
 explain (costs off)
   select * from test2 where t ~* 'DEF';
-                QUERY PLAN                
-------------------------------------------
- Bitmap Heap Scan on test2
-   Recheck Cond: (t ~* 'DEF'::text)
-   ->  Bitmap Index Scan on test2_idx_gin
-         Index Cond: (t ~* 'DEF'::text)
-(4 rows)
+               QUERY PLAN                
+-----------------------------------------
+ Index Scan using test2_idx_gin on test2
+   Index Cond: (t ~* 'DEF'::text)
+(2 rows)
 
 select * from test2 where t ~ '[abc]{3}';
    t    
