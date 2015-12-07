@@ -1,0 +1,5 @@
+# pgduma extension
+comment = 'PostgreSQL extension for State Duma'
+default_version = '1.0'
+module_pathname = '$libdir/pgduma'
+relocatable = true
