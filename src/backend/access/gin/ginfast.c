@@ -909,8 +909,7 @@ ginInsertCleanup(GinState *ginstate,
 		 */
 		processPendingPage(&accum, &datums, page, FirstOffsetNumber);
 
-		if (vac_delay)
-			vacuum_delay_point();
+		vacuum_delay_point();
 
 		/*
 		 * Is it time to flush memory to disk?	Flush if we are at the end of
@@ -961,8 +960,7 @@ ginInsertCleanup(GinState *ginstate,
 				}
 				ginEntryInsert(ginstate, attnum, key, category,
 							   iptrs, addInfo, addInfoIsNull, nlist, NULL);
-				if (vac_delay)
-					vacuum_delay_point();
+				vacuum_delay_point();
 			}
 
 			/*
@@ -1021,8 +1019,8 @@ ginInsertCleanup(GinState *ginstate,
 												 * locking */
 
 			/*
-			 * remove readed pages from pending list, at this point all
-			 * content of readed pages is in regular structure
+			 * remove read pages from pending list, at this point all
+			 * content of read pages is in regular structure
 			 */
 			if (shiftList(index, metabuffer, blkno, stats))
 			{
@@ -1056,7 +1054,7 @@ ginInsertCleanup(GinState *ginstate,
 		/*
 		 * Read next page in pending list
 		 */
-		CHECK_FOR_INTERRUPTS();
+		vacuum_delay_point();
 		buffer = ReadBuffer(index, blkno);
 		LockBuffer(buffer, GIN_SHARE);
 		page = BufferGetPage(buffer);
