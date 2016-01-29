@@ -96,6 +96,7 @@ ReplicationSlot *MyReplicationSlot = NULL;
 int			max_replication_slots = 0;	/* the maximum number of replication
 										 * slots */
 
+static LWLockTranche ReplSlotIOLWLockTranche;
 static void ReplicationSlotDropAcquired(void);
 
 /* internal persistency functions */
@@ -136,6 +137,13 @@ ReplicationSlotsShmemInit(void)
 		ShmemInitStruct("ReplicationSlot Ctl", ReplicationSlotsShmemSize(),
 						&found);
 
+	ReplSlotIOLWLockTranche.name = "Replication Slot IO Locks";
+	ReplSlotIOLWLockTranche.array_base =
+		((char *) ReplicationSlotCtl) + offsetof(ReplicationSlotCtlData, replication_slots) +offsetof(ReplicationSlot, io_in_progress_lock);
+	ReplSlotIOLWLockTranche.array_stride = sizeof(ReplicationSlot);
+	LWLockRegisterTranche(LWTRANCHE_REPLICATION_SLOT_IO_IN_PROGRESS,
+						  &ReplSlotIOLWLockTranche);
+
 	if (!found)
 	{
 		int			i;
@@ -149,7 +157,7 @@ ReplicationSlotsShmemInit(void)
 
 			/* everything else is zeroed by the memset above */
 			SpinLockInit(&slot->mutex);
-			slot->io_in_progress_lock = LWLockAssign();
+			LWLockInitialize(&slot->io_in_progress_lock, LWTRANCHE_REPLICATION_SLOT_IO_IN_PROGRESS);
 		}
 	}
 }
@@ -965,7 +973,7 @@ SaveSlotToPath(ReplicationSlot *slot, const char *dir, int elevel)
 	if (!was_dirty)
 		return;
 
-	LWLockAcquire(slot->io_in_progress_lock, LW_EXCLUSIVE);
+	LWLockAcquire(&slot->io_in_progress_lock, LW_EXCLUSIVE);
 
 	/* silence valgrind :( */
 	memset(&cp, 0, sizeof(ReplicationSlotOnDisk));
@@ -1062,7 +1070,7 @@ SaveSlotToPath(ReplicationSlot *slot, const char *dir, int elevel)
 		SpinLockRelease(&vslot->mutex);
 	}
 
-	LWLockRelease(slot->io_in_progress_lock);
+	LWLockRelease(&slot->io_in_progress_lock);
 }
 
 /*
