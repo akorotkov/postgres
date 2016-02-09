@@ -210,6 +210,8 @@ extern LWLock *LWLockAssign(void);
 extern int	LWLockNewTrancheId(void);
 extern void LWLockRegisterTranche(int tranche_id, LWLockTranche *tranche);
 extern void LWLockInitialize(LWLock *lock, int tranche_id);
+extern void LWLockReportStartWait(LWLock *lock);
+extern void LWLockReportStopWait(void);
 
 /*
  * We reserve a few predefined tranche IDs.  A call to LWLockNewTrancheId

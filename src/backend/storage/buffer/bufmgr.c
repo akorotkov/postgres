@@ -50,6 +50,7 @@
 #include "utils/rel.h"
 #include "utils/resowner_private.h"
 #include "utils/timestamp.h"
+#include "utils/wait.h"
 
 
 /* Note: these two macros only work on shared buffers, not local ones! */
@@ -3290,6 +3291,8 @@ LockBufferForCleanup(Buffer buffer)
 		UnlockBufHdr(bufHdr);
 		LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
 
+		LWLockReportStartWait(BufferDescriptorGetContentLock(bufHdr));
+
 		/* Wait to be signaled by UnpinBuffer() */
 		if (InHotStandby)
 		{
@@ -3302,6 +3305,8 @@ LockBufferForCleanup(Buffer buffer)
 		}
 		else
 			ProcWaitForSignal();
+
+		LWLockReportStopWait();
 
 		/*
 		 * Remove flag marking us as waiter. Normally this will not be set

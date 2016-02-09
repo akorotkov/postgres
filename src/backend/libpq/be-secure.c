@@ -35,6 +35,7 @@
 #include "miscadmin.h"
 #include "tcop/tcopprot.h"
 #include "utils/memutils.h"
+#include "utils/wait.h"
 #include "storage/proc.h"
 
 
@@ -122,6 +123,8 @@ secure_read(Port *port, void *ptr, size_t len)
 	ssize_t		n;
 	int			waitfor;
 
+	WAIT_START(WAIT_NETWORK, WAIT_NETWORK_READ, 0, 0, 0, 0, 0);
+
 retry:
 #ifdef USE_SSL
 	waitfor = 0;
@@ -169,6 +172,8 @@ retry:
 	 */
 	ProcessClientReadInterrupt(false);
 
+	WAIT_STOP();
+
 	return n;
 }
 
@@ -176,6 +181,8 @@ ssize_t
 secure_raw_read(Port *port, void *ptr, size_t len)
 {
 	ssize_t		n;
+
+	WAIT_START(WAIT_NETWORK, WAIT_NETWORK_READ, 0, 0, 0, 0, 0);
 
 	/*
 	 * Try to read from the socket without blocking. If it succeeds we're
@@ -189,6 +196,8 @@ secure_raw_read(Port *port, void *ptr, size_t len)
 	pgwin32_noblock = false;
 #endif
 
+	WAIT_STOP();
+
 	return n;
 }
 
@@ -201,6 +210,8 @@ secure_write(Port *port, void *ptr, size_t len)
 {
 	ssize_t		n;
 	int			waitfor;
+
+	WAIT_START(WAIT_NETWORK, WAIT_NETWORK_WRITE, 0, 0, 0, 0, 0);
 
 retry:
 	waitfor = 0;
@@ -248,6 +259,8 @@ retry:
 	 */
 	ProcessClientWriteInterrupt(false);
 
+	WAIT_STOP();
+
 	return n;
 }
 
@@ -256,6 +269,8 @@ secure_raw_write(Port *port, const void *ptr, size_t len)
 {
 	ssize_t		n;
 
+	WAIT_START(WAIT_NETWORK, WAIT_NETWORK_WRITE, 0, 0, 0, 0, 0);
+
 #ifdef WIN32
 	pgwin32_noblock = true;
 #endif
@@ -263,6 +278,8 @@ secure_raw_write(Port *port, const void *ptr, size_t len)
 #ifdef WIN32
 	pgwin32_noblock = false;
 #endif
+
+	WAIT_STOP();
 
 	return n;
 }

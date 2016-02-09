@@ -85,6 +85,7 @@
 #include "storage/proc.h"
 #include "storage/spin.h"
 #include "utils/memutils.h"
+#include "utils/wait.h"
 
 #ifdef LWLOCK_STATS
 #include "utils/hsearch.h"
@@ -158,6 +159,9 @@ int			NamedLWLockTrancheRequests = 0;
 NamedLWLockTranche *NamedLWLockTrancheArray = NULL;
 
 static bool lock_named_request_allowed = true;
+
+void LWLockReportStartWait(LWLock *lock);
+void LWLockReportStopWait(void);
 
 #ifdef LWLOCK_STATS
 typedef struct lwlock_stats_key
@@ -708,6 +712,33 @@ LWLockInitialize(LWLock *lock, int tranche_id)
 	dlist_init(&lock->waiters);
 }
 
+ /*
+ * Report start of wait event for light-weight locks.
+ *
+ * This function will be used by all the light-weight lock calls which
+ * needs to wait to acquire the lock.  This function distinguishes wait
+ * event based on tranche and lock id.
+ */
+void
+LWLockReportStartWait(LWLock *lock)
+{
+	int			lockId = T_ID(lock);
+
+	if (lock->tranche == 0 && lockId < NUM_INDIVIDUAL_LWLOCKS)
+		WAIT_START(WAIT_LWLOCK, lockId, 0, 0, 0, 0, 0);
+	else
+		WAIT_START(WAIT_LWLOCK, NUM_INDIVIDUAL_LWLOCKS + lock->tranche - 1, lockId, 0, 0, 0, 0);
+}
+
+/*
+ * Report end of wait event for light-weight locks.
+ */
+void
+LWLockReportStopWait()
+{
+	WAIT_STOP();
+}
+
 /*
  * Internal function that tries to atomically acquire the lwlock in the passed
  * in mode.
@@ -1159,6 +1190,9 @@ LWLockAcquire(LWLock *lock, LWLockMode mode)
 
 		TRACE_POSTGRESQL_LWLOCK_WAIT_START(T_NAME(lock), T_ID(lock), mode);
 
+		/* Report the wait */
+		LWLockReportStartWait(lock);
+
 		for (;;)
 		{
 			PGSemaphoreLock(&proc->sem);
@@ -1180,6 +1214,8 @@ LWLockAcquire(LWLock *lock, LWLockMode mode)
 #endif
 
 		TRACE_POSTGRESQL_LWLOCK_WAIT_DONE(T_NAME(lock), T_ID(lock), mode);
+
+		LWLockReportStopWait();
 
 		LOG_LWDEBUG("LWLockAcquire", lock, "awakened");
 
@@ -1317,6 +1353,9 @@ LWLockAcquireOrWait(LWLock *lock, LWLockMode mode)
 #endif
 			TRACE_POSTGRESQL_LWLOCK_WAIT_START(T_NAME(lock), T_ID(lock), mode);
 
+			/* Report the wait */
+			LWLockReportStartWait(lock);
+
 			for (;;)
 			{
 				PGSemaphoreLock(&proc->sem);
@@ -1334,6 +1373,8 @@ LWLockAcquireOrWait(LWLock *lock, LWLockMode mode)
 			}
 #endif
 			TRACE_POSTGRESQL_LWLOCK_WAIT_DONE(T_NAME(lock), T_ID(lock), mode);
+
+			LWLockReportStopWait();
 
 			LOG_LWDEBUG("LWLockAcquireOrWait", lock, "awakened");
 		}
@@ -1542,6 +1583,9 @@ LWLockWaitForVar(LWLock *lock, uint64 *valptr, uint64 oldval, uint64 *newval)
 		TRACE_POSTGRESQL_LWLOCK_WAIT_START(T_NAME(lock), T_ID(lock),
 										   LW_EXCLUSIVE);
 
+		/* Report the wait */
+		LWLockReportStartWait(lock);
+
 		for (;;)
 		{
 			PGSemaphoreLock(&proc->sem);
@@ -1561,6 +1605,8 @@ LWLockWaitForVar(LWLock *lock, uint64 *valptr, uint64 oldval, uint64 *newval)
 
 		TRACE_POSTGRESQL_LWLOCK_WAIT_DONE(T_NAME(lock), T_ID(lock),
 										  LW_EXCLUSIVE);
+
+		LWLockReportStopWait();
 
 		LOG_LWDEBUG("LWLockWaitForVar", lock, "awakened");
 

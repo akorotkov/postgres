@@ -88,6 +88,7 @@
 
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
+#include "utils/wait.h"
 
 /* Define this to detail debug alloc information */
 /* #define HAVE_ALLOCINFO */
@@ -495,7 +496,9 @@ AllocSetContextCreate(MemoryContext parent,
 		Size		blksize = MAXALIGN(minContextSize);
 		AllocBlock	block;
 
+		WAIT_START(WAIT_CPU, WAIT_MALLOC, 0, 0, 0, 0, 0);
 		block = (AllocBlock) malloc(blksize);
+		WAIT_STOP();
 		if (block == NULL)
 		{
 			MemoryContextStats(TopMemoryContext);
@@ -674,7 +677,9 @@ AllocSetAlloc(MemoryContext context, Size size)
 	{
 		chunk_size = MAXALIGN(size);
 		blksize = chunk_size + ALLOC_BLOCKHDRSZ + ALLOC_CHUNKHDRSZ;
+		WAIT_START(WAIT_CPU, WAIT_MALLOC, 0, 0, 0, 0, 0);
 		block = (AllocBlock) malloc(blksize);
+		WAIT_STOP();
 		if (block == NULL)
 			return NULL;
 		block->aset = set;
@@ -849,6 +854,7 @@ AllocSetAlloc(MemoryContext context, Size size)
 			blksize <<= 1;
 
 		/* Try to allocate it */
+		WAIT_START(WAIT_CPU, WAIT_MALLOC, 0, 0, 0, 0, 0);
 		block = (AllocBlock) malloc(blksize);
 
 		/*
@@ -862,6 +868,7 @@ AllocSetAlloc(MemoryContext context, Size size)
 				break;
 			block = (AllocBlock) malloc(blksize);
 		}
+		WAIT_STOP();
 
 		if (block == NULL)
 			return NULL;

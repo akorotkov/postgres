@@ -23,6 +23,7 @@
 #include "storage/smgr.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
+#include "utils/wait.h"
 
 
 /*
@@ -598,8 +599,12 @@ void
 smgrextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		   char *buffer, bool skipFsync)
 {
+	WAIT_START(WAIT_IO, WAIT_SMGR_EXTEND, reln->smgr_rnode.node.spcNode,
+		reln->smgr_rnode.node.dbNode, reln->smgr_rnode.node.relNode,
+		forknum, blocknum);
 	(*(smgrsw[reln->smgr_which].smgr_extend)) (reln, forknum, blocknum,
 											   buffer, skipFsync);
+	WAIT_STOP();
 }
 
 /*
@@ -608,7 +613,11 @@ smgrextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 void
 smgrprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 {
+	WAIT_START(WAIT_IO, WAIT_SMGR_READ, reln->smgr_rnode.node.spcNode,
+		reln->smgr_rnode.node.dbNode, reln->smgr_rnode.node.relNode,
+		forknum, blocknum);
 	(*(smgrsw[reln->smgr_which].smgr_prefetch)) (reln, forknum, blocknum);
+	WAIT_STOP();
 }
 
 /*
@@ -623,7 +632,11 @@ void
 smgrread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		 char *buffer)
 {
+	WAIT_START(WAIT_IO, WAIT_SMGR_READ, reln->smgr_rnode.node.spcNode,
+		reln->smgr_rnode.node.dbNode, reln->smgr_rnode.node.relNode,
+		forknum, blocknum);
 	(*(smgrsw[reln->smgr_which].smgr_read)) (reln, forknum, blocknum, buffer);
+	WAIT_STOP();
 }
 
 /*
@@ -645,8 +658,12 @@ void
 smgrwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		  char *buffer, bool skipFsync)
 {
+	WAIT_START(WAIT_IO, WAIT_SMGR_WRITE, reln->smgr_rnode.node.spcNode,
+		reln->smgr_rnode.node.dbNode, reln->smgr_rnode.node.relNode,
+		forknum, blocknum);
 	(*(smgrsw[reln->smgr_which].smgr_write)) (reln, forknum, blocknum,
 											  buffer, skipFsync);
+	WAIT_STOP();
 }
 
 /*
@@ -718,7 +735,11 @@ smgrtruncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 void
 smgrimmedsync(SMgrRelation reln, ForkNumber forknum)
 {
+	WAIT_START(WAIT_IO, WAIT_SMGR_FSYNC, reln->smgr_rnode.node.spcNode,
+		reln->smgr_rnode.node.dbNode, reln->smgr_rnode.node.relNode,
+		forknum, 0);
 	(*(smgrsw[reln->smgr_which].smgr_immedsync)) (reln, forknum);
+	WAIT_STOP();
 }
 
 
@@ -745,11 +766,13 @@ smgrsync(void)
 {
 	int			i;
 
+	WAIT_START(WAIT_IO, WAIT_SMGR_FSYNC, NSmgr, 0, 0, 0, 0);
 	for (i = 0; i < NSmgr; i++)
 	{
 		if (smgrsw[i].smgr_sync)
 			(*(smgrsw[i].smgr_sync)) ();
 	}
+	WAIT_STOP();
 }
 
 /*

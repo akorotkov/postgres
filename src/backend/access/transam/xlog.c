@@ -70,6 +70,7 @@
 #include "utils/relmapper.h"
 #include "utils/snapmgr.h"
 #include "utils/timestamp.h"
+#include "utils/wait.h"
 #include "pg_trace.h"
 
 extern uint32 bootstrap_data_checksum_version;
@@ -2276,6 +2277,9 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 			from = XLogCtl->pages + startidx * (Size) XLOG_BLCKSZ;
 			nbytes = npages * (Size) XLOG_BLCKSZ;
 			nleft = nbytes;
+
+			WAIT_START(WAIT_IO, WAIT_XLOG_WRITE, 0, 0, 0, 0, 0);
+
 			do
 			{
 				errno = 0;
@@ -2294,6 +2298,8 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 				nleft -= written;
 				from += written;
 			} while (nleft > 0);
+
+			WAIT_STOP();
 
 			/* Update state for write */
 			openLogOff += nbytes;
@@ -2979,6 +2985,7 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 	 */
 	zbuffer = (char *) MAXALIGN(zbuffer_raw);
 	memset(zbuffer, 0, XLOG_BLCKSZ);
+	WAIT_START(WAIT_IO, WAIT_XLOG_WRITE, 0, 0, 0, 0, 0);
 	for (nbytes = 0; nbytes < XLogSegSize; nbytes += XLOG_BLCKSZ)
 	{
 		errno = 0;
@@ -3001,7 +3008,9 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 					 errmsg("could not write to file \"%s\": %m", tmppath)));
 		}
 	}
+	WAIT_STOP();
 
+	WAIT_START(WAIT_IO, WAIT_XLOG_FSYNC, 0, 0, 0, 0, 0);
 	if (pg_fsync(fd) != 0)
 	{
 		close(fd);
@@ -3009,6 +3018,7 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 				(errcode_for_file_access(),
 				 errmsg("could not fsync file \"%s\": %m", tmppath)));
 	}
+	WAIT_STOP();
 
 	if (close(fd))
 		ereport(ERROR,
@@ -3135,6 +3145,8 @@ XLogFileCopy(XLogSegNo destsegno, TimeLineID srcTLI, XLogSegNo srcsegno,
 			if (nread > sizeof(buffer))
 				nread = sizeof(buffer);
 			errno = 0;
+
+			WAIT_START(WAIT_IO, WAIT_XLOG_READ, 0, 0, 0, 0, 0);
 			if (read(srcfd, buffer, nread) != nread)
 			{
 				if (errno != 0)
@@ -3147,8 +3159,10 @@ XLogFileCopy(XLogSegNo destsegno, TimeLineID srcTLI, XLogSegNo srcsegno,
 							(errmsg("not enough data in file \"%s\"",
 									path)));
 			}
+			WAIT_STOP();
 		}
 		errno = 0;
+		WAIT_START(WAIT_IO, WAIT_XLOG_WRITE, 0, 0, 0, 0, 0);
 		if ((int) write(fd, buffer, sizeof(buffer)) != (int) sizeof(buffer))
 		{
 			int			save_errno = errno;
@@ -3164,12 +3178,15 @@ XLogFileCopy(XLogSegNo destsegno, TimeLineID srcTLI, XLogSegNo srcsegno,
 					(errcode_for_file_access(),
 					 errmsg("could not write to file \"%s\": %m", tmppath)));
 		}
+		WAIT_STOP();
 	}
 
+	WAIT_START(WAIT_IO, WAIT_XLOG_FSYNC, 0, 0, 0, 0, 0);
 	if (pg_fsync(fd) != 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not fsync file \"%s\": %m", tmppath)));
+	WAIT_STOP();
 
 	if (CloseTransientFile(fd))
 		ereport(ERROR,
@@ -9626,6 +9643,8 @@ assign_xlog_sync_method(int new_sync_method, void *extra)
 void
 issue_xlog_fsync(int fd, XLogSegNo segno)
 {
+	WAIT_START(WAIT_IO, WAIT_XLOG_FSYNC, 0, 0, 0, 0, 0);
+
 	switch (sync_method)
 	{
 		case SYNC_METHOD_FSYNC:
@@ -9661,6 +9680,8 @@ issue_xlog_fsync(int fd, XLogSegNo segno)
 			elog(PANIC, "unrecognized wal_sync_method: %d", sync_method);
 			break;
 	}
+
+	WAIT_STOP();
 }
 
 /*
@@ -11000,6 +11021,8 @@ retry:
 		goto next_record_is_invalid;
 	}
 
+	WAIT_START(WAIT_IO, WAIT_XLOG_READ, 0, 0, 0, 0, 0);
+
 	if (read(readFile, readBuf, XLOG_BLCKSZ) != XLOG_BLCKSZ)
 	{
 		char		fname[MAXFNAMELEN];
@@ -11011,6 +11034,8 @@ retry:
 						fname, readOff)));
 		goto next_record_is_invalid;
 	}
+
+	WAIT_STOP();
 
 	Assert(targetSegNo == readSegNo);
 	Assert(targetPageOff == readOff);

@@ -56,6 +56,7 @@
 #include "access/xlog.h"
 #include "storage/fd.h"
 #include "storage/shmem.h"
+#include "utils/wait.h"
 #include "miscadmin.h"
 
 
@@ -677,13 +678,17 @@ SlruPhysicalReadPage(SlruCtl ctl, int pageno, int slotno)
 	}
 
 	errno = 0;
+	WAIT_START(WAIT_IO, WAIT_SLRU_READ, pageno,
+		shared->lwlock_tranche_id, 0, 0, 0);
 	if (read(fd, shared->page_buffer[slotno], BLCKSZ) != BLCKSZ)
 	{
+		WAIT_STOP();
 		slru_errcause = SLRU_READ_FAILED;
 		slru_errno = errno;
 		CloseTransientFile(fd);
 		return false;
 	}
+	WAIT_STOP();
 
 	if (CloseTransientFile(fd))
 	{
@@ -836,8 +841,11 @@ SlruPhysicalWritePage(SlruCtl ctl, int pageno, int slotno, SlruFlush fdata)
 	}
 
 	errno = 0;
+	WAIT_START(WAIT_IO, WAIT_SLRU_WRITE, pageno,
+		shared->lwlock_tranche_id, 0, 0, 0);
 	if (write(fd, shared->page_buffer[slotno], BLCKSZ) != BLCKSZ)
 	{
+		WAIT_STOP();
 		/* if write didn't set errno, assume problem is no disk space */
 		if (errno == 0)
 			errno = ENOSPC;
@@ -847,6 +855,7 @@ SlruPhysicalWritePage(SlruCtl ctl, int pageno, int slotno, SlruFlush fdata)
 			CloseTransientFile(fd);
 		return false;
 	}
+	WAIT_STOP();
 
 	/*
 	 * If not part of Flush, need to fsync now.  We assume this happens
@@ -854,13 +863,17 @@ SlruPhysicalWritePage(SlruCtl ctl, int pageno, int slotno, SlruFlush fdata)
 	 */
 	if (!fdata)
 	{
+		WAIT_START(WAIT_IO, WAIT_SLRU_FSYNC, pageno,
+			shared->lwlock_tranche_id, 0, 0, 0);
 		if (ctl->do_fsync && pg_fsync(fd))
 		{
+			WAIT_STOP();
 			slru_errcause = SLRU_FSYNC_FAILED;
 			slru_errno = errno;
 			CloseTransientFile(fd);
 			return false;
 		}
+		WAIT_STOP();
 
 		if (CloseTransientFile(fd))
 		{
