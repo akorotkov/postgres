@@ -71,8 +71,9 @@ enum WaitNetworkEvent
 	WAIT_NETWORK_EVENTS_COUNT
 } WaitNetworkEvent;
 
-#define WAIT_LWLOCKS_COUNT			(NUM_INDIVIDUAL_LWLOCKS + LWTRANCHE_FIRST_USER_DEFINED - 1)
-#define WAIT_LOCKS_COUNT			(LOCKTAG_LAST_TYPE + 1)
+#define WAIT_LWLOCKS_COUNT	(NUM_INDIVIDUAL_LWLOCKS + LWTRANCHE_FIRST_USER_DEFINED)
+#define WAIT_LOCKS_COUNT	(LOCKTAG_LAST_TYPE + 1)
+#define WAIT_PARAMS_COUNT	5
 
 typedef void (*WaitEventStartHook) (uint32 classid, uint32 eventid, uint32 p1, uint32 p2, uint32 p3, uint32 p4, uint32 p5);
 typedef void (*WaitEventStopHook) (void);

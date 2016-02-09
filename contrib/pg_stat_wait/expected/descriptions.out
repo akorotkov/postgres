@@ -1,0 +1,170 @@
+CREATE EXTENSION pg_stat_wait;
+SELECT * FROM pg_wait_event;
+ class_id | event_id |               name                
+----------+----------+-----------------------------------
+        0 |        0 | MemAllocation
+        1 |        0 | BufFreelistLock
+        1 |        1 | ShmemIndexLock
+        1 |        2 | OidGenLock
+        1 |        3 | XidGenLock
+        1 |        4 | ProcArrayLock
+        1 |        5 | SInvalReadLock
+        1 |        6 | SInvalWriteLock
+        1 |        7 | WALBufMappingLock
+        1 |        8 | WALWriteLock
+        1 |        9 | ControlFileLock
+        1 |       10 | CheckpointLock
+        1 |       11 | CLogControlLock
+        1 |       12 | SubtransControlLock
+        1 |       13 | MultiXactGenLock
+        1 |       14 | MultiXactOffsetControlLock
+        1 |       15 | MultiXactMemberControlLock
+        1 |       16 | RelCacheInitLock
+        1 |       17 | CheckpointerCommLock
+        1 |       18 | TwoPhaseStateLock
+        1 |       19 | TablespaceCreateLock
+        1 |       20 | BtreeVacuumLock
+        1 |       21 | AddinShmemInitLock
+        1 |       22 | AutovacuumLock
+        1 |       23 | AutovacuumScheduleLock
+        1 |       24 | SyncScanLock
+        1 |       25 | RelationMappingLock
+        1 |       26 | AsyncCtlLock
+        1 |       27 | AsyncQueueLock
+        1 |       28 | SerializableXactHashLock
+        1 |       29 | SerializableFinishedListLock
+        1 |       30 | SerializablePredicateLockListLock
+        1 |       31 | OldSerXidLock
+        1 |       32 | SyncRepLock
+        1 |       33 | BackgroundWorkerLock
+        1 |       34 | DynamicSharedMemoryControlLock
+        1 |       35 | AutoFileLock
+        1 |       36 | ReplicationSlotAllocationLock
+        1 |       37 | ReplicationSlotControlLock
+        1 |       38 | UserDefinedLocks
+        1 |       39 | WALInsertLocks
+        1 |       40 | CLogBufferLocks
+        1 |       41 | SubtransBufferLocks
+        1 |       42 | MultiXactOffsetBufferLocks
+        1 |       43 | MultiXactMemberBufferLocks
+        1 |       44 | BufferMgrLocks
+        1 |       45 | BufferLWLocks
+        1 |       46 | LockMgrLWLocks
+        1 |       47 | OldSerXidBufferLocks
+        1 |       48 | PredicateLWLocks
+        1 |       49 | ProcessLocks
+        1 |       50 | AsyncBufferLocks
+        2 |        0 | Relation
+        2 |        1 | RelationExtend
+        2 |        2 | Page
+        2 |        3 | Tuple
+        2 |        4 | Transaction
+        2 |        5 | VirtualTransaction
+        2 |        6 | Object
+        2 |        7 | Userlock
+        2 |        8 | Advisory
+        3 |        0 | SMGR_READ
+        3 |        1 | SMGR_WRITE
+        3 |        2 | SMGR_FSYNC
+        3 |        3 | XLOG_READ
+        3 |        4 | XLOG_WRITE
+        3 |        5 | XLOG_FSYNC
+        3 |        6 | SLRU_READ
+        3 |        7 | SLRU_WRITE
+        3 |        8 | SLRU_FSYNC
+        4 |        0 | Latch
+        5 |        0 | READ
+        5 |        1 | WRITE
+        5 |        2 | SYSLOG
+(74 rows)
+
+SELECT * FROM pg_wait_class;
+ class_id |  name   
+----------+---------
+        0 | CPU
+        1 | LWLocks
+        2 | Locks
+        3 | Storage
+        4 | Latch
+        5 | Network
+(6 rows)
+
+SELECT * FROM pg_wait_events;
+ class_id | class_name | event_id |            event_name             
+----------+------------+----------+-----------------------------------
+        0 | CPU        |        0 | MemAllocation
+        1 | LWLocks    |        0 | BufFreelistLock
+        1 | LWLocks    |        1 | ShmemIndexLock
+        1 | LWLocks    |        2 | OidGenLock
+        1 | LWLocks    |        3 | XidGenLock
+        1 | LWLocks    |        4 | ProcArrayLock
+        1 | LWLocks    |        5 | SInvalReadLock
+        1 | LWLocks    |        6 | SInvalWriteLock
+        1 | LWLocks    |        7 | WALBufMappingLock
+        1 | LWLocks    |        8 | WALWriteLock
+        1 | LWLocks    |        9 | ControlFileLock
+        1 | LWLocks    |       10 | CheckpointLock
+        1 | LWLocks    |       11 | CLogControlLock
+        1 | LWLocks    |       12 | SubtransControlLock
+        1 | LWLocks    |       13 | MultiXactGenLock
+        1 | LWLocks    |       14 | MultiXactOffsetControlLock
+        1 | LWLocks    |       15 | MultiXactMemberControlLock
+        1 | LWLocks    |       16 | RelCacheInitLock
+        1 | LWLocks    |       17 | CheckpointerCommLock
+        1 | LWLocks    |       18 | TwoPhaseStateLock
+        1 | LWLocks    |       19 | TablespaceCreateLock
+        1 | LWLocks    |       20 | BtreeVacuumLock
+        1 | LWLocks    |       21 | AddinShmemInitLock
+        1 | LWLocks    |       22 | AutovacuumLock
+        1 | LWLocks    |       23 | AutovacuumScheduleLock
+        1 | LWLocks    |       24 | SyncScanLock
+        1 | LWLocks    |       25 | RelationMappingLock
+        1 | LWLocks    |       26 | AsyncCtlLock
+        1 | LWLocks    |       27 | AsyncQueueLock
+        1 | LWLocks    |       28 | SerializableXactHashLock
+        1 | LWLocks    |       29 | SerializableFinishedListLock
+        1 | LWLocks    |       30 | SerializablePredicateLockListLock
+        1 | LWLocks    |       31 | OldSerXidLock
+        1 | LWLocks    |       32 | SyncRepLock
+        1 | LWLocks    |       33 | BackgroundWorkerLock
+        1 | LWLocks    |       34 | DynamicSharedMemoryControlLock
+        1 | LWLocks    |       35 | AutoFileLock
+        1 | LWLocks    |       36 | ReplicationSlotAllocationLock
+        1 | LWLocks    |       37 | ReplicationSlotControlLock
+        1 | LWLocks    |       38 | UserDefinedLocks
+        1 | LWLocks    |       39 | WALInsertLocks
+        1 | LWLocks    |       40 | CLogBufferLocks
+        1 | LWLocks    |       41 | SubtransBufferLocks
+        1 | LWLocks    |       42 | MultiXactOffsetBufferLocks
+        1 | LWLocks    |       43 | MultiXactMemberBufferLocks
+        1 | LWLocks    |       44 | BufferMgrLocks
+        1 | LWLocks    |       45 | BufferLWLocks
+        1 | LWLocks    |       46 | LockMgrLWLocks
+        1 | LWLocks    |       47 | OldSerXidBufferLocks
+        1 | LWLocks    |       48 | PredicateLWLocks
+        1 | LWLocks    |       49 | ProcessLocks
+        1 | LWLocks    |       50 | AsyncBufferLocks
+        2 | Locks      |        0 | Relation
+        2 | Locks      |        1 | RelationExtend
+        2 | Locks      |        2 | Page
+        2 | Locks      |        3 | Tuple
+        2 | Locks      |        4 | Transaction
+        2 | Locks      |        5 | VirtualTransaction
+        2 | Locks      |        6 | Object
+        2 | Locks      |        7 | Userlock
+        2 | Locks      |        8 | Advisory
+        3 | Storage    |        0 | SMGR_READ
+        3 | Storage    |        1 | SMGR_WRITE
+        3 | Storage    |        2 | SMGR_FSYNC
+        3 | Storage    |        3 | XLOG_READ
+        3 | Storage    |        4 | XLOG_WRITE
+        3 | Storage    |        5 | XLOG_FSYNC
+        3 | Storage    |        6 | SLRU_READ
+        3 | Storage    |        7 | SLRU_WRITE
+        3 | Storage    |        8 | SLRU_FSYNC
+        4 | Latch      |        0 | Latch
+        5 | Network    |        0 | READ
+        5 | Network    |        1 | WRITE
+        5 | Network    |        2 | SYSLOG
+(74 rows)
+
