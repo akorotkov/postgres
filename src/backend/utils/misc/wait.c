@@ -2,5 +2,5 @@
 
 #include "utils/wait.h"
 
-WaitEventStartHook	wait_event_start_hook;
-WaitEventStopHook	wait_event_stop_hook;
+wait_event_start_hook_type	wait_event_start_hook;
+wait_event_stop_hook_type	wait_event_stop_hook;

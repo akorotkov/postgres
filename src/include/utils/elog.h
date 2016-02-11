@@ -304,7 +304,7 @@ extern PGDLLIMPORT ErrorContextCallback *error_context_stack;
 		else \
 		{ \
 			PG_exception_stack = save_exception_stack; \
-			error_context_stack = save_context_stack
+			error_context_stack = save_context_stack \
 
 #define PG_END_TRY()  \
 		} \

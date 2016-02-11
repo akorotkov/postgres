@@ -160,9 +160,6 @@ NamedLWLockTranche *NamedLWLockTrancheArray = NULL;
 
 static bool lock_named_request_allowed = true;
 
-void LWLockReportStartWait(LWLock *lock);
-void LWLockReportStopWait(void);
-
 #ifdef LWLOCK_STATS
 typedef struct lwlock_stats_key
 {
@@ -712,7 +709,7 @@ LWLockInitialize(LWLock *lock, int tranche_id)
 	dlist_init(&lock->waiters);
 }
 
- /*
+/*
  * Report start of wait event for light-weight locks.
  *
  * This function will be used by all the light-weight lock calls which

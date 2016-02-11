@@ -1,7 +1,7 @@
 # contrib/pg_stat_wait/Makefile
 
 MODULE_big = pg_stat_wait
-OBJS = pg_stat_wait.o collector.o
+OBJS = pg_stat_wait.o collector.o descr.o
 
 EXTENSION = pg_stat_wait
 DATA = pg_stat_wait--1.0.sql

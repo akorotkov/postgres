@@ -821,6 +821,8 @@ ProcKill(int code, Datum arg)
 	/* Update shared estimate of spins_per_delay */
 	procglobal->spins_per_delay = update_spins_per_delay(procglobal->spins_per_delay);
 
+	proc->pid = 0;
+
 	SpinLockRelease(ProcStructLock);
 
 	/*

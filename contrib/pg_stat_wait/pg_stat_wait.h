@@ -4,6 +4,7 @@
 #include <postgres.h>
 
 #include "storage/proc.h"
+#include "storage/shm_mq.h"
 #include "utils/timestamp.h"
 #include "utils/wait.h"
 
@@ -11,6 +12,14 @@
 #define COLLECTOR_QUEUE_SIZE	16384
 #define HISTORY_TIME_MULTIPLIER	10
 #define HISTORY_COLUMNS_COUNT	(5 + WAIT_PARAMS_COUNT)
+
+typedef struct
+{
+	uint32		classid;
+	uint32		eventid;
+	uint32		params[WAIT_PARAMS_COUNT];
+	instr_time	start_time;
+} CurrentWaitEvent;
 
 typedef struct
 {
@@ -29,9 +38,9 @@ typedef struct
 
 typedef struct
 {
-	int			classId;
-	int			eventId;
-	int			params[WAIT_PARAMS_COUNT];
+	uint32		classid;
+	uint32		eventid;
+	uint32		params[WAIT_PARAMS_COUNT];
 	int			backendPid;
 	uint64		waitTime;
 
@@ -40,9 +49,7 @@ typedef struct
 
 typedef struct
 {
-	int				idx;
 	HistoryItem	   *state;
-	bool			done;
 	TimestampTz		ts;
 } WaitCurrentContext;
 
@@ -66,21 +73,21 @@ typedef struct
 	SHMRequest		request;
 } CollectorShmqHeader;
 
-extern PGDLLIMPORT char		   *WAIT_LOCK_NAMES[];
-extern PGDLLIMPORT char		   *WAIT_LWLOCK_NAMES[];
-extern PGDLLIMPORT char		   *WAIT_IO_NAMES[];
-extern PGDLLIMPORT char		   *WAIT_NETWORK_NAMES[];
-extern PGDLLIMPORT const int	WAIT_OFFSETS[];
-extern PGDLLIMPORT int			historySize;
-extern PGDLLIMPORT int			historyPeriod;
-extern PGDLLIMPORT bool			historySkipLatch;
 
 #define WAIT_TRACE_FN_LEN	(4096 + 1)
 
-extern Size CollectorShmemSize(void);
-extern CollectorShmqHeader *GetCollectorMem(bool init);
+/* pg_stat_wait.c */
+extern void check_shmem(void);
+extern CollectorShmqHeader *collector_hdr;
+extern CurrentWaitEvent	   *cur_wait_events;
+extern shm_mq			   *collector_mq;
+extern int					historySize;
+extern int					historyPeriod;
+extern bool					historySkipLatch;
+
+
 extern void RegisterWaitsCollector(void);
 extern void AllocHistory(History *, int);
-extern int GetCurrentWaitsState(PGPROC *, HistoryItem *, int);
+extern void ReadCurrentWait(PGPROC *proc, HistoryItem *item);
 
 #endif

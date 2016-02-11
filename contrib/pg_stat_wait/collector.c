@@ -20,70 +20,14 @@
 
 #include "pg_stat_wait.h"
 
-CollectorShmqHeader *hdr = NULL;
-
-static void *pgsw;
-shm_toc *toc;
-shm_mq *mq;
 static volatile sig_atomic_t shutdown_requested = false;
-
-int         historySize;
-int         historyPeriod;
-bool        historySkipLatch;
 
 static void handle_sigterm(SIGNAL_ARGS);
 static void collector_main(Datum main_arg);
 
 /*
- * Estimate shared memory space needed.
+ * Register background worker for collecting waits history.
  */
-Size
-CollectorShmemSize(void)
-{
-	shm_toc_estimator e;
-	Size size;
-
-	shm_toc_initialize_estimator(&e);
-	shm_toc_estimate_chunk(&e, sizeof(CollectorShmqHeader));
-	shm_toc_estimate_chunk(&e, (Size) COLLECTOR_QUEUE_SIZE);
-	shm_toc_estimate_keys(&e, 2);
-	size = shm_toc_estimate(&e);
-
-	return size;
-}
-
-CollectorShmqHeader *
-GetCollectorMem(bool init)
-{
-	bool found;
-	Size segsize = CollectorShmemSize();
-
-	pgsw = ShmemInitStruct("pg_stat_wait", segsize, &found);
-	if (!init && !found)
-	{
-		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
-						errmsg("A collector memory wasn't initialized yet")));
-	}
-
-	if (!found)
-	{
-		void *mq_mem;
-
-		toc = shm_toc_create(PG_STAT_WAIT_MAGIC, pgsw, segsize);
-		hdr = shm_toc_allocate(toc, sizeof(CollectorShmqHeader));
-		shm_toc_insert(toc, 0, hdr);
-
-		mq_mem = shm_toc_allocate(toc, COLLECTOR_QUEUE_SIZE);
-		shm_toc_insert(toc, 1, mq_mem);
-	}
-	else
-	{
-		toc = shm_toc_attach(PG_STAT_WAIT_MAGIC, pgsw);
-		hdr = shm_toc_lookup(toc, 0);
-	}
-	return hdr;
-}
-
 void
 RegisterWaitsCollector(void)
 {
@@ -110,33 +54,26 @@ AllocHistory(History *observations, int count)
 	observations->wraparound = false;
 }
 
-/* Read current wait information from proc, if readCurrent is true,
+/* 
+ * Read current wait information from proc, if readCurrent is true,
  * then it reads from currently going wait, and can be inconsistent
  */
-int
-GetCurrentWaitsState(PGPROC *proc, HistoryItem *item, int idx)
+void
+ReadCurrentWait(PGPROC *proc, HistoryItem *item)
 {
-	instr_time	currentTime;
-#ifdef NOT_USED
-	ProcWait	*wait;
+	CurrentWaitEvent   *wait;
+	instr_time			currentTime;
 
-	if (idx == -1)
-		return 0;
+	wait = &cur_wait_events[proc->pgprocno];
+
+	item->backendPid = proc->pid;
+	item->classid = wait->classid;
+	item->eventid = wait->eventid;
+	memcpy(item->params, wait->params, sizeof(item->params));
 
 	INSTR_TIME_SET_CURRENT(currentTime);
-	wait = &proc->waits.waitsBuf[idx];
-	item->backendPid = proc->pid;
-	item->classId = (int)wait->classId;
-	if (item->classId == 0)
-		return 0;
-
-	item->eventId = (int)wait->eventId;
-
-	INSTR_TIME_SUBTRACT(currentTime, wait->startTime);
+	INSTR_TIME_SUBTRACT(currentTime, wait->start_time);
 	item->waitTime = INSTR_TIME_GET_MICROSEC(currentTime);
-	memcpy(item->params, wait->params, sizeof(item->params));
-#endif
-	return 1;
 }
 
 static void
@@ -149,7 +86,9 @@ handle_sigterm(SIGNAL_ARGS)
 	errno = save_errno;
 }
 
-/* Circulation in history */
+/*
+ * Get next item of history with rotation.
+ */
 static HistoryItem *
 get_next_observation(History *observations)
 {
@@ -165,41 +104,41 @@ get_next_observation(History *observations)
 	return result;
 }
 
-/* Gets current waits from backends */
+/*
+ * Read current waits from backends and write them to history array.
+ */
 static void
 write_waits_history(History *observations, TimestampTz current_ts)
 {
 	int i;
 
-#ifdef NOT_USED
 	LWLockAcquire(ProcArrayLock, LW_SHARED);
-	for (i = 0; i < ProcGlobal->allProcCount; ++i)
+	for (i = 0; i < ProcGlobal->allProcCount; i++)
 	{
-		HistoryItem item, *observation;
-		PGPROC	*proc = &ProcGlobal->allProcs[i];
-		int stateOk = GetCurrentWaitsState(proc, &item, proc->waits.readIdx);
+		HistoryItem		item,
+					   *observation;
+		PGPROC		   *proc = &ProcGlobal->allProcs[i];
 
-		/* mark waits as read */
-		proc->waits.readIdx = -1;
+		ReadCurrentWait(proc, &item);
 
-		if (stateOk)
-		{
-			if (historySkipLatch && item.classId == WAIT_LATCH)
-				continue;
+		if (historySkipLatch && item.classid == WAIT_LATCH)
+			continue;
 
-			item.ts = current_ts;
-			observation = get_next_observation(observations);
-			*observation = item;
-		}
+		item.ts = current_ts;
+		observation = get_next_observation(observations);
+		*observation = item;
 	}
 	LWLockRelease(ProcArrayLock);
-#endif
 }
 
+/*
+ * Send waits history to shared memory queue.
+ */
 static void
 send_history(History *observations, shm_mq_handle *mqh)
 {
-	int	count, i;
+	int		count,
+			i;
 
 	if (observations->wraparound)
 		count = observations->count;
@@ -211,13 +150,15 @@ send_history(History *observations, shm_mq_handle *mqh)
 		shm_mq_send(mqh, sizeof(HistoryItem), &observations->items[i], false);
 }
 
+/*
+ * Main routine of wait history collector.
+ */
 static void
 collector_main(Datum main_arg)
 {
-	shm_mq	   *mq;
-	shm_mq_handle *mqh;
-	History observations;
-	MemoryContext old_context, collector_context;
+	History			observations;
+	MemoryContext	old_context,
+					collector_context;
 
 	/*
 	 * Establish signal handlers.
@@ -232,7 +173,7 @@ collector_main(Datum main_arg)
 	pqsignal(SIGTERM, handle_sigterm);
 	BackgroundWorkerUnblockSignals();
 
-	hdr->latch = &MyProc->procLatch;
+	collector_hdr->latch = &MyProc->procLatch;
 
 	CurrentResourceOwner = ResourceOwnerCreate(NULL, "pg_stat_wait collector");
 	collector_context = AllocSetContextCreate(TopMemoryContext,
@@ -246,8 +187,9 @@ collector_main(Datum main_arg)
 
 	while (1)
 	{
-		int rc;
-		TimestampTz current_ts;
+		int				rc;
+		TimestampTz		current_ts;
+		shm_mq_handle  *mqh;
 
 		ResetLatch(&MyProc->procLatch);
 		current_ts = GetCurrentTimestamp();
@@ -263,19 +205,18 @@ collector_main(Datum main_arg)
 		if (rc & WL_POSTMASTER_DEATH)
 			exit(1);
 
-		if (hdr->request == HISTORY_REQUEST)
+		if (collector_hdr->request == HISTORY_REQUEST)
 		{
-			hdr->request = NO_REQUEST;
+			collector_hdr->request = NO_REQUEST;
 
-			mq = (shm_mq *)shm_toc_lookup(toc, 1);
-			shm_mq_set_sender(mq, MyProc);
-			mqh = shm_mq_attach(mq, NULL, NULL);
+			shm_mq_set_sender(collector_mq, MyProc);
+			mqh = shm_mq_attach(collector_mq, NULL, NULL);
 			shm_mq_wait_for_attach(mqh);
 
-			if (shm_mq_get_receiver(mq) != NULL)
+			if (shm_mq_get_receiver(collector_mq) != NULL)
 				send_history(&observations, mqh);
 
-			shm_mq_detach(mq);
+			shm_mq_detach(collector_mq);
 		}
 	}
 

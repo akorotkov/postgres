@@ -1,15 +1,16 @@
 #include "postgres.h"
 #include "fmgr.h"
 #include "funcapi.h"
+#include "access/htup_details.h"
 #include "catalog/pg_type.h"
+#include "miscadmin.h"
+#include "pg_stat_wait.h"
 #include "port/atomics.h"
 #include "storage/spin.h"
 #include "storage/ipc.h"
+#include "storage/procarray.h"
 #include "storage/shm_mq.h"
 #include "storage/shm_toc.h"
-#include "access/htup_details.h"
-#include "pg_stat_wait.h"
-#include "miscadmin.h"
 #include "utils/guc.h"
 #include "utils/wait.h"
 
@@ -18,76 +19,169 @@ PG_MODULE_MAGIC;
 void		_PG_init(void);
 void		_PG_fini(void);
 
-extern shm_toc			   *toc;
+/* Global variables */
+bool					shmem_initialized = false;
+bool					waitsHistoryOn;
+int						historySize;
+int						historyPeriod;
+bool					historySkipLatch;
+shm_toc				   *toc = NULL;
+CollectorShmqHeader	   *collector_hdr = NULL;
+shm_mq				   *collector_mq = NULL;
+CurrentWaitEvent	   *cur_wait_events = NULL;
+
+static int maxProcs;
 
 static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
+static wait_event_start_hook_type prev_wait_event_start_hook = NULL;
+static wait_event_stop_hook_type prev_wait_event_stop_hook = NULL;
+
 static PGPROC * search_proc(int backendPid);
 static TupleDesc get_history_item_tupledesc();
 static HeapTuple get_history_item_tuple(HistoryItem *item, TupleDesc tuple_desc);
 
-static bool	WaitsHistoryOn;
 
-static const char *waitClassNames[] =
+/*
+ * Estimate amount of shared memory needed.
+ */
+static Size
+pgsw_shmem_size(void)
 {
-	"CPU",
-	"LWLocks",
-	"Locks",
-	"Storage",
-	"Latch",
-	"Network"
-};
+	shm_toc_estimator	e;
+	Size				size;
+	int					nkeys;
 
-static const char *cpuWaitNames[] =
-{
-	"MemAllocation"
-};
+	shm_toc_initialize_estimator(&e);
 
-static const char *ioWaitNames[] =
-{
-	"SMGR_READ",
-	"SMGR_WRITE",
-	"SMGR_FSYNC",
-	"SMGR_EXTEND",
-	"XLOG_READ",
-	"XLOG_WRITE",
-	"XLOG_FSYNC",
-	"SLRU_READ",
-	"SLRU_WRITE",
-	"SLRU_FSYNC"
-};
+	shm_toc_estimate_chunk(&e, sizeof(CurrentWaitEvent) * maxProcs);
+	nkeys = 1;
 
-static const char *networkWaitNames[] =
-{
-	"READ",
-	"WRITE",
-	"SYSLOG"
-};
+	if (waitsHistoryOn)
+	{
+		shm_toc_estimate_chunk(&e, sizeof(CollectorShmqHeader));
+		shm_toc_estimate_chunk(&e, (Size) COLLECTOR_QUEUE_SIZE);
+		nkeys += 2;
+	}
 
-/* Lock names. For monitoring purposes */
-static const char *lockWaitNames[] =
-{
-	"Relation",
-	"RelationExtend",
-	"Page",
-	"Tuple",
-	"Transaction",
-	"VirtualTransaction",
-	"Object",
-	"Userlock",
-	"Advisory"
-};
+	shm_toc_estimate_keys(&e, nkeys);
+	size = shm_toc_estimate(&e);
 
+	return size;
+}
 
+/*
+ * Distribute shared memory.
+ */
 static void
 pgsw_shmem_startup(void)
 {
+	bool	found;
+	Size	segsize = pgsw_shmem_size();
+	void   *pgsw;
 
-	if (WaitsHistoryOn)
+	pgsw = ShmemInitStruct("pg_stat_wait", segsize, &found);
+
+	if (!found)
 	{
-		if (prev_shmem_startup_hook)
-			prev_shmem_startup_hook();
+		toc = shm_toc_create(PG_STAT_WAIT_MAGIC, pgsw, segsize);
 
-		GetCollectorMem(true);
+		cur_wait_events = shm_toc_allocate(toc, sizeof(CurrentWaitEvent) * maxProcs);
+		shm_toc_insert(toc, 0, cur_wait_events);
+
+		if (waitsHistoryOn)
+		{
+			collector_hdr = shm_toc_allocate(toc, sizeof(CollectorShmqHeader));
+			shm_toc_insert(toc, 1, collector_hdr);
+			collector_mq = shm_toc_allocate(toc, COLLECTOR_QUEUE_SIZE);
+			shm_toc_insert(toc, 2, collector_mq);
+		}
+	}
+	else
+	{
+		toc = shm_toc_attach(PG_STAT_WAIT_MAGIC, pgsw);
+
+		cur_wait_events = shm_toc_lookup(toc, 0);
+
+		if (waitsHistoryOn)
+		{
+			collector_hdr = shm_toc_lookup(toc, 1);
+			collector_mq = shm_toc_lookup(toc, 2);
+		}
+	}
+
+	shmem_initialized = true;
+
+	if (prev_shmem_startup_hook)
+		prev_shmem_startup_hook();
+}
+
+/*
+ * Wait event start hook: put wait information to the shared memory.
+ */
+static void
+pgsw_wait_event_start_hook(uint32 classid, uint32 eventid,
+						   uint32 p1, uint32 p2, uint32 p3, uint32 p4, uint32 p5)
+{
+	CurrentWaitEvent *event;
+
+	if (!shmem_initialized || !MyProc)
+		return;
+
+	event = &cur_wait_events[MyProc->pgprocno];
+
+	event->classid = classid;
+	event->eventid = eventid;
+	event->params[0] = 0;
+	event->params[1] = 0;
+	event->params[2] = 0;
+	event->params[3] = 0;
+	event->params[4] = 0;
+	INSTR_TIME_SET_CURRENT(event->start_time);
+
+	if (prev_wait_event_start_hook)
+		prev_wait_event_start_hook(classid, eventid, p1, p2, p3, p4, p5);
+}
+
+/*
+ * Wait event stop hook: clear wait information in the shared memory.
+ */
+static void
+pgsw_wait_event_stop_hook(void)
+{
+	CurrentWaitEvent *event;
+
+	if (!shmem_initialized || !MyProc)
+		return;
+
+	event = &cur_wait_events[MyProc->pgprocno];
+
+	event->classid = WAIT_CPU;
+	event->eventid = WAIT_CPU_BUSY;
+	event->params[0] = 0;
+	event->params[1] = 0;
+	event->params[2] = 0;
+	event->params[3] = 0;
+	event->params[4] = 0;
+	INSTR_TIME_SET_CURRENT(event->start_time);
+
+	if (prev_wait_event_stop_hook)
+		prev_wait_event_stop_hook();
+}
+
+/*
+ * Check shared memory is initialized. Report an error otherwise.
+ */
+void
+check_shmem(void)
+{
+	if (!shmem_initialized)
+	{
+		elog(LOG, "%d", MyProcPid);
+
+		pg_usleep(10*1000*1000);
+
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+						errmsg("pg_stat_wait shared memory wasn't initialized yet")));
 	}
 }
 
@@ -101,7 +195,7 @@ _PG_init(void)
 		return;
 
 	DefineCustomBoolVariable("pg_stat_wait.history", "Collect waits history",
-			NULL, &WaitsHistoryOn, false, PGC_POSTMASTER, 0, NULL, NULL, NULL);
+			NULL, &waitsHistoryOn, false, PGC_POSTMASTER, 0, NULL, NULL, NULL);
 
 	DefineCustomIntVariable("pg_stat_wait.history_size",
 			"Sets size of waits history.", NULL,
@@ -117,22 +211,30 @@ _PG_init(void)
 			"Skip latch events in waits history", NULL,
 			&historySkipLatch, false, PGC_POSTMASTER, 0, NULL, NULL, NULL);
 
-	if (WaitsHistoryOn)
-	{
-		/*
-		 * Request additional shared resources.  (These are no-ops if we're not in
-		 * the postmaster process.)  We'll allocate or attach to the shared
-		 * resources in pgss_shmem_startup().
-		 */
-		RequestAddinShmemSpace(CollectorShmemSize());
+	/* Calculate maximem number of processes */
+	maxProcs = MaxBackends + NUM_AUXILIARY_PROCS;
+
+	/*
+	 * Request additional shared resources.  (These are no-ops if we're not in
+	 * the postmaster process.)  We'll allocate or attach to the shared
+	 * resources in pgsw_shmem_startup().
+	 */
+	RequestAddinShmemSpace(pgsw_shmem_size());
+
+	if (waitsHistoryOn)
 		RegisterWaitsCollector();
 
-		/*
-		 * Install hooks.
-		 */
-		prev_shmem_startup_hook = shmem_startup_hook;
-		shmem_startup_hook = pgsw_shmem_startup;
-	}
+	/*
+	 * Install hooks.
+	 */
+	prev_shmem_startup_hook = shmem_startup_hook;
+	shmem_startup_hook = pgsw_shmem_startup;
+
+	prev_wait_event_start_hook = wait_event_start_hook;
+	wait_event_start_hook = pgsw_wait_event_start_hook;
+
+	prev_wait_event_stop_hook = wait_event_stop_hook;
+	wait_event_stop_hook = pgsw_wait_event_stop_hook;
 }
 
 /*
@@ -143,180 +245,6 @@ _PG_fini(void)
 {
 	/* Uninstall hooks. */
 	shmem_startup_hook = prev_shmem_startup_hook;
-}
-
-PG_FUNCTION_INFO_V1(pg_wait_class_list);
-Datum
-pg_wait_class_list(PG_FUNCTION_ARGS)
-{
-	FuncCallContext *funcctx;
-
-	if (SRF_IS_FIRSTCALL())
-	{
-		MemoryContext		oldcontext;
-		TupleDesc			tupdesc;
-
-		funcctx = SRF_FIRSTCALL_INIT();
-		funcctx->max_calls = WAIT_CLASSES_COUNT;
-
-		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
-
-		tupdesc = CreateTemplateTupleDesc(2, false);
-		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "class_id",
-						   INT4OID, -1, 0);
-		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "name",
-						   CSTRINGOID, -1, 0);
-
-		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
-		MemoryContextSwitchTo(oldcontext);
-	}
-
-	/* stuff done on every call of the function */
-	funcctx = SRF_PERCALL_SETUP();
-
-	if (funcctx->call_cntr < funcctx->max_calls)
-	{
-		/* for each row */
-		Datum		values[2];
-		bool		nulls[2];
-		HeapTuple	tuple;
-		int idx;
-
-		MemSet(values, 0, sizeof(values));
-		MemSet(nulls, 0, sizeof(nulls));
-
-		idx = funcctx->call_cntr;
-		values[0] = Int32GetDatum(idx);
-		values[1] = CStringGetDatum(waitClassNames[idx]);
-
-		tuple = heap_form_tuple(funcctx->tuple_desc, values, nulls);
-		SRF_RETURN_NEXT(funcctx, HeapTupleGetDatum(tuple));
-	}
-	else
-	{
-		/* nothing left */
-		SRF_RETURN_DONE(funcctx);
-	}
-}
-
-PG_FUNCTION_INFO_V1(pg_wait_event_list);
-Datum
-pg_wait_event_list(PG_FUNCTION_ARGS)
-{
-	FuncCallContext *funcctx;
-	WaitEventContext *ctx;
-
-	if (SRF_IS_FIRSTCALL())
-	{
-		MemoryContext		oldcontext;
-		TupleDesc			tupdesc;
-
-		funcctx = SRF_FIRSTCALL_INIT();
-		/* 4 arrays length and WAIT_LATCH + WAIT_CPU */
-		funcctx->max_calls = 2 + WAIT_LWLOCKS_COUNT + WAIT_LOCKS_COUNT +
-								 WAIT_IO_EVENTS_COUNT + WAIT_NETWORK_EVENTS_COUNT;
-
-		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
-
-		tupdesc = CreateTemplateTupleDesc(3, false);
-		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "class_id",
-						   INT4OID, -1, 0);
-		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "event_id",
-						   INT4OID, -1, 0);
-		TupleDescInitEntry(tupdesc, (AttrNumber) 3, "name",
-						   CSTRINGOID, -1, 0);
-
-		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
-		funcctx->user_fctx = palloc0(sizeof(WaitEventContext));
-
-		MemoryContextSwitchTo(oldcontext);
-	}
-
-	/* stuff done on every call of the function */
-	funcctx = SRF_PERCALL_SETUP();
-	ctx = (WaitEventContext *)funcctx->user_fctx;
-
-	if (ctx->class_idx < WAIT_CLASSES_COUNT)
-	{
-		/* for each row */
-		Datum		values[3];
-		bool		nulls[3];
-		HeapTuple	tuple;
-
-		MemSet(values, 0, sizeof(values));
-		MemSet(nulls, 0, sizeof(nulls));
-
-		values[0] = Int32GetDatum(ctx->class_idx);
-		values[1] = Int32GetDatum(ctx->event_idx);
-
-		if (ctx->class_idx == WAIT_CPU)
-		{
-			values[2] = CStringGetDatum(cpuWaitNames[ctx->event_idx]);
-			ctx->event_idx++;
-			if (ctx->event_idx > WAIT_CPU_EVENTS_COUNT)
-			{
-				ctx->event_idx = 0;
-				ctx->class_idx++;
-			}
-		}
-		else if (ctx->class_idx == WAIT_LWLOCK)
-		{
-			if (ctx->event_idx < NUM_INDIVIDUAL_LWLOCKS)
-				values[2] = CStringGetDatum(MainLWLockNames[ctx->event_idx]);
-			else
-				values[2] = CStringGetDatum(NamedLWLockTrancheArray[ctx->event_idx - NUM_INDIVIDUAL_LWLOCKS].lwLockTranche.name);
-			ctx->event_idx++;
-			if (ctx->event_idx > WAIT_LWLOCKS_COUNT)
-			{
-				ctx->event_idx = 0;
-				ctx->class_idx++;
-			}
-		}
-		else if (ctx->class_idx == WAIT_LOCK)
-		{
-			values[2] = CStringGetDatum(lockWaitNames[ctx->event_idx]);
-			ctx->event_idx++;
-			if (ctx->event_idx > WAIT_LOCKS_COUNT)
-			{
-				ctx->event_idx = 0;
-				ctx->class_idx++;
-			}
-		}
-		else if (ctx->class_idx == WAIT_IO)
-		{
-			values[2] = CStringGetDatum(ioWaitNames[ctx->event_idx]);
-			ctx->event_idx++;
-			if (ctx->event_idx > WAIT_IO_EVENTS_COUNT)
-			{
-				ctx->event_idx = 0;
-				ctx->class_idx++;
-			}
-		}
-		else if (ctx->class_idx == WAIT_LATCH)
-		{
-			values[2] = CStringGetDatum("Latch");
-			ctx->event_idx = 0;
-			ctx->class_idx++;
-		}
-		else if (ctx->class_idx == WAIT_NETWORK)
-		{
-			values[2] = CStringGetDatum(networkWaitNames[ctx->event_idx]);
-			ctx->event_idx++;
-			if (ctx->event_idx > WAIT_NETWORK_EVENTS_COUNT)
-			{
-				ctx->event_idx = 0;
-				ctx->class_idx++;
-			}
-		}
-
-		tuple = heap_form_tuple(funcctx->tuple_desc, values, nulls);
-		SRF_RETURN_NEXT(funcctx, HeapTupleGetDatum(tuple));
-	}
-	else
-	{
-		/* nothing left */
-		SRF_RETURN_DONE(funcctx);
-	}
 }
 
 static TupleDesc
@@ -336,7 +264,7 @@ get_history_item_tupledesc()
 	TupleDescInitEntry(tupdesc, (AttrNumber) 5, "wait_time",
 					   INT8OID, -1, 0);
 
-	for (i=0; i < WAIT_PARAMS_COUNT; i++)
+	for (i = 0; i < WAIT_PARAMS_COUNT; i++)
 	{
 		TupleDescInitEntry(tupdesc, (AttrNumber) (6 + i), "p",
 						   INT4OID, -1, 0);
@@ -359,8 +287,8 @@ get_history_item_tuple(HistoryItem *item, TupleDesc tuple_desc)
 	/* Values available to all callers */
 	values[0] = Int32GetDatum(item->backendPid);
 	values[1] = TimestampTzGetDatum(item->ts);
-	values[2] = Int32GetDatum(item->classId);
-	values[3] = Int32GetDatum(item->eventId);
+	values[2] = Int32GetDatum(item->classid);
+	values[3] = Int32GetDatum(item->eventid);
 	values[4] = Int64GetDatum(item->waitTime);
 
 	for (i=0; i < WAIT_PARAMS_COUNT; i++)
@@ -390,25 +318,45 @@ pg_stat_wait_get_current(PG_FUNCTION_ARGS)
 		params->ts = GetCurrentTimestamp();
 
 		funcctx->user_fctx = params;
-		funcctx->max_calls = ProcGlobal->allProcCount;
 		funcctx->tuple_desc = get_history_item_tupledesc();
 
-/*		if (!PG_ARGISNULL(0))
-		{
-			HistoryItem item;
-			PGPROC *proc = search_proc(PG_GETARG_UINT32(0));
-			int stateOk = GetCurrentWaitsState(proc, &item,
-				proc->waits.writeIdx);
+		LWLockAcquire(ProcArrayLock, LW_SHARED);
 
-			if (stateOk)
+		if (!PG_ARGISNULL(0))
+		{
+			HistoryItem		item;
+			PGPROC		   *proc;
+
+			proc = search_proc(PG_GETARG_UINT32(0));
+			ReadCurrentWait(proc, &item);
+			params->state = (HistoryItem *)palloc0(sizeof(HistoryItem));
+			funcctx->max_calls = 1;
+			*params->state = item;
+		}
+		else
+		{
+			int					procCount = ProcGlobal->allProcCount,
+								i,
+								j = 0;
+			Timestamp			currentTs = GetCurrentTimestamp();
+
+			params->state = (HistoryItem *) palloc0(sizeof(HistoryItem) * procCount);
+			for (i = 0; i < procCount; i++)
 			{
-				params->state = (HistoryItem *)palloc0(sizeof(HistoryItem));
-				funcctx->max_calls = 1;
-				*params->state = item;
+				PGPROC *proc = &ProcGlobal->allProcs[i];
+
+				elog(NOTICE, "%d %d", proc->pid, proc->pgprocno);
+				if (proc != NULL && proc->pid != 0)
+				{
+					ReadCurrentWait(proc, &params->state[j]);
+					params->state[j].ts = currentTs;
+					j++;
+				}
 			}
-			else
-				params->done = true;
-		}*/
+			funcctx->max_calls = j;
+		}
+
+		LWLockRelease(ProcArrayLock);
 
 		MemoryContextSwitchTo(oldcontext);
 	}
@@ -418,63 +366,18 @@ pg_stat_wait_get_current(PG_FUNCTION_ARGS)
 	params = (WaitCurrentContext *)funcctx->user_fctx;
 	currentState = NULL;
 
-	if (!params->done)
-	{
-		if (params->state != NULL)
-		{
-			currentState = params->state;
-			params->done = true;
-			params->state = NULL;
-		}
-		else
-		{
-			while (funcctx->call_cntr <= funcctx->max_calls)
-			{
-				PGPROC *proc;
-				HistoryItem item;
-
-				if (funcctx->call_cntr == funcctx->max_calls
-					|| params->idx >= ProcGlobal->allProcCount)
-				{
-					params->done = true;
-					break;
-				}
-
-#ifdef NOT_USED
-				LWLockAcquire(ProcArrayLock, LW_SHARED);
-				proc = &ProcGlobal->allProcs[params->idx];
-				if (proc != NULL && proc->pid)
-				{
-					int stateOk = GetCurrentWaitsState(proc, &item,
-						proc->waits.writeIdx);
-					if (stateOk)
-					{
-						currentState = &item;
-						LWLockRelease(ProcArrayLock);
-						params->idx++;
-						break;
-					}
-				}
-
-				LWLockRelease(ProcArrayLock);
-#endif
-				params->idx++;
-			}
-		}
-	}
-
-	if (currentState)
+	if (funcctx->call_cntr < funcctx->max_calls)
 	{
 		HeapTuple tuple;
 
-		currentState->ts = params->ts;
-		tuple = get_history_item_tuple(currentState, funcctx->tuple_desc);
+		tuple = get_history_item_tuple(&params->state[funcctx->call_cntr],
+									   funcctx->tuple_desc);
 		SRF_RETURN_NEXT(funcctx, HeapTupleGetDatum(tuple));
 	}
-	else if (params->done)
+	else
+	{
 		SRF_RETURN_DONE(funcctx);
-
-	PG_RETURN_VOID();
+	}
 }
 
 PG_FUNCTION_INFO_V1(pg_stat_wait_get_profile);
@@ -611,8 +514,8 @@ PG_FUNCTION_INFO_V1(pg_stat_wait_reset_profile);
 Datum
 pg_stat_wait_reset_profile(PG_FUNCTION_ARGS)
 {
-	int i, j;
 #ifdef NOT_USED
+	int i, j;
 	BackendWaitCells *cells = (BackendWaitCells *)((char *)WaitShmem
 			+ sizeof(int) +  /* counter */
 			+ MAXALIGN(sizeof(slock_t))); /* lock */
@@ -685,20 +588,19 @@ pg_stat_wait_get_history(PG_FUNCTION_ARGS)
 {
 	History				*observations;
 	FuncCallContext		*funcctx;
-	CollectorShmqHeader	*hdr;
 
-	if (!WaitsHistoryOn)
+	check_shmem();
+
+	if (!waitsHistoryOn)
 		ereport(ERROR, (errcode(ERRCODE_CONFIG_FILE_ERROR),
 						errmsg("Waits history turned off")));
 
-	hdr = GetCollectorMem(false);
-
 	if (SRF_IS_FIRSTCALL())
 	{
-		shm_mq	   *mq;
-		shm_mq_handle *mqh;
-		LOCKTAG		tag;
-		MemoryContext		oldcontext;
+		MemoryContext	oldcontext;
+		LOCKTAG			tag;
+		shm_mq		   *mq;
+		shm_mq_handle  *mqh;
 
 		funcctx = SRF_FIRSTCALL_INIT();
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
@@ -706,10 +608,10 @@ pg_stat_wait_get_history(PG_FUNCTION_ARGS)
 		initLockTag(&tag);
 		LockAcquire(&tag, ExclusiveLock, false, false);
 
-		mq = shm_mq_create(shm_toc_lookup(toc, 1), COLLECTOR_QUEUE_SIZE);
-		hdr->request = HISTORY_REQUEST;
+		mq = shm_mq_create(collector_mq, COLLECTOR_QUEUE_SIZE);
+		collector_hdr->request = HISTORY_REQUEST;
 
-		SetLatch(hdr->latch);
+		SetLatch(collector_hdr->latch);
 
 		shm_mq_set_receiver(mq, MyProc);
 		mqh = shm_mq_attach(mq, NULL, NULL);
@@ -749,27 +651,28 @@ pg_stat_wait_get_history(PG_FUNCTION_ARGS)
 	PG_RETURN_VOID();
 }
 
+/*
+ * Find PGPROC entry responsible for given pid.
+ */
 static PGPROC *
-search_proc(int backendPid)
+search_proc(int pid)
 {
 	int i;
-	if (backendPid == 0)
+
+	if (pid == 0)
 		return MyProc;
 
-	LWLockAcquire(ProcArrayLock, LW_SHARED);
-	for (i = 0; i < ProcGlobal->allProcCount; ++i)
+	for (i = 0; i < ProcGlobal->allProcCount; i++)
 	{
 		PGPROC	*proc = &ProcGlobal->allProcs[i];
-		if (proc->pid && proc->pid == backendPid)
+		if (proc->pid && proc->pid == pid)
 		{
-			LWLockRelease(ProcArrayLock);
 			return proc;
 		}
 	}
 
-	LWLockRelease(ProcArrayLock);
 	ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
-				errmsg("backend with pid=%d not found", backendPid)));
+					errmsg("backend with pid=%d not found", pid)));
 	return NULL;
 }
 
@@ -777,6 +680,7 @@ PG_FUNCTION_INFO_V1(pg_start_trace);
 Datum
 pg_start_trace(PG_FUNCTION_ARGS)
 {
+#ifdef NOT_USED
 	PGPROC *proc;
 	char *filename = PG_GETARG_CSTRING(1);
 
@@ -788,7 +692,6 @@ pg_start_trace(PG_FUNCTION_ARGS)
 		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
 					errmsg("path must be absolute")));
 
-#ifdef NOT_USED
 	proc = NULL;
 	if (PG_ARGISNULL(0))
 		proc = MyProc;

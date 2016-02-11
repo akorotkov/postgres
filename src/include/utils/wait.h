@@ -41,7 +41,8 @@ enum WaitClass
 
 enum WaitCPUEvent
 {
-	WAIT_MALLOC = 0,
+	WAIT_CPU_BUSY = 0,
+	WAIT_MALLOC = 1,
 	/* Last item as count */
 	WAIT_CPU_EVENTS_COUNT
 } WaitCPUEvent;
@@ -71,15 +72,15 @@ enum WaitNetworkEvent
 	WAIT_NETWORK_EVENTS_COUNT
 } WaitNetworkEvent;
 
-#define WAIT_LWLOCKS_COUNT	(NUM_INDIVIDUAL_LWLOCKS + LWTRANCHE_FIRST_USER_DEFINED)
+#define WAIT_LWLOCKS_COUNT	(NUM_INDIVIDUAL_LWLOCKS + LWTRANCHE_FIRST_USER_DEFINED - 1)
 #define WAIT_LOCKS_COUNT	(LOCKTAG_LAST_TYPE + 1)
 #define WAIT_PARAMS_COUNT	5
 
-typedef void (*WaitEventStartHook) (uint32 classid, uint32 eventid, uint32 p1, uint32 p2, uint32 p3, uint32 p4, uint32 p5);
-typedef void (*WaitEventStopHook) (void);
+typedef void (*wait_event_start_hook_type) (uint32 classid, uint32 eventid, uint32 p1, uint32 p2, uint32 p3, uint32 p4, uint32 p5);
+typedef void (*wait_event_stop_hook_type) (void);
 
-extern WaitEventStartHook wait_event_start_hook;
-extern WaitEventStopHook wait_event_stop_hook;
+extern wait_event_start_hook_type wait_event_start_hook;
+extern wait_event_stop_hook_type wait_event_stop_hook;
 
 #define WAIT_START(classId, eventId, p1, p2, p3, p4, p5) \
 	do { \
