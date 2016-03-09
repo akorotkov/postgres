@@ -15,11 +15,16 @@
 
 typedef struct
 {
-	uint32		classid;
-	uint32		eventid;
+	uint32		classeventid;
 	uint32		params[WAIT_PARAMS_COUNT];
 	instr_time	start_time;
 } CurrentWaitEvent;
+
+typedef struct
+{
+	uint32				curidx;
+	CurrentWaitEvent	data[2];
+} CurrentWaitEventWrap;
 
 typedef struct
 {
@@ -79,7 +84,7 @@ typedef struct
 /* pg_stat_wait.c */
 extern void check_shmem(void);
 extern CollectorShmqHeader *collector_hdr;
-extern CurrentWaitEvent	   *cur_wait_events;
+extern CurrentWaitEventWrap *cur_wait_events;
 extern shm_mq			   *collector_mq;
 extern int					historySize;
 extern int					historyPeriod;

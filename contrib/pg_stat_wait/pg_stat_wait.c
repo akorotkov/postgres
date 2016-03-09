@@ -28,7 +28,7 @@ bool					historySkipLatch;
 shm_toc				   *toc = NULL;
 CollectorShmqHeader	   *collector_hdr = NULL;
 shm_mq				   *collector_mq = NULL;
-CurrentWaitEvent	   *cur_wait_events = NULL;
+CurrentWaitEventWrap   *cur_wait_events = NULL;
 
 static int maxProcs;
 
@@ -53,7 +53,7 @@ pgsw_shmem_size(void)
 
 	shm_toc_initialize_estimator(&e);
 
-	shm_toc_estimate_chunk(&e, sizeof(CurrentWaitEvent) * maxProcs);
+	shm_toc_estimate_chunk(&e, sizeof(CurrentWaitEventWrap) * maxProcs);
 	nkeys = 1;
 
 	if (waitsHistoryOn)
@@ -85,7 +85,7 @@ pgsw_shmem_startup(void)
 	{
 		toc = shm_toc_create(PG_STAT_WAIT_MAGIC, pgsw, segsize);
 
-		cur_wait_events = shm_toc_allocate(toc, sizeof(CurrentWaitEvent) * maxProcs);
+		cur_wait_events = shm_toc_allocate(toc, sizeof(CurrentWaitEventWrap) * maxProcs);
 		shm_toc_insert(toc, 0, cur_wait_events);
 
 		if (waitsHistoryOn)
@@ -122,21 +122,25 @@ static void
 pgsw_wait_event_start_hook(uint32 classid, uint32 eventid,
 						   uint32 p1, uint32 p2, uint32 p3, uint32 p4, uint32 p5)
 {
-	CurrentWaitEvent *event;
+	CurrentWaitEventWrap   *wrap;
+	CurrentWaitEvent	   *event;
 
 	if (!shmem_initialized || !MyProc)
 		return;
 
-	event = &cur_wait_events[MyProc->pgprocno];
+	wrap = &cur_wait_events[MyProc->pgprocno];
+	event = &wrap->data[(wrap->curidx + 1) % 2];
 
-	event->classid = classid;
-	event->eventid = eventid;
-	event->params[0] = 0;
-	event->params[1] = 0;
-	event->params[2] = 0;
-	event->params[3] = 0;
-	event->params[4] = 0;
+	event->classeventid = (classid << 16) | eventid;
+	event->params[0] = p1;
+	event->params[1] = p2;
+	event->params[2] = p3;
+	event->params[3] = p4;
+	event->params[4] = p5;
 	INSTR_TIME_SET_CURRENT(event->start_time);
+
+	pg_write_barrier();
+	wrap->curidx++;
 
 	if (prev_wait_event_start_hook)
 		prev_wait_event_start_hook(classid, eventid, p1, p2, p3, p4, p5);
@@ -148,21 +152,25 @@ pgsw_wait_event_start_hook(uint32 classid, uint32 eventid,
 static void
 pgsw_wait_event_stop_hook(void)
 {
-	CurrentWaitEvent *event;
+	CurrentWaitEventWrap   *wrap;
+	CurrentWaitEvent	   *event;
 
 	if (!shmem_initialized || !MyProc)
 		return;
 
-	event = &cur_wait_events[MyProc->pgprocno];
+	wrap = &cur_wait_events[MyProc->pgprocno];
+	event = &wrap->data[(wrap->curidx + 1) % 2];
 
-	event->classid = WAIT_CPU;
-	event->eventid = WAIT_CPU_BUSY;
+	event->classeventid = (WAIT_CPU << 16) | WAIT_CPU_BUSY;
 	event->params[0] = 0;
 	event->params[1] = 0;
 	event->params[2] = 0;
 	event->params[3] = 0;
 	event->params[4] = 0;
 	INSTR_TIME_SET_CURRENT(event->start_time);
+
+	pg_write_barrier();
+	wrap->curidx++;
 
 	if (prev_wait_event_stop_hook)
 		prev_wait_event_stop_hook();

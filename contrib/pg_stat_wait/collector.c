@@ -61,18 +61,35 @@ AllocHistory(History *observations, int count)
 void
 ReadCurrentWait(PGPROC *proc, HistoryItem *item)
 {
-	CurrentWaitEvent   *wait;
-	instr_time			currentTime;
+	instr_time startTime, currentTime;
 
-	wait = &cur_wait_events[proc->pgprocno];
+	while (true)
+	{
+		CurrentWaitEventWrap   *wrap;
+		CurrentWaitEvent	   *event;
+		uint32					previdx;
 
-	item->backendPid = proc->pid;
-	item->classid = wait->classid;
-	item->eventid = wait->eventid;
-	memcpy(item->params, wait->params, sizeof(item->params));
+
+		wrap = &cur_wait_events[proc->pgprocno];
+		previdx = wrap->curidx;
+		event = &wrap->data[(previdx + 1) % 2];
+
+		pg_read_barrier();
+
+		item->backendPid = proc->pid;
+		item->classid = event->classeventid >> 16;
+		item->eventid = event->classeventid & 0xFFFF;
+		memcpy(item->params, event->params, sizeof(event->params));
+		startTime = event->start_time;
+
+		pg_read_barrier();
+
+		if (wrap->curidx == previdx)
+			break;
+	}
 
 	INSTR_TIME_SET_CURRENT(currentTime);
-	INSTR_TIME_SUBTRACT(currentTime, wait->start_time);
+	INSTR_TIME_SUBTRACT(currentTime, startTime);
 	item->waitTime = INSTR_TIME_GET_MICROSEC(currentTime);
 }
 
