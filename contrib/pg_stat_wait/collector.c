@@ -61,14 +61,13 @@ AllocHistory(History *observations, int count)
 void
 ReadCurrentWait(PGPROC *proc, HistoryItem *item)
 {
+	CurrentWaitEvent	   *event;
 	instr_time startTime, currentTime;
+	uint32					previdx;
 
 	while (true)
 	{
 		CurrentWaitEventWrap   *wrap;
-		CurrentWaitEvent	   *event;
-		uint32					previdx;
-
 
 		wrap = &cur_wait_events[proc->pgprocno];
 		previdx = wrap->curidx;
@@ -137,6 +136,9 @@ write_waits_history(History *observations, TimestampTz current_ts)
 		PGPROC		   *proc = &ProcGlobal->allProcs[i];
 
 		ReadCurrentWait(proc, &item);
+
+		if (proc->pid == 0)
+			continue;
 
 		if (historySkipLatch && item.classid == WAIT_LATCH)
 			continue;

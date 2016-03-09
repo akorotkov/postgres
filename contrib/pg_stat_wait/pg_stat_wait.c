@@ -6,6 +6,7 @@
 #include "miscadmin.h"
 #include "pg_stat_wait.h"
 #include "port/atomics.h"
+#include "postmaster/autovacuum.h"
 #include "storage/spin.h"
 #include "storage/ipc.h"
 #include "storage/procarray.h"
@@ -69,6 +70,24 @@ pgsw_shmem_size(void)
 	return size;
 }
 
+static void
+init_current_wait_event()
+{
+	int			i;
+	instr_time	t;
+
+	INSTR_TIME_SET_CURRENT(t);
+	for (i = 0; i < maxProcs; i++)
+	{
+		CurrentWaitEventWrap   *wrap = &cur_wait_events[i];
+
+		memset(wrap, 0, sizeof(*wrap));
+		wrap->data[0].start_time = t;
+		wrap->data[1].start_time = t;
+	}
+}
+
+
 /*
  * Distribute shared memory.
  */
@@ -87,6 +106,7 @@ pgsw_shmem_startup(void)
 
 		cur_wait_events = shm_toc_allocate(toc, sizeof(CurrentWaitEventWrap) * maxProcs);
 		shm_toc_insert(toc, 0, cur_wait_events);
+		init_current_wait_event();
 
 		if (waitsHistoryOn)
 		{
@@ -220,7 +240,8 @@ _PG_init(void)
 			&historySkipLatch, false, PGC_POSTMASTER, 0, NULL, NULL, NULL);
 
 	/* Calculate maximem number of processes */
-	maxProcs = MaxBackends + NUM_AUXILIARY_PROCS;
+	maxProcs = MaxConnections + autovacuum_max_workers + 1 +
+			   max_worker_processes + NUM_AUXILIARY_PROCS;
 
 	/*
 	 * Request additional shared resources.  (These are no-ops if we're not in
@@ -353,7 +374,6 @@ pg_stat_wait_get_current(PG_FUNCTION_ARGS)
 			{
 				PGPROC *proc = &ProcGlobal->allProcs[i];
 
-				elog(NOTICE, "%d %d", proc->pid, proc->pgprocno);
 				if (proc != NULL && proc->pid != 0)
 				{
 					ReadCurrentWait(proc, &params->state[j]);
