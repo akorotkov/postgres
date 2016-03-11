@@ -1,3 +1,12 @@
+/*
+ * pg_stat_wait.h
+ *		Headers for pg_stat_wait extension.
+ *
+ * Copyright (c) 2015-2016, Postgres Professional
+ *
+ * IDENTIFICATION
+ *	  contrib/pg_stat_wait/pg_stat_waits.h
+ */
 #ifndef __PG_STAT_WAIT_H__
 #define __PG_STAT_WAIT_H__
 
@@ -89,7 +98,13 @@ typedef struct
 						   WAIT_LOCKS_COUNT + WAIT_IO_EVENTS_COUNT + \
 						   WAIT_NETWORK_EVENTS_COUNT)
 
-#define WAIT_TRACE_FN_LEN	(4096 + 1)
+#define WAIT_TRACE_FN_LEN	(4096)
+
+typedef struct
+{
+	bool			traceOn;
+	char			filename[WAIT_TRACE_FN_LEN + 1];
+} TraceInfo;
 
 /* pg_stat_wait.c */
 extern void check_shmem(void);

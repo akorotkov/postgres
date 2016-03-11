@@ -1,3 +1,12 @@
+/*
+ * descr.c
+ *		Meta information about wait events.
+ *
+ * Copyright (c) 2015-2016, Postgres Professional
+ *
+ * IDENTIFICATION
+ *	  contrib/pg_stat_wait/descr.c
+ */
 #include "postgres.h"
 #include "fmgr.h"
 #include "funcapi.h"
@@ -85,7 +94,9 @@ const int numberOfEvents[] = {
 	WAIT_NETWORK_EVENTS_COUNT
 };
 
-
+/*
+ * Get name of particular wait event.
+ */
 static const char *
 getWaitEventName(uint32 classid, uint32 eventid)
 {

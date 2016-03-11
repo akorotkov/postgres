@@ -1,3 +1,12 @@
+/*
+ * collector.c
+ *		Collector of wait event history.
+ *
+ * Copyright (c) 2015-2016, Postgres Professional
+ *
+ * IDENTIFICATION
+ *	  contrib/pg_stat_wait/collector.c
+ */
 #include "postgres.h"
 
 #include "access/htup_details.h"
@@ -45,6 +54,9 @@ RegisterWaitsCollector(void)
 	RegisterBackgroundWorker(&worker);
 }
 
+/*
+ * Allocate memory for waits history.
+ */
 void
 AllocHistory(History *observations, int count)
 {
@@ -55,8 +67,7 @@ AllocHistory(History *observations, int count)
 }
 
 /* 
- * Read current wait information from proc, if readCurrent is true,
- * then it reads from currently going wait, and can be inconsistent
+ * Read current wait information for given proc.
  */
 void
 ReadCurrentWait(PGPROC *proc, HistoryItem *item)
@@ -71,10 +82,10 @@ ReadCurrentWait(PGPROC *proc, HistoryItem *item)
 
 		wrap = &cur_wait_events[proc->pgprocno];
 		previdx = wrap->curidx;
-		event = &wrap->data[(previdx + 1) % 2];
 
 		pg_read_barrier();
 
+		event = &wrap->data[(previdx + 1) % 2];
 		item->backendPid = proc->pid;
 		item->classid = event->classeventid >> 16;
 		item->eventid = event->classeventid & 0xFFFF;

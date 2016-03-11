@@ -1,3 +1,12 @@
+/*
+ * pg_stat_wait.c
+ *		Track information about wait events.
+ *
+ * Copyright (c) 2015-2016, Postgres Professional
+ *
+ * IDENTIFICATION
+ *	  contrib/pg_stat_wait/pg_stat_waits.c
+ */
 #include "postgres.h"
 #include "fmgr.h"
 #include "funcapi.h"
@@ -26,11 +35,14 @@ bool					waitsHistoryOn;
 int						historySize;
 int						historyPeriod;
 bool					historySkipLatch;
+
+/* Shared memory variables */
 shm_toc				   *toc = NULL;
 CollectorShmqHeader	   *collector_hdr = NULL;
 shm_mq				   *collector_mq = NULL;
 CurrentWaitEventWrap   *cur_wait_events = NULL;
 ProfileItem			   *profile = NULL;
+TraceInfo			   *trace_info = NULL;
 
 static int maxProcs;
 
@@ -57,7 +69,8 @@ pgsw_shmem_size(void)
 
 	shm_toc_estimate_chunk(&e, sizeof(CurrentWaitEventWrap) * maxProcs);
 	shm_toc_estimate_chunk(&e, sizeof(ProfileItem) * maxProcs * WAIT_EVENTS_COUNT);
-	nkeys = 2;
+	shm_toc_estimate_chunk(&e, sizeof(TraceInfo) * maxProcs);
+	nkeys = 3;
 
 	if (waitsHistoryOn)
 	{
@@ -72,6 +85,9 @@ pgsw_shmem_size(void)
 	return size;
 }
 
+/*
+ * Make initial state of current wait events.
+ */
 static void
 init_current_wait_event()
 {
@@ -114,12 +130,16 @@ pgsw_shmem_startup(void)
 		shm_toc_insert(toc, 1, profile);
 		memset(profile, 0, sizeof(ProfileItem) * maxProcs * WAIT_EVENTS_COUNT);
 
+		trace_info = shm_toc_allocate(toc, sizeof(TraceInfo) * maxProcs);
+		shm_toc_insert(toc, 2, trace_info);
+		memset(trace_info, 0, sizeof(TraceInfo) * maxProcs);
+
 		if (waitsHistoryOn)
 		{
 			collector_hdr = shm_toc_allocate(toc, sizeof(CollectorShmqHeader));
-			shm_toc_insert(toc, 2, collector_hdr);
+			shm_toc_insert(toc, 3, collector_hdr);
 			collector_mq = shm_toc_allocate(toc, COLLECTOR_QUEUE_SIZE);
-			shm_toc_insert(toc, 3, collector_mq);
+			shm_toc_insert(toc, 4, collector_mq);
 		}
 	}
 	else
@@ -128,11 +148,12 @@ pgsw_shmem_startup(void)
 
 		cur_wait_events = shm_toc_lookup(toc, 0);
 		profile = shm_toc_lookup(toc, 1);
+		trace_info = shm_toc_lookup(toc, 2);
 
 		if (waitsHistoryOn)
 		{
-			collector_hdr = shm_toc_lookup(toc, 2);
-			collector_mq = shm_toc_lookup(toc, 3);
+			collector_hdr = shm_toc_lookup(toc, 3);
+			collector_mq = shm_toc_lookup(toc, 4);
 		}
 	}
 
@@ -308,6 +329,9 @@ _PG_fini(void)
 	shmem_startup_hook = prev_shmem_startup_hook;
 }
 
+/*
+ * Make a TupleDesc describing single item of waits history.
+ */
 static TupleDesc
 get_history_item_tupledesc()
 {
@@ -459,7 +483,7 @@ get_proc_pid_by_idx(int i)
 }
 
 static int
-find_proc_offset(int pid)
+find_procno(int pid)
 {
 	int	i, result = -1;
 
@@ -499,7 +523,7 @@ pg_stat_wait_get_profile(PG_FUNCTION_ARGS)
 		if (!PG_ARGISNULL(0))
 		{
 			params->procPid = PG_GETARG_UINT32(0);
-			params->procIdx = find_proc_offset(params->procPid);
+			params->procIdx = find_procno(params->procPid);
 		}
 		else
 		{
@@ -749,34 +773,40 @@ PG_FUNCTION_INFO_V1(pg_start_trace);
 Datum
 pg_start_trace(PG_FUNCTION_ARGS)
 {
-#ifdef NOT_USED
-	PGPROC *proc;
+	int			procno;
+	TraceInfo  *traceItem;
 	char *filename = PG_GETARG_CSTRING(1);
 
-	if (strlen(filename) >= WAIT_TRACE_FN_LEN)
+	if (strlen(filename) > WAIT_TRACE_FN_LEN)
 		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
-					errmsg("length of filename limited to %d", (WAIT_TRACE_FN_LEN-1))));
+					errmsg("length of filename limited to %d", WAIT_TRACE_FN_LEN)));
 
 	if (!is_absolute_path(filename))
 		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
 					errmsg("path must be absolute")));
 
-	proc = NULL;
 	if (PG_ARGISNULL(0))
-		proc = MyProc;
-	else
-		proc = search_proc(PG_GETARG_INT32(0));
-
-	if (proc != NULL)
 	{
-		if (proc->waits.traceOn)
-			ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
-						errmsg("trace is already working in backend")));
-
-		strcpy(proc->waits.traceFn, filename);
-		proc->waits.traceOn = true;
+		procno = MyProc->pgprocno;
 	}
-#endif
+	else
+	{
+		procno = find_procno(PG_GETARG_INT32(0));
+		if (procno < 0)
+			ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+						errmsg("pid is not found")));
+	}
+
+	traceItem = &trace_info[procno];
+	if (traceItem->traceOn)
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+					errmsg("trace is already working in backend")));
+
+	strcpy(traceItem->filename, filename);
+
+	pg_write_barrier();
+
+	traceItem->traceOn = true;
 
 	PG_RETURN_VOID();
 }
@@ -785,41 +815,51 @@ PG_FUNCTION_INFO_V1(pg_is_in_trace);
 Datum
 pg_is_in_trace(PG_FUNCTION_ARGS)
 {
-#ifdef NOT_USED
-	PGPROC *proc = NULL;
+	int			procno;
+	TraceInfo  *traceItem;
 
 	if (PG_ARGISNULL(0))
-		proc = MyProc;
+	{
+		procno = MyProc->pgprocno;
+	}
 	else
-		proc = search_proc(PG_GETARG_INT32(0));
+	{
+		procno = find_procno(PG_GETARG_INT32(0));
+		if (procno < 0)
+			ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+						errmsg("pid is not found")));
+	}
 
-	if (proc)
-		PG_RETURN_BOOL(proc->waits.traceOn);
-#endif
+	traceItem = &trace_info[procno];
 
-	PG_RETURN_BOOL(false);
+	PG_RETURN_BOOL(traceItem->traceOn);
 }
 
 PG_FUNCTION_INFO_V1(pg_stop_trace);
 Datum
 pg_stop_trace(PG_FUNCTION_ARGS)
 {
-	PGPROC *proc = NULL;
+	int			procno;
+	TraceInfo  *traceItem;
+
 	if (PG_ARGISNULL(0))
-		proc = MyProc;
-	else
-		proc = search_proc(PG_GETARG_INT32(0));
-
-#ifdef NOT_USED
-	if (proc != NULL)
 	{
-		if (!proc->waits.traceOn)
-			ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
-						errmsg("trace is not started")));
-
-		proc->waits.traceOn = false;
+		procno = MyProc->pgprocno;
 	}
-#endif
+	else
+	{
+		procno = find_procno(PG_GETARG_INT32(0));
+		if (procno < 0)
+			ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+						errmsg("pid is not found")));
+	}
+
+	traceItem = &trace_info[procno];
+	if (!traceItem->traceOn)
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+				errmsg("trace is not started")));
+
+	traceItem->traceOn = false;
 
 	PG_RETURN_VOID();
 }
