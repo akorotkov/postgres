@@ -58,6 +58,7 @@
 #include "utils/memutils.h"
 #include "utils/resowner.h"
 #include "utils/timestamp.h"
+#include "utils/wait.h"
 
 
 /*
@@ -186,6 +187,7 @@ BackgroundWriterMain(void)
 		 * about in bgwriter, but we do have LWLocks, buffers, and temp files.
 		 */
 		LWLockReleaseAll();
+		WAIT_STOP();
 		AbortBufferIO();
 		UnlockBuffers();
 		/* buffer pins are released here: */

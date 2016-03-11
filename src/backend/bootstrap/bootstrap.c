@@ -42,6 +42,7 @@
 #include "utils/rel.h"
 #include "utils/relmapper.h"
 #include "utils/tqual.h"
+#include "utils/wait.h"
 
 uint32		bootstrap_data_checksum_version = 0;		/* No checksum */
 
@@ -534,6 +535,7 @@ static void
 ShutdownAuxiliaryProcess(int code, Datum arg)
 {
 	LWLockReleaseAll();
+	WAIT_STOP();
 }
 
 /* ----------------------------------------------------------------

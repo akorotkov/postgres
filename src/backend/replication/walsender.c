@@ -79,6 +79,7 @@
 #include "utils/resowner.h"
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
+#include "utils/wait.h"
 
 /*
  * Maximum data payload in a WAL data message.  Must be >= XLOG_BLCKSZ.
@@ -252,6 +253,7 @@ void
 WalSndErrorCleanup()
 {
 	LWLockReleaseAll();
+	WAIT_STOP();
 
 	if (sendFile >= 0)
 	{

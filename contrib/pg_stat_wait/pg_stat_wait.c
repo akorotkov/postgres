@@ -154,8 +154,6 @@ update_profile(uint32 classid, uint32 eventid, uint64 interval)
 	if (eventid >= numberOfEvents[classid])
 		return;
 
-/*	elog(LOG, "%d %d %d " INT64_FORMAT, MyProc->pgprocno, classid, eventid, interval);*/
-
 	offset = eventid;
 	for (i = 0; i < classid; i++)
 		offset += numberOfEvents[i];

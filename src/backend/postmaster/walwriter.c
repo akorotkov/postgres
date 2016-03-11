@@ -58,6 +58,7 @@
 #include "utils/hsearch.h"
 #include "utils/memutils.h"
 #include "utils/resowner.h"
+#include "utils/wait.h"
 
 
 /*
@@ -167,6 +168,7 @@ WalWriterMain(void)
 		 * about in walwriter, but we do have LWLocks, and perhaps buffers?
 		 */
 		LWLockReleaseAll();
+		WAIT_STOP();
 		AbortBufferIO();
 		UnlockBuffers();
 		/* buffer pins are released here: */

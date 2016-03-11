@@ -62,6 +62,7 @@
 #include "utils/snapmgr.h"
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
+#include "utils/wait.h"
 #include "pg_trace.h"
 
 
@@ -2446,6 +2447,7 @@ AbortTransaction(void)
 	 * while cleaning up!
 	 */
 	LWLockReleaseAll();
+	WAIT_STOP();
 
 	/* Clean up buffer I/O and buffer context locks, too */
 	AbortBufferIO();
@@ -4537,6 +4539,7 @@ AbortSubTransaction(void)
 	 * Buffer locks, for example?  I don't think so but I'm not sure.
 	 */
 	LWLockReleaseAll();
+	WAIT_STOP();
 
 	AbortBufferIO();
 	UnlockBuffers();

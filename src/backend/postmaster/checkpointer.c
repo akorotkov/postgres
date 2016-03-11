@@ -59,6 +59,7 @@
 #include "utils/guc.h"
 #include "utils/memutils.h"
 #include "utils/resowner.h"
+#include "utils/wait.h"
 
 
 /*----------
@@ -273,6 +274,7 @@ CheckpointerMain(void)
 		 * files.
 		 */
 		LWLockReleaseAll();
+		WAIT_STOP();
 		AbortBufferIO();
 		UnlockBuffers();
 		/* buffer pins are released here: */

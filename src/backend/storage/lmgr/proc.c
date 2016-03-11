@@ -51,6 +51,7 @@
 #include "storage/spin.h"
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
+#include "utils/wait.h"
 
 
 /* GUC variables */
@@ -783,6 +784,7 @@ ProcKill(int code, Datum arg)
 	 * facility by releasing our PGPROC ...
 	 */
 	LWLockReleaseAll();
+	WAIT_STOP();
 
 	/* Make sure active replication slots are released */
 	if (MyReplicationSlot != NULL)
