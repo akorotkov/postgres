@@ -28,11 +28,18 @@ typedef struct
 
 typedef struct
 {
-	uint32		backendPid;
-	bool		reset;
-	int			backendIdx;
-	int			classIdx;
-	int			eventIdx;
+	uint64			count;
+	uint64			interval;
+} ProfileItem;
+
+typedef struct
+{
+	bool			reset;
+	int				procIdx;
+	uint32			procPid;
+	int				classIdx;
+	int				eventIdx;
+	ProfileItem	   *item;
 } WaitProfileContext;
 
 typedef struct
@@ -78,6 +85,9 @@ typedef struct
 	SHMRequest		request;
 } CollectorShmqHeader;
 
+#define WAIT_EVENTS_COUNT (WAIT_CPU_EVENTS_COUNT + 1 + WAIT_LWLOCKS_COUNT + \
+						   WAIT_LOCKS_COUNT + WAIT_IO_EVENTS_COUNT + \
+						   WAIT_NETWORK_EVENTS_COUNT)
 
 #define WAIT_TRACE_FN_LEN	(4096 + 1)
 
@@ -94,5 +104,8 @@ extern bool					historySkipLatch;
 extern void RegisterWaitsCollector(void);
 extern void AllocHistory(History *, int);
 extern void ReadCurrentWait(PGPROC *proc, HistoryItem *item);
+
+/* descr.c */
+extern const int numberOfEvents[];
 
 #endif

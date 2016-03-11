@@ -76,7 +76,7 @@ static const char *networkWaitNames[] =
 	"SYSLOG"
 };
 
-static const int numberOfEvents[] = {
+const int numberOfEvents[] = {
 	WAIT_CPU_EVENTS_COUNT,
 	WAIT_LWLOCKS_COUNT,
 	WAIT_LOCKS_COUNT,

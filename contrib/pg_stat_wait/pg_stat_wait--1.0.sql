@@ -62,7 +62,7 @@ CREATE FUNCTION pg_stat_wait_get_profile(
     OUT class_id int4,
     OUT event_id int4,
     OUT wait_time int8,
-	OUT wait_count int4
+	OUT wait_count int8
 )
 RETURNS SETOF record
 AS 'MODULE_PATHNAME'

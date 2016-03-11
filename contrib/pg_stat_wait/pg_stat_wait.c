@@ -30,6 +30,7 @@ shm_toc				   *toc = NULL;
 CollectorShmqHeader	   *collector_hdr = NULL;
 shm_mq				   *collector_mq = NULL;
 CurrentWaitEventWrap   *cur_wait_events = NULL;
+ProfileItem			   *profile = NULL;
 
 static int maxProcs;
 
@@ -55,7 +56,8 @@ pgsw_shmem_size(void)
 	shm_toc_initialize_estimator(&e);
 
 	shm_toc_estimate_chunk(&e, sizeof(CurrentWaitEventWrap) * maxProcs);
-	nkeys = 1;
+	shm_toc_estimate_chunk(&e, sizeof(ProfileItem) * maxProcs * WAIT_EVENTS_COUNT);
+	nkeys = 2;
 
 	if (waitsHistoryOn)
 	{
@@ -108,12 +110,16 @@ pgsw_shmem_startup(void)
 		shm_toc_insert(toc, 0, cur_wait_events);
 		init_current_wait_event();
 
+		profile = shm_toc_allocate(toc, sizeof(ProfileItem) * maxProcs * WAIT_EVENTS_COUNT);
+		shm_toc_insert(toc, 1, profile);
+		memset(profile, 0, sizeof(ProfileItem) * maxProcs * WAIT_EVENTS_COUNT);
+
 		if (waitsHistoryOn)
 		{
 			collector_hdr = shm_toc_allocate(toc, sizeof(CollectorShmqHeader));
-			shm_toc_insert(toc, 1, collector_hdr);
+			shm_toc_insert(toc, 2, collector_hdr);
 			collector_mq = shm_toc_allocate(toc, COLLECTOR_QUEUE_SIZE);
-			shm_toc_insert(toc, 2, collector_mq);
+			shm_toc_insert(toc, 3, collector_mq);
 		}
 	}
 	else
@@ -121,11 +127,12 @@ pgsw_shmem_startup(void)
 		toc = shm_toc_attach(PG_STAT_WAIT_MAGIC, pgsw);
 
 		cur_wait_events = shm_toc_lookup(toc, 0);
+		profile = shm_toc_lookup(toc, 1);
 
 		if (waitsHistoryOn)
 		{
-			collector_hdr = shm_toc_lookup(toc, 1);
-			collector_mq = shm_toc_lookup(toc, 2);
+			collector_hdr = shm_toc_lookup(toc, 2);
+			collector_mq = shm_toc_lookup(toc, 3);
 		}
 	}
 
@@ -135,20 +142,46 @@ pgsw_shmem_startup(void)
 		prev_shmem_startup_hook();
 }
 
-/*
- * Wait event start hook: put wait information to the shared memory.
- */
 static void
-pgsw_wait_event_start_hook(uint32 classid, uint32 eventid,
-						   uint32 p1, uint32 p2, uint32 p3, uint32 p4, uint32 p5)
+update_profile(uint32 classid, uint32 eventid, uint64 interval)
+{
+	ProfileItem	   *item;
+	int				i, offset;
+
+	if (classid >= WAIT_CLASSES_COUNT)
+		return;
+
+	if (eventid >= numberOfEvents[classid])
+		return;
+
+/*	elog(LOG, "%d %d %d " INT64_FORMAT, MyProc->pgprocno, classid, eventid, interval);*/
+
+	offset = eventid;
+	for (i = 0; i < classid; i++)
+		offset += numberOfEvents[i];
+
+	item = profile + MyProc->pgprocno * WAIT_EVENTS_COUNT + offset;
+
+	item->count++;
+	item->interval += interval;
+}
+
+static void
+update_current_event(uint32 classid, uint32 eventid,
+					 uint32 p1, uint32 p2, uint32 p3, uint32 p4, uint32 p5)
 {
 	CurrentWaitEventWrap   *wrap;
-	CurrentWaitEvent	   *event;
+	CurrentWaitEvent	   *prevEvent,
+						   *event;
+	instr_time				curTime;
 
 	if (!shmem_initialized || !MyProc)
 		return;
 
+	INSTR_TIME_SET_CURRENT(curTime);
+
 	wrap = &cur_wait_events[MyProc->pgprocno];
+	prevEvent = &wrap->data[wrap->curidx % 2];
 	event = &wrap->data[(wrap->curidx + 1) % 2];
 
 	event->classeventid = (classid << 16) | eventid;
@@ -157,14 +190,33 @@ pgsw_wait_event_start_hook(uint32 classid, uint32 eventid,
 	event->params[2] = p3;
 	event->params[3] = p4;
 	event->params[4] = p5;
-	INSTR_TIME_SET_CURRENT(event->start_time);
+	event->start_time = curTime;
+
+	INSTR_TIME_SUBTRACT(curTime, prevEvent->start_time);
+
+	update_profile(prevEvent->classeventid >> 16,
+				   prevEvent->classeventid & 0xFFFF,
+				   INSTR_TIME_GET_MICROSEC(curTime));
 
 	pg_write_barrier();
 	wrap->curidx++;
+}
+
+
+/*
+ * Wait event start hook: put wait information to the shared memory.
+ */
+static void
+pgsw_wait_event_start_hook(uint32 classid, uint32 eventid,
+						   uint32 p1, uint32 p2, uint32 p3, uint32 p4, uint32 p5)
+{
+	update_current_event(classid, eventid, p1, p2, p3, p4, p5);
 
 	if (prev_wait_event_start_hook)
 		prev_wait_event_start_hook(classid, eventid, p1, p2, p3, p4, p5);
 }
+
+
 
 /*
  * Wait event stop hook: clear wait information in the shared memory.
@@ -172,25 +224,7 @@ pgsw_wait_event_start_hook(uint32 classid, uint32 eventid,
 static void
 pgsw_wait_event_stop_hook(void)
 {
-	CurrentWaitEventWrap   *wrap;
-	CurrentWaitEvent	   *event;
-
-	if (!shmem_initialized || !MyProc)
-		return;
-
-	wrap = &cur_wait_events[MyProc->pgprocno];
-	event = &wrap->data[(wrap->curidx + 1) % 2];
-
-	event->classeventid = (WAIT_CPU << 16) | WAIT_CPU_BUSY;
-	event->params[0] = 0;
-	event->params[1] = 0;
-	event->params[2] = 0;
-	event->params[3] = 0;
-	event->params[4] = 0;
-	INSTR_TIME_SET_CURRENT(event->start_time);
-
-	pg_write_barrier();
-	wrap->curidx++;
+	update_current_event(WAIT_CPU, WAIT_CPU_BUSY, 0, 0, 0, 0, 0);
 
 	if (prev_wait_event_stop_hook)
 		prev_wait_event_stop_hook();
@@ -408,6 +442,45 @@ pg_stat_wait_get_current(PG_FUNCTION_ARGS)
 	}
 }
 
+static int
+get_proc_pid_by_idx(int i)
+{
+	PGPROC *proc;
+	int		result;
+
+	LWLockAcquire(ProcArrayLock, LW_SHARED);
+	proc = &ProcGlobal->allProcs[i];
+
+	if (proc == NULL)
+		result = 0;
+	else
+		result = proc->pid;
+	LWLockRelease(ProcArrayLock);
+
+	return result;
+}
+
+static int
+find_proc_offset(int pid)
+{
+	int	i, result = -1;
+
+	LWLockAcquire(ProcArrayLock, LW_SHARED);
+	for (i = 0; i < ProcGlobal->allProcCount; i++)
+	{
+		PGPROC	*proc = &ProcGlobal->allProcs[i];
+		if (proc->pid && proc->pid == pid)
+		{
+			result = i;
+			break;
+		}
+	}
+	LWLockRelease(ProcArrayLock);
+
+	return result;
+}
+
+
 PG_FUNCTION_INFO_V1(pg_stat_wait_get_profile);
 Datum
 pg_stat_wait_get_profile(PG_FUNCTION_ARGS)
@@ -423,18 +496,30 @@ pg_stat_wait_get_profile(PG_FUNCTION_ARGS)
 		funcctx = SRF_FIRSTCALL_INIT();
 
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
-		params = (WaitProfileContext *)palloc0(sizeof(WaitProfileContext));
+		params = (WaitProfileContext *) palloc0(sizeof(WaitProfileContext));
 
 		if (!PG_ARGISNULL(0))
-			params->backendPid = PG_GETARG_UINT32(0);
+		{
+			params->procPid = PG_GETARG_UINT32(0);
+			params->procIdx = find_proc_offset(params->procPid);
+		}
+		else
+		{
+			params->procPid = get_proc_pid_by_idx(params->procIdx);
+			while (params->procPid == 0 && params->procIdx < maxProcs)
+			{
+				params->procIdx++;
+				params->procPid = get_proc_pid_by_idx(params->procIdx);
+			}
+		}
+
+		params->item = profile + params->procIdx * WAIT_EVENTS_COUNT;
 
 		if (!PG_ARGISNULL(1))
 			params->reset = PG_GETARG_BOOL(1);
 
 		funcctx->user_fctx = params;
-#ifdef NOT_USED
-		funcctx->max_calls = MaxBackends * WAIT_EVENTS_COUNT;
-#endif
+		funcctx->max_calls = maxProcs * WAIT_EVENTS_COUNT;
 
 		tupdesc = CreateTemplateTupleDesc(5, false);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "pid",
@@ -446,7 +531,7 @@ pg_stat_wait_get_profile(PG_FUNCTION_ARGS)
 		TupleDescInitEntry(tupdesc, (AttrNumber) 4, "wait_time",
 						   INT8OID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 5, "wait_count",
-						   INT4OID, -1, 0);
+						   INT8OID, -1, 0);
 
 		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
 
@@ -456,114 +541,72 @@ pg_stat_wait_get_profile(PG_FUNCTION_ARGS)
 	/* stuff done on every call of the function */
 	funcctx = SRF_PERCALL_SETUP();
 
-	params = (WaitProfileContext *)funcctx->user_fctx;
-#ifdef NOT_USED
-	shmemCells = (BackendWaitCells *)((char *)WaitShmem
-			+ sizeof(int) +  /* counter */
-			+ MAXALIGN(sizeof(slock_t))); /* lock */
+	params = (WaitProfileContext *) funcctx->user_fctx;
 
-	while (params->backendIdx <= MaxBackends)
+	if (params->procIdx >= 0 && params->procIdx < maxProcs)
 	{
-		Datum		values[5];
-		bool		nulls[5];
-		HeapTuple	tuple;
-		int count;
-		BackendWaitCells bcells, *item;
+		Datum			values[5];
+		bool			nulls[5] = {false, false, false, false, false};
+		HeapTuple		tuple;
 
-		if (params->backendIdx == MaxBackends)
-		{
-			SRF_RETURN_DONE(funcctx);
-			break;
-		}
-
-		item = &shmemCells[params->backendIdx];
-
-		do
-		{
-			/* wait until backend is updating this block */
-		} while (!pg_atomic_test_set_flag(&item->isBusy));
-
-		memcpy(&bcells, item, sizeof(BackendWaitCells));
-		if (params->reset)
-		{
-			item->cells[params->eventIdx].interval = 0;
-			item->cells[params->eventIdx].count = 0;
-		}
-		pg_atomic_clear_flag(&item->isBusy);
-
-		/* filtering */
-		if (bcells.backendPid == 0 ||
-				(params->backendPid && params->backendPid != bcells.backendPid))
-		{
-			params->backendIdx++;
-			continue;
-		}
-
-		if (params->eventIdx == WAIT_EVENTS_COUNT)
-		{
-			params->classIdx = 0;
-			params->eventIdx = 0;
-			params->backendIdx++;
-			Assert(params->backendIdx <= MaxBackends);
-			continue;
-		}
-
-		MemSet(values, 0, sizeof(values));
-		MemSet(nulls, 0, sizeof(nulls));
-
-		if ((params->classIdx+1) < WAITS_COUNT &&
-				(params->eventIdx == WAIT_OFFSETS[params->classIdx+1]))
-			params->classIdx++;
-
-		count = bcells.cells[params->eventIdx].count;
-		if (count == 0)
-		{
-			params->eventIdx++;
-			continue;
-		}
-
-		values[0] = Int32GetDatum(bcells.backendPid);
+		values[0] = Int32GetDatum(params->procPid);
 		values[1] = Int32GetDatum(params->classIdx);
-		values[2] = Int32GetDatum(params->eventIdx - WAIT_OFFSETS[params->classIdx]);
-		values[3] = Int64GetDatum(bcells.cells[params->eventIdx].interval);
-		values[4] = Int32GetDatum(bcells.cells[params->eventIdx].count);
-		params->eventIdx += 1;
+		values[2] = Int32GetDatum(params->eventIdx);
+		values[3] = Int64GetDatum(params->item->interval);
+		values[4] = Int32GetDatum(params->item->count);
 		tuple = heap_form_tuple(funcctx->tuple_desc, values, nulls);
 
-		SRF_RETURN_NEXT(funcctx, HeapTupleGetDatum(tuple));
-		break;
-	}
-#endif
+		if (params->reset)
+		{
+			params->item->count = 0;
+			params->item->interval = 0;
+		}
 
-	PG_RETURN_VOID();
+		params->eventIdx++;
+		params->item++;
+		if (params->eventIdx >= numberOfEvents[params->classIdx])
+		{
+			params->eventIdx = 0;
+			params->classIdx++;
+		}
+
+		if (params->classIdx == WAIT_CLASSES_COUNT)
+		{
+			if (!PG_ARGISNULL(0))
+			{
+				params->procIdx = -1;
+			}
+			else
+			{
+				params->classIdx = 0;
+				params->procIdx++;
+				params->procPid = get_proc_pid_by_idx(params->procIdx);
+				while (params->procPid == 0 && params->procIdx < maxProcs)
+				{
+					params->procIdx++;
+					params->item += WAIT_EVENTS_COUNT;
+					params->procPid = get_proc_pid_by_idx(params->procIdx);
+				}
+			}
+		}
+
+		SRF_RETURN_NEXT(funcctx, HeapTupleGetDatum(tuple));
+	}
+
+	SRF_RETURN_DONE(funcctx);
 }
 
 PG_FUNCTION_INFO_V1(pg_stat_wait_reset_profile);
 Datum
 pg_stat_wait_reset_profile(PG_FUNCTION_ARGS)
 {
-#ifdef NOT_USED
-	int i, j;
-	BackendWaitCells *cells = (BackendWaitCells *)((char *)WaitShmem
-			+ sizeof(int) +  /* counter */
-			+ MAXALIGN(sizeof(slock_t))); /* lock */
+	int		i;
 
-	for(i = 0; i < MaxBackends; i++)
+	for (i = 0; i < maxProcs * WAIT_EVENTS_COUNT; i++)
 	{
-		BackendWaitCells *item = cells + i;
-		do
-		{
-			/* wait until backend is updating this block */
-		} while (!pg_atomic_test_set_flag(&item->isBusy));
-
-		for (j = 0; j < WAIT_EVENTS_COUNT; j++)
-		{
-			item->cells[j].interval = 0;
-			item->cells[j].count = 0;
-		}
-		pg_atomic_clear_flag(&item->isBusy);
+		profile[i].count = 0;
+		profile[i].interval = 0;
 	}
-#endif
 	PG_RETURN_VOID();
 }
 
