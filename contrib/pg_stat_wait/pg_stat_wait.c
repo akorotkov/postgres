@@ -21,6 +21,7 @@
 #include "storage/procarray.h"
 #include "storage/shm_mq.h"
 #include "storage/shm_toc.h"
+#include "utils/datetime.h"
 #include "utils/guc.h"
 #include "utils/wait.h"
 
@@ -45,6 +46,7 @@ ProfileItem			   *profile = NULL;
 TraceInfo			   *trace_info = NULL;
 
 static int maxProcs;
+static bool in_wait_hook = false;
 
 static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
 static wait_event_start_hook_type prev_wait_event_start_hook = NULL;
@@ -186,18 +188,114 @@ update_profile(uint32 classid, uint32 eventid, uint64 interval)
 }
 
 static void
+timestamptz_out_static(TimestampTz dt, char *buf)
+{
+	int			tz;
+	struct pg_tm tt,
+			   *tm = &tt;
+	fsec_t		fsec;
+	const char *tzn;
+
+	if (TIMESTAMP_NOT_FINITE(dt))
+		EncodeSpecialTimestamp(dt, buf);
+	else if (timestamp2tm(dt, &tz, tm, &fsec, &tzn, NULL) == 0)
+		EncodeDateTime(tm, fsec, true, tz, tzn, DateStyle, buf);
+	else
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("timestamp out of range")));
+}
+
+
+static void
+write_trace_start(FILE *fd, int classid, int eventid,
+		int p1, int p2, int p3, int p4, int p5)
+{
+	TimestampTz	current_ts;
+	int			n;
+	char		buf[256], tsbuf[MAXDATELEN + 1];
+
+	Assert(fd != NULL);
+	current_ts = GetCurrentTimestamp();
+	timestamptz_out_static(current_ts, tsbuf);
+	n = snprintf(buf, sizeof(buf), "start %s %s %s %d %d %d %d %d\n",
+			tsbuf,
+			getWaitClassName(classid),
+			getWaitEventName(classid, eventid),
+			p1, p2, p3, p4, p5);
+
+	if (n != -1)
+	{
+		fwrite(buf, sizeof(char), n, fd);
+		fflush(fd);
+	}
+	else
+	{
+		elog(INFO, "Wait trace formatting error");
+	}
+}
+
+static void
+write_trace_stop(FILE *fd, int classId)
+{
+	TimestampTz	current_ts;
+	int			n;
+	char		buf[256], tsbuf[MAXDATELEN + 1];
+
+	Assert(fd != NULL);
+	current_ts = GetCurrentTimestamp();
+	timestamptz_out_static(current_ts, tsbuf);
+	n = snprintf(buf, sizeof(buf), "stop %s %s\n",
+			tsbuf,
+			getWaitClassName(classId));
+
+	if (n != -1)
+	{
+		fwrite(buf, sizeof(char), n, fd);
+		fflush(fd);
+	}
+}
+
+static void
 update_current_event(uint32 classid, uint32 eventid,
 					 uint32 p1, uint32 p2, uint32 p3, uint32 p4, uint32 p5)
 {
 	CurrentWaitEventWrap   *wrap;
 	CurrentWaitEvent	   *prevEvent,
 						   *event;
+	TraceInfo			   *trace;
 	instr_time				curTime;
 
 	if (!shmem_initialized || !MyProc)
 		return;
 
 	INSTR_TIME_SET_CURRENT(curTime);
+
+	trace = &trace_info[MyProc->pgprocno];
+	/* 
+	 * If tracing was started with `pg_start_trace`,
+	 * we initialize file descriptor here.
+	 */
+	if (trace->traceOn && trace->fd == NULL)
+	{
+		trace->fd = fopen(trace->filename, "w");
+		if (trace->fd == NULL)
+		{
+			trace->traceOn = false;
+			elog(WARNING, "could not open trace file \"%s\": %m",
+					trace->filename);
+		}
+		else
+		{
+			elog(INFO, "Trace was started to: %s", trace->filename);
+		}
+	}
+	else if (!trace->traceOn && trace->fd != NULL)
+	{
+		fclose(trace->fd);
+		trace->fd = NULL;
+		elog(INFO, "Trace was stopped");
+	}
 
 	wrap = &cur_wait_events[MyProc->pgprocno];
 	prevEvent = &wrap->data[wrap->curidx % 2];
@@ -211,6 +309,17 @@ update_current_event(uint32 classid, uint32 eventid,
 	event->params[4] = p5;
 	event->start_time = curTime;
 
+	if (trace->fd != NULL && prevEvent->classeventid != event->classeventid)
+	{
+		uint32 busyevent = (WAIT_CPU << 16) | WAIT_CPU_BUSY;
+		if (prevEvent->classeventid != busyevent)
+			write_trace_stop(trace->fd, (prevEvent->classeventid >> 16));
+		if (event->classeventid != busyevent)
+			write_trace_start(trace->fd, classid, eventid, p1, p2, p3, p4, p5);
+	}
+
+
+
 	INSTR_TIME_SUBTRACT(curTime, prevEvent->start_time);
 
 	update_profile(prevEvent->classeventid >> 16,
@@ -221,7 +330,6 @@ update_current_event(uint32 classid, uint32 eventid,
 	wrap->curidx++;
 }
 
-
 /*
  * Wait event start hook: put wait information to the shared memory.
  */
@@ -229,10 +337,16 @@ static void
 pgsw_wait_event_start_hook(uint32 classid, uint32 eventid,
 						   uint32 p1, uint32 p2, uint32 p3, uint32 p4, uint32 p5)
 {
+	if (in_wait_hook)
+		return;
+	in_wait_hook = true;
+
 	update_current_event(classid, eventid, p1, p2, p3, p4, p5);
 
 	if (prev_wait_event_start_hook)
 		prev_wait_event_start_hook(classid, eventid, p1, p2, p3, p4, p5);
+
+	in_wait_hook = false;
 }
 
 
@@ -243,10 +357,16 @@ pgsw_wait_event_start_hook(uint32 classid, uint32 eventid,
 static void
 pgsw_wait_event_stop_hook(void)
 {
+	if (in_wait_hook)
+		return;
+	in_wait_hook = true;
+
 	update_current_event(WAIT_CPU, WAIT_CPU_BUSY, 0, 0, 0, 0, 0);
 
 	if (prev_wait_event_stop_hook)
 		prev_wait_event_stop_hook();
+
+	in_wait_hook = false;
 }
 
 /*

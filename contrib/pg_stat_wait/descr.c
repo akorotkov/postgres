@@ -94,10 +94,16 @@ const int numberOfEvents[] = {
 	WAIT_NETWORK_EVENTS_COUNT
 };
 
+const char *
+getWaitClassName(uint32 classid)
+{
+	return waitClassNames[classid];
+}
+
 /*
  * Get name of particular wait event.
  */
-static const char *
+const char *
 getWaitEventName(uint32 classid, uint32 eventid)
 {
 	switch (classid)

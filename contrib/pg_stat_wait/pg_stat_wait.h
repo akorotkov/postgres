@@ -104,6 +104,7 @@ typedef struct
 {
 	bool			traceOn;
 	char			filename[WAIT_TRACE_FN_LEN + 1];
+	FILE		   *fd;
 } TraceInfo;
 
 /* pg_stat_wait.c */
@@ -122,5 +123,7 @@ extern void ReadCurrentWait(PGPROC *proc, HistoryItem *item);
 
 /* descr.c */
 extern const int numberOfEvents[];
+const char *getWaitClassName(uint32 classid);
+const char *getWaitEventName(uint32 classid, uint32 eventid);
 
 #endif
