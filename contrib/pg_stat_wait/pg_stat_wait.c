@@ -18,6 +18,7 @@
 #include "postmaster/autovacuum.h"
 #include "storage/spin.h"
 #include "storage/ipc.h"
+#include "storage/pg_shmem.h"
 #include "storage/procarray.h"
 #include "storage/shm_mq.h"
 #include "storage/shm_toc.h"
@@ -33,9 +34,6 @@ void		_PG_fini(void);
 /* Global variables */
 bool					shmem_initialized = false;
 bool					waitsHistoryOn;
-int						historySize;
-int						historyPeriod;
-bool					historySkipLatch;
 
 /* Shared memory variables */
 shm_toc				   *toc = NULL;
@@ -107,6 +105,21 @@ init_current_wait_event()
 	}
 }
 
+static bool
+shmem_int_guc_check_hook(int *newval, void **extra, GucSource source)
+{
+	if (UsedShmemSegAddr == NULL)
+		return false;
+	return true;
+}
+
+static bool
+shmem_bool_guc_check_hook(bool *newval, void **extra, GucSource source)
+{
+	if (UsedShmemSegAddr == NULL)
+		return false;
+	return true;
+}
 
 /*
  * Distribute shared memory.
@@ -157,6 +170,24 @@ pgsw_shmem_startup(void)
 			collector_hdr = shm_toc_lookup(toc, 3);
 			collector_mq = shm_toc_lookup(toc, 4);
 		}
+	}
+
+	if (waitsHistoryOn)
+	{
+		DefineCustomIntVariable("pg_stat_wait.history_size",
+				"Sets size of waits history.", NULL,
+				&collector_hdr->historySize, 5000, 100, INT_MAX,
+				PGC_SUSET, 0, shmem_int_guc_check_hook, NULL, NULL);
+
+		DefineCustomIntVariable("pg_stat_wait.history_period",
+				"Sets period of waits history sampling.", NULL,
+				&collector_hdr->historyPeriod, 10, 1, INT_MAX,
+				PGC_SUSET, 0, shmem_int_guc_check_hook, NULL, NULL);
+
+		DefineCustomBoolVariable("pg_stat_wait.history_skip_latch",
+				"Skip latch events in waits history", NULL,
+				&collector_hdr->historySkipLatch, false,
+				PGC_SUSET, 0, shmem_bool_guc_check_hook, NULL, NULL);
 	}
 
 	shmem_initialized = true;
@@ -397,20 +428,6 @@ _PG_init(void)
 
 	DefineCustomBoolVariable("pg_stat_wait.history", "Collect waits history",
 			NULL, &waitsHistoryOn, false, PGC_POSTMASTER, 0, NULL, NULL, NULL);
-
-	DefineCustomIntVariable("pg_stat_wait.history_size",
-			"Sets size of waits history.", NULL,
-			&historySize, 5000, 100, INT_MAX,
-			PGC_POSTMASTER, 0, NULL, NULL, NULL);
-
-	DefineCustomIntVariable("pg_stat_wait.history_period",
-			"Sets period of waits history sampling.", NULL,
-			&historyPeriod, 10, 1, INT_MAX,
-			PGC_POSTMASTER, 0, NULL, NULL, NULL);
-
-	DefineCustomBoolVariable("pg_stat_wait.history_skip_latch",
-			"Skip latch events in waits history", NULL,
-			&historySkipLatch, false, PGC_POSTMASTER, 0, NULL, NULL, NULL);
 
 	/* Calculate maximem number of processes */
 	maxProcs = MaxConnections + autovacuum_max_workers + 1 +

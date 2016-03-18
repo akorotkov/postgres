@@ -92,6 +92,9 @@ typedef struct
 {
 	Latch		   *latch;
 	SHMRequest		request;
+	int				historySize;
+	int				historyPeriod;
+	bool			historySkipLatch;
 } CollectorShmqHeader;
 
 #define WAIT_EVENTS_COUNT (WAIT_CPU_EVENTS_COUNT + 1 + WAIT_LWLOCKS_COUNT + \
@@ -112,10 +115,6 @@ extern void check_shmem(void);
 extern CollectorShmqHeader *collector_hdr;
 extern CurrentWaitEventWrap *cur_wait_events;
 extern shm_mq			   *collector_mq;
-extern int					historySize;
-extern int					historyPeriod;
-extern bool					historySkipLatch;
-
 
 extern void RegisterWaitsCollector(void);
 extern void AllocHistory(History *, int);

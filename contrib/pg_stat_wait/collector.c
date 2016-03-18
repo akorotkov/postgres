@@ -66,6 +66,44 @@ AllocHistory(History *observations, int count)
 	observations->wraparound = false;
 }
 
+/*
+ * Reallocate memory for changed number of history items.
+ */
+static void
+ReallocHistory(History *observations, int count)
+{
+	HistoryItem	   *newitems;
+	int				copyCount;
+	int				i, j;
+
+	newitems = (HistoryItem *) palloc0(sizeof(HistoryItem) * count);
+
+	if (observations->wraparound)
+		copyCount = observations->count;
+	else
+		copyCount = observations->index;
+
+	copyCount = Min(copyCount, count);
+
+	i = 0;
+	j = observations->index;
+	while (i < copyCount)
+	{
+		j--;
+		if (j < 0)
+			j = observations->count - 1;
+		memcpy(&newitems[i], &observations->items[j], sizeof(HistoryItem));
+		i++;
+	}
+
+	pfree(observations->items);
+	observations->items = newitems;
+
+	observations->index = copyCount;
+	observations->count = count;
+	observations->wraparound = false;
+}
+
 /* 
  * Read current wait information for given proc.
  */
@@ -137,7 +175,12 @@ get_next_observation(History *observations)
 static void
 write_waits_history(History *observations, TimestampTz current_ts)
 {
-	int i;
+	int		i,
+			newSize;
+
+	newSize = collector_hdr->historySize;
+	if (observations->count != newSize)
+		ReallocHistory(observations, newSize);
 
 	LWLockAcquire(ProcArrayLock, LW_SHARED);
 	for (i = 0; i < ProcGlobal->allProcCount; i++)
@@ -151,7 +194,7 @@ write_waits_history(History *observations, TimestampTz current_ts)
 		if (proc->pid == 0)
 			continue;
 
-		if (historySkipLatch && item.classid == WAIT_LATCH)
+		if (collector_hdr->historySkipLatch && item.classid == WAIT_LATCH)
 			continue;
 
 		item.ts = current_ts;
@@ -212,7 +255,7 @@ collector_main(Datum main_arg)
 			ALLOCSET_DEFAULT_INITSIZE,
 			ALLOCSET_DEFAULT_MAXSIZE);
 	old_context = MemoryContextSwitchTo(collector_context);
-	AllocHistory(&observations, historySize);
+	AllocHistory(&observations, collector_hdr->historySize);
 	MemoryContextSwitchTo(old_context);
 
 	while (1)
@@ -230,7 +273,7 @@ collector_main(Datum main_arg)
 
 		rc = WaitLatch(&MyProc->procLatch,
 			WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
-			historyPeriod);
+			collector_hdr->historyPeriod);
 
 		if (rc & WL_POSTMASTER_DEATH)
 			exit(1);
