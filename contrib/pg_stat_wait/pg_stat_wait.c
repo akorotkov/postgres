@@ -408,10 +408,6 @@ check_shmem(void)
 {
 	if (!shmem_initialized)
 	{
-		elog(LOG, "%d", MyProcPid);
-
-		pg_usleep(10*1000*1000);
-
 		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
 						errmsg("pg_stat_wait shared memory wasn't initialized yet")));
 	}
