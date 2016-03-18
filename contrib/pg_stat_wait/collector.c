@@ -123,7 +123,7 @@ ReadCurrentWait(PGPROC *proc, HistoryItem *item)
 
 		pg_read_barrier();
 
-		event = &wrap->data[(previdx + 1) % 2];
+		event = &wrap->data[previdx % 2];
 		item->backendPid = proc->pid;
 		item->classid = event->classeventid >> 16;
 		item->eventid = event->classeventid & 0xFFFF;
