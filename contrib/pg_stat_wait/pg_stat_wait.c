@@ -522,7 +522,6 @@ pg_stat_wait_get_current(PG_FUNCTION_ARGS)
 {
 	FuncCallContext 	*funcctx;
 	WaitCurrentContext 	*params;
-	HistoryItem 		*currentState;
 
 	if (SRF_IS_FIRSTCALL())
 	{
@@ -581,7 +580,6 @@ pg_stat_wait_get_current(PG_FUNCTION_ARGS)
 	/* stuff done on every call of the function */
 	funcctx = SRF_PERCALL_SETUP();
 	params = (WaitCurrentContext *)funcctx->user_fctx;
-	currentState = NULL;
 
 	if (funcctx->call_cntr < funcctx->max_calls)
 	{
