@@ -24,6 +24,7 @@
 #include "storage/shm_toc.h"
 #include "utils/datetime.h"
 #include "utils/guc.h"
+#include "utils/guc_tables.h"
 #include "utils/wait.h"
 
 PG_MODULE_MAGIC;
@@ -122,6 +123,80 @@ shmem_bool_guc_check_hook(bool *newval, void **extra, GucSource source)
 }
 
 /*
+ * This union allows us to mix the numerous different types of structs
+ * that we are organizing.
+ */
+typedef union
+{
+	struct config_generic generic;
+	struct config_bool _bool;
+	struct config_real real;
+	struct config_int integer;
+	struct config_string string;
+	struct config_enum _enum;
+} mixedStruct;
+
+static void
+set_history_gucs()
+{
+	struct config_generic **guc_vars;
+	int			numOpts,
+				i;
+	bool		history_size_found = false,
+				history_period_found = false,
+				history_skip_latch_found = false;
+
+	/* Initialize the guc_variables[] array */
+	build_guc_variables();
+
+	guc_vars = get_guc_variables();
+	numOpts = GetNumConfigOptions();
+
+	for (i = 0; i < numOpts; i++)
+	{
+		mixedStruct *var = (mixedStruct *) guc_vars[i];
+		const char *name = var->generic.name;
+
+		if (!strcmp(name, "pg_stat_wait.history_size"))
+		{
+			history_size_found = true;
+			var->integer.variable = &collector_hdr->historySize;
+		}
+		else if (!strcmp(name, "pg_stat_wait.history_period"))
+		{
+			history_period_found = true;
+			var->integer.variable = &collector_hdr->historyPeriod;
+		}
+		else if (!strcmp(name, "pg_stat_wait.history_skip_latch"))
+		{
+			history_skip_latch_found = true;
+			var->_bool.variable = &collector_hdr->historySkipLatch;
+		}
+	}
+
+	if (!history_size_found)
+		DefineCustomIntVariable("pg_stat_wait.history_size",
+				"Sets size of waits history.", NULL,
+				&collector_hdr->historySize, 5000, 100, INT_MAX,
+				PGC_SUSET, GUC_CUSTOM_PLACEHOLDER,
+				shmem_int_guc_check_hook, NULL, NULL);
+
+	if (!history_period_found)
+		DefineCustomIntVariable("pg_stat_wait.history_period",
+				"Sets period of waits history sampling.", NULL,
+				&collector_hdr->historyPeriod, 10, 1, INT_MAX,
+				PGC_SUSET, GUC_CUSTOM_PLACEHOLDER,
+				shmem_int_guc_check_hook, NULL, NULL);
+
+	if (!history_skip_latch_found)
+		DefineCustomBoolVariable("pg_stat_wait.history_skip_latch",
+				"Skip latch events in waits history", NULL,
+				&collector_hdr->historySkipLatch, false,
+				PGC_SUSET, GUC_CUSTOM_PLACEHOLDER,
+				shmem_bool_guc_check_hook, NULL, NULL);
+}
+
+/*
  * Distribute shared memory.
  */
 static void
@@ -155,6 +230,7 @@ pgsw_shmem_startup(void)
 			shm_toc_insert(toc, 3, collector_hdr);
 			collector_mq = shm_toc_allocate(toc, COLLECTOR_QUEUE_SIZE);
 			shm_toc_insert(toc, 4, collector_mq);
+			set_history_gucs();
 		}
 	}
 	else
@@ -170,24 +246,6 @@ pgsw_shmem_startup(void)
 			collector_hdr = shm_toc_lookup(toc, 3);
 			collector_mq = shm_toc_lookup(toc, 4);
 		}
-	}
-
-	if (waitsHistoryOn)
-	{
-		DefineCustomIntVariable("pg_stat_wait.history_size",
-				"Sets size of waits history.", NULL,
-				&collector_hdr->historySize, 5000, 100, INT_MAX,
-				PGC_SUSET, 0, shmem_int_guc_check_hook, NULL, NULL);
-
-		DefineCustomIntVariable("pg_stat_wait.history_period",
-				"Sets period of waits history sampling.", NULL,
-				&collector_hdr->historyPeriod, 10, 1, INT_MAX,
-				PGC_SUSET, 0, shmem_int_guc_check_hook, NULL, NULL);
-
-		DefineCustomBoolVariable("pg_stat_wait.history_skip_latch",
-				"Skip latch events in waits history", NULL,
-				&collector_hdr->historySkipLatch, false,
-				PGC_SUSET, 0, shmem_bool_guc_check_hook, NULL, NULL);
 	}
 
 	shmem_initialized = true;
@@ -523,6 +581,8 @@ pg_stat_wait_get_current(PG_FUNCTION_ARGS)
 	FuncCallContext 	*funcctx;
 	WaitCurrentContext 	*params;
 
+	check_shmem();
+
 	if (SRF_IS_FIRSTCALL())
 	{
 		MemoryContext		oldcontext;
@@ -641,6 +701,8 @@ pg_stat_wait_get_profile(PG_FUNCTION_ARGS)
 	WaitProfileContext *params;
 	FuncCallContext *funcctx;
 
+	check_shmem();
+
 	if (SRF_IS_FIRSTCALL())
 	{
 		MemoryContext		oldcontext;
@@ -755,6 +817,8 @@ pg_stat_wait_reset_profile(PG_FUNCTION_ARGS)
 {
 	int		i;
 
+	check_shmem();
+
 	for (i = 0; i < maxProcs * WAIT_EVENTS_COUNT; i++)
 	{
 		profile[i].count = 0;
@@ -835,6 +899,10 @@ pg_stat_wait_get_history(PG_FUNCTION_ARGS)
 		mq = shm_mq_create(collector_mq, COLLECTOR_QUEUE_SIZE);
 		collector_hdr->request = HISTORY_REQUEST;
 
+		if (!collector_hdr->latch)
+			ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+							errmsg("pg_stat_wait collector wasn't started")));
+
 		SetLatch(collector_hdr->latch);
 
 		shm_mq_set_receiver(mq, MyProc);
@@ -908,6 +976,8 @@ pg_start_trace(PG_FUNCTION_ARGS)
 	TraceInfo  *traceItem;
 	char *filename = PG_GETARG_CSTRING(1);
 
+	check_shmem();
+
 	if (strlen(filename) > WAIT_TRACE_FN_LEN)
 		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
 					errmsg("length of filename limited to %d", WAIT_TRACE_FN_LEN)));
@@ -949,6 +1019,8 @@ pg_is_in_trace(PG_FUNCTION_ARGS)
 	int			procno;
 	TraceInfo  *traceItem;
 
+	check_shmem();
+
 	if (PG_ARGISNULL(0))
 	{
 		procno = MyProc->pgprocno;
@@ -972,6 +1044,8 @@ pg_stop_trace(PG_FUNCTION_ARGS)
 {
 	int			procno;
 	TraceInfo  *traceItem;
+
+	check_shmem();
 
 	if (PG_ARGISNULL(0))
 	{
@@ -1008,6 +1082,8 @@ pg_stat_wait_start_wait(PG_FUNCTION_ARGS)
 	int p4 = PG_GETARG_INT32(5);
 	int p5 = PG_GETARG_INT32(6);
 
+	check_shmem();
+
 	WAIT_START(classId, eventId, p1, p2, p3, p4, p5);
 	PG_RETURN_VOID();
 }
@@ -1017,6 +1093,8 @@ PG_FUNCTION_INFO_V1(pg_stat_wait_stop_wait);
 Datum
 pg_stat_wait_stop_wait(PG_FUNCTION_ARGS)
 {
+	check_shmem();
+
 	WAIT_STOP();
 	PG_RETURN_VOID();
 }

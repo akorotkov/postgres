@@ -46,7 +46,7 @@ RegisterWaitsCollector(void)
 	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |
 		BGWORKER_BACKEND_DATABASE_CONNECTION;
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
-	worker.bgw_restart_time = BGW_NEVER_RESTART;
+	worker.bgw_restart_time = 0;
 	worker.bgw_main = collector_main;
 	worker.bgw_notify_pid = 0;
 	snprintf(worker.bgw_name, BGW_MAXLEN, "pg_stat_wait collector");
