@@ -136,6 +136,9 @@ typedef union
 	struct config_enum _enum;
 } mixedStruct;
 
+/*
+ * Set or reset history GUCs in shared memory.
+ */
 static void
 set_history_gucs()
 {
@@ -149,6 +152,7 @@ set_history_gucs()
 	guc_vars = get_guc_variables();
 	numOpts = GetNumConfigOptions();
 
+	/* Change pointers in already defined GUCs */
 	for (i = 0; i < numOpts; i++)
 	{
 		mixedStruct *var = (mixedStruct *) guc_vars[i];
@@ -177,6 +181,7 @@ set_history_gucs()
 		}
 	}
 
+	/* Define undefined GUCs */
 	if (!history_size_found)
 		DefineCustomIntVariable("pg_stat_wait.history_size",
 				"Sets size of waits history.", NULL,
@@ -198,6 +203,7 @@ set_history_gucs()
 				PGC_SUSET, 0,
 				shmem_bool_guc_check_hook, NULL, NULL);
 
+	/* Re-read config for already defined GUCs which values are missed */
 	if (history_size_found || history_period_found || history_skip_latch_found)
 		ProcessConfigFile(PGC_SIGHUP);
 }
