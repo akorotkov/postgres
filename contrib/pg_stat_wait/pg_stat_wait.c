@@ -154,20 +154,26 @@ set_history_gucs()
 		mixedStruct *var = (mixedStruct *) guc_vars[i];
 		const char *name = var->generic.name;
 
+		if (var->generic.flags & GUC_CUSTOM_PLACEHOLDER)
+			continue;
+
 		if (!strcmp(name, "pg_stat_wait.history_size"))
 		{
 			history_size_found = true;
 			var->integer.variable = &collector_hdr->historySize;
+			collector_hdr->historySize = 5000;
 		}
 		else if (!strcmp(name, "pg_stat_wait.history_period"))
 		{
 			history_period_found = true;
 			var->integer.variable = &collector_hdr->historyPeriod;
+			collector_hdr->historyPeriod = 10;
 		}
 		else if (!strcmp(name, "pg_stat_wait.history_skip_latch"))
 		{
 			history_skip_latch_found = true;
 			var->_bool.variable = &collector_hdr->historySkipLatch;
+			collector_hdr->historySkipLatch = false;
 		}
 	}
 
@@ -175,22 +181,25 @@ set_history_gucs()
 		DefineCustomIntVariable("pg_stat_wait.history_size",
 				"Sets size of waits history.", NULL,
 				&collector_hdr->historySize, 5000, 100, INT_MAX,
-				PGC_SUSET, GUC_CUSTOM_PLACEHOLDER,
+				PGC_SUSET, 0,
 				shmem_int_guc_check_hook, NULL, NULL);
 
 	if (!history_period_found)
 		DefineCustomIntVariable("pg_stat_wait.history_period",
 				"Sets period of waits history sampling.", NULL,
 				&collector_hdr->historyPeriod, 10, 1, INT_MAX,
-				PGC_SUSET, GUC_CUSTOM_PLACEHOLDER,
+				PGC_SUSET, 0,
 				shmem_int_guc_check_hook, NULL, NULL);
 
 	if (!history_skip_latch_found)
 		DefineCustomBoolVariable("pg_stat_wait.history_skip_latch",
 				"Skip latch events in waits history", NULL,
 				&collector_hdr->historySkipLatch, false,
-				PGC_SUSET, GUC_CUSTOM_PLACEHOLDER,
+				PGC_SUSET, 0,
 				shmem_bool_guc_check_hook, NULL, NULL);
+
+	if (history_size_found || history_period_found || history_skip_latch_found)
+		ProcessConfigFile(PGC_SIGHUP);
 }
 
 /*
