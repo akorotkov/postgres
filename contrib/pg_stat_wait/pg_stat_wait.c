@@ -146,9 +146,6 @@ set_history_gucs()
 				history_period_found = false,
 				history_skip_latch_found = false;
 
-	/* Initialize the guc_variables[] array */
-	build_guc_variables();
-
 	guc_vars = get_guc_variables();
 	numOpts = GetNumConfigOptions();
 
