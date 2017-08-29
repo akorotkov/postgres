@@ -3877,6 +3877,10 @@ DATA(insert OID = 326  (  index_am_handler_in	PGNSP PGUID 12 1 0 0 0 f f f f f f
 DESCR("I/O");
 DATA(insert OID = 327  (  index_am_handler_out	PGNSP PGUID 12 1 0 0 0 f f f f t f i s 1 0 2275 "325" _null_ _null_ _null_ _null_ _null_ index_am_handler_out _null_ _null_ _null_ ));
 DESCR("I/O");
+DATA(insert OID = 3425  (  storage_am_handler_in	PGNSP PGUID 12 1 0 0 0 f f f f f f i s 1 0 3998 "2275" _null_ _null_ _null_ _null_ _null_ storage_am_handler_in _null_ _null_ _null_ ));
+DESCR("I/O");
+DATA(insert OID = 3426  (  storage_am_handler_out	PGNSP PGUID 12 1 0 0 0 f f f f t f i s 1 0 2275 "3998" _null_ _null_ _null_ _null_ _null_ storage_am_handler_out _null_ _null_ _null_ ));
+DESCR("I/O");
 DATA(insert OID = 3311 (  tsm_handler_in	PGNSP PGUID 12 1 0 0 0 f f f f f f i s 1 0 3310 "2275" _null_ _null_ _null_ _null_ _null_ tsm_handler_in _null_ _null_ _null_ ));
 DESCR("I/O");
 DATA(insert OID = 3312 (  tsm_handler_out	PGNSP PGUID 12 1 0 0 0 f f f f t f i s 1 0 2275 "3310" _null_ _null_ _null_ _null_ _null_ tsm_handler_out _null_ _null_ _null_ ));
