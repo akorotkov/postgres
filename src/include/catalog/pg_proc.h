@@ -558,6 +558,11 @@ DESCR("convert int4 to float4");
 DATA(insert OID = 319 (  int4			   PGNSP PGUID 12 1 0 0 0 f f f f t f i s 1  0 23 "700" _null_ _null_ _null_ _null_ _null_	ftoi4 _null_ _null_ _null_ ));
 DESCR("convert float4 to int4");
 
+/* Storage access method handlers */
+DATA(insert OID = 4002 (  heapam_storage_handler		PGNSP PGUID 12 1 0 0 0 f f f f t f v s 1 0 3998 "2281" _null_ _null_ _null_ _null_ _null_	heapam_storage_handler _null_ _null_ _null_ ));
+DESCR("row-oriented storage access method handler");
+#define HEAPAM_STORAGE_AM_HANDLER_OID	4002
+
 /* Index access method handlers */
 DATA(insert OID = 330 (  bthandler		PGNSP PGUID 12 1 0 0 0 f f f f t f v s 1 0 325 "2281" _null_ _null_ _null_ _null_ _null_	bthandler _null_ _null_ _null_ ));
 DESCR("btree index access method handler");

@@ -1,18 +1,17 @@
 #-------------------------------------------------------------------------
 #
 # Makefile--
-#    Makefile for access/heap
+#    Makefile for access/storage
 #
 # IDENTIFICATION
-#    src/backend/access/heap/Makefile
+#    src/backend/access/storage/Makefile
 #
 #-------------------------------------------------------------------------
 
-subdir = src/backend/access/heap
+subdir = src/backend/access/storage
 top_builddir = ../../../..
 include $(top_builddir)/src/Makefile.global
 
-OBJS = heapam.o hio.o heapam_storage.o pruneheap.o rewriteheap.o \
-	syncscan.o tuptoaster.o visibilitymap.o
+OBJS = storageam.o storageamapi.o
 
 include $(top_srcdir)/src/backend/common.mk
