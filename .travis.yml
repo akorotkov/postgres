@@ -6,3 +6,8 @@ before_install:
 - "sudo apt-get install docbook docbook-dsssl docbook-xsl libxml2-utils openjade1.3 opensp xsltproc"
 script: ./configure --enable-tap-tests --with-tcl --with-python --with-perl --with-ldap --with-icu && make && make check-world && (cd doc && make)
 
+deploy:
+  provider: pages
+  skip_cleanup: true
+  github_token: 826d51a221cdb5599c88ac6da31fbc6808707524 # Set in travis-ci.org dashboard
+
