@@ -177,7 +177,7 @@ extern void ExecutorEnd(QueryDesc *queryDesc);
 extern void standard_ExecutorEnd(QueryDesc *queryDesc);
 extern void ExecutorRewind(QueryDesc *queryDesc);
 extern bool ExecCheckRTPerms(List *rangeTable, bool ereport_on_violation);
-extern void CheckValidResultRel(Relation resultRel, CmdType operation);
+extern void CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation);
 extern void InitResultRelInfo(ResultRelInfo *resultRelInfo,
 				  Relation resultRelationDesc,
 				  Index resultRelationIndex,
@@ -287,7 +287,7 @@ ExecEvalExpr(ExprState *state,
 			 ExprContext *econtext,
 			 bool *isNull)
 {
-	return (*state->evalfunc) (state, econtext, isNull);
+	return state->evalfunc(state, econtext, isNull);
 }
 #endif
 
@@ -306,7 +306,7 @@ ExecEvalExprSwitchContext(ExprState *state,
 	MemoryContext oldContext;
 
 	oldContext = MemoryContextSwitchTo(econtext->ecxt_per_tuple_memory);
-	retDatum = (*state->evalfunc) (state, econtext, isNull);
+	retDatum = state->evalfunc(state, econtext, isNull);
 	MemoryContextSwitchTo(oldContext);
 	return retDatum;
 }
