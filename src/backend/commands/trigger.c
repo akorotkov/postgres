@@ -416,7 +416,7 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 				 (TRIGGER_FOR_DELETE(tgtype) ? 1 : 0)) != 1)
 				ereport(ERROR,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-						 errmsg("Transition tables cannot be specified for triggers with more than one event")));
+						 errmsg("transition tables cannot be specified for triggers with more than one event")));
 
 			if (tt->isNew)
 			{
@@ -5474,7 +5474,9 @@ AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 		new_shared.ats_tgoid = trigger->tgoid;
 		new_shared.ats_relid = RelationGetRelid(rel);
 		new_shared.ats_firing_id = 0;
-		new_shared.ats_transition_capture = transition_capture;
+		/* deferrable triggers cannot access transition data */
+		new_shared.ats_transition_capture =
+			trigger->tgdeferrable ? NULL : transition_capture;
 
 		afterTriggerAddEvent(&afterTriggers.query_stack[afterTriggers.query_depth],
 							 &new_event, &new_shared);
