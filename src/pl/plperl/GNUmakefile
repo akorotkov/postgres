@@ -81,13 +81,14 @@ perlchunks.h: $(PERLCHUNKS)
 
 all: all-lib
 
-SPI.c: SPI.xs plperl_helpers.h
+%.c: %.xs
 	@if [ x"$(perl_privlibexp)" = x"" ]; then echo "configure switch --with-perl was not specified."; exit 1; fi
+# xsubpp -output option is required for coverage+vpath, but requires Perl 5.9.3
+ifeq ($(enable_coverage)$(vpath_build),yesyes)
+	$(PERL) $(XSUBPPDIR)/ExtUtils/xsubpp -typemap $(perl_privlibexp)/ExtUtils/typemap -output $@ $<
+else
 	$(PERL) $(XSUBPPDIR)/ExtUtils/xsubpp -typemap $(perl_privlibexp)/ExtUtils/typemap $< >$@
-
-Util.c: Util.xs plperl_helpers.h
-	@if [ x"$(perl_privlibexp)" = x"" ]; then echo "configure switch --with-perl was not specified."; exit 1; fi
-	$(PERL) $(XSUBPPDIR)/ExtUtils/xsubpp -typemap $(perl_privlibexp)/ExtUtils/typemap $< >$@
+endif
 
 
 install: all install-lib install-data

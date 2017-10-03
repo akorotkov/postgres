@@ -71,7 +71,7 @@ override SPFLAGS += -wall -wno-unused-param -wno-empty -wfully-tagged
 # to detect whether we are using OpenSP rather than the ancient
 # original SP.
 ifneq (,$(filter o%,$(notdir $(OSX))))
-override SPFLAGS += -wdata-delim
+override SPFLAGS += -wdata-delim -winstance-ignore-ms -winstance-include-ms -winstance-param-entity
 endif
 
 
@@ -134,9 +134,8 @@ INSTALL.html: %.html : stylesheet-text.xsl %.xml
 	$(XMLLINT) --noout --valid $*.xml
 	$(XSLTPROC) $(XSLTPROCFLAGS) $(XSLTPROC_HTML_FLAGS) $^ >$@
 
-INSTALL.xml: standalone-install.sgml installation.sgml version.sgml
-	$(OSX) $(SPFLAGS) $(SGMLINCLUDE) -x lower $(filter-out version.sgml,$^) >$@.tmp
-	$(call mangle-xml,chapter)
+INSTALL.xml: standalone-profile.xsl standalone-install.xml postgres.xml
+	$(XSLTPROC) $(XSLTPROCFLAGS) --xinclude $(wordlist 1,2,$^) >$@
 
 
 ##

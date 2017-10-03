@@ -17,18 +17,15 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-/* for ntohl/htonl */
-#include <netinet/in.h>
-#include <arpa/inet.h>
-
 /* local includes */
 #include "receivelog.h"
 #include "streamutil.h"
 
 #include "access/xlog_internal.h"
-#include "pqexpbuffer.h"
 #include "common/fe_memutils.h"
 #include "datatype/timestamp.h"
+#include "port/pg_bswap.h"
+#include "pqexpbuffer.h"
 
 #define ERRCODE_DUPLICATE_OBJECT  "42710"
 
@@ -398,7 +395,8 @@ RunIdentifySystem(PGconn *conn, char **sysid, TimeLineID *starttli,
  */
 bool
 CreateReplicationSlot(PGconn *conn, const char *slot_name, const char *plugin,
-					  bool is_physical, bool slot_exists_ok)
+					  bool is_temporary, bool is_physical, bool reserve_wal,
+					  bool slot_exists_ok)
 {
 	PQExpBuffer query;
 	PGresult   *res;
@@ -410,13 +408,18 @@ CreateReplicationSlot(PGconn *conn, const char *slot_name, const char *plugin,
 	Assert(slot_name != NULL);
 
 	/* Build query */
+	appendPQExpBuffer(query, "CREATE_REPLICATION_SLOT \"%s\"", slot_name);
+	if (is_temporary)
+		appendPQExpBuffer(query, " TEMPORARY");
 	if (is_physical)
-		appendPQExpBuffer(query, "CREATE_REPLICATION_SLOT \"%s\" PHYSICAL",
-						  slot_name);
+	{
+		appendPQExpBuffer(query, " PHYSICAL");
+		if (reserve_wal)
+			appendPQExpBuffer(query, " RESERVE_WAL");
+	}
 	else
 	{
-		appendPQExpBuffer(query, "CREATE_REPLICATION_SLOT \"%s\" LOGICAL \"%s\"",
-						  slot_name, plugin);
+		appendPQExpBuffer(query, " LOGICAL \"%s\"", plugin);
 		if (PQserverVersion(conn) >= 100000)
 			/* pg_recvlogical doesn't use an exported snapshot, so suppress */
 			appendPQExpBuffer(query, " NOEXPORT_SNAPSHOT");
@@ -570,17 +573,9 @@ feTimestampDifferenceExceeds(TimestampTz start_time,
 void
 fe_sendint64(int64 i, char *buf)
 {
-	uint32		n32;
+	uint64		n64 = pg_hton64(i);
 
-	/* High order half first, since we're doing MSB-first */
-	n32 = (uint32) (i >> 32);
-	n32 = htonl(n32);
-	memcpy(&buf[0], &n32, 4);
-
-	/* Now the low order half */
-	n32 = (uint32) i;
-	n32 = htonl(n32);
-	memcpy(&buf[4], &n32, 4);
+	memcpy(buf, &n64, sizeof(n64));
 }
 
 /*
@@ -589,18 +584,9 @@ fe_sendint64(int64 i, char *buf)
 int64
 fe_recvint64(char *buf)
 {
-	int64		result;
-	uint32		h32;
-	uint32		l32;
+	uint64		n64;
 
-	memcpy(&h32, buf, 4);
-	memcpy(&l32, buf + 4, 4);
-	h32 = ntohl(h32);
-	l32 = ntohl(l32);
+	memcpy(&n64, buf, sizeof(n64));
 
-	result = h32;
-	result <<= 32;
-	result |= l32;
-
-	return result;
+	return pg_ntoh64(n64);
 }
