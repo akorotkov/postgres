@@ -1086,10 +1086,14 @@ pstrdup(const char *in)
 char *
 pnstrdup(const char *in, Size len)
 {
-	char	   *out = palloc(len + 1);
+	char	   *out;
 
+	len = strnlen(in, len);
+
+	out = palloc(len + 1);
 	memcpy(out, in, len);
 	out[len] = '\0';
+
 	return out;
 }
 
