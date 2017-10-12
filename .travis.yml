@@ -45,3 +45,35 @@ after_failure:
       gdb --batch --quiet -ex "thread apply all bt full" -ex "quit" $binary $corefile
     done
 
+
+env:
+  global:
+    # COVERITY_SCAN_TOKEN
+    # ** specific to your project **
+    - secure: "66dUcjaxG2bNu-cXsc1Ksw"
+
+addons:
+  coverity_scan:
+
+    # GitHub project metadata
+    # ** specific to your project **
+    project:
+      name: kommiharibabu/postgres
+      version: 11devel
+      description: My PostgreSQL Project
+
+    # Where email notification of build analysis results will be sent
+    notification_email: kommi.haribabu@gmail.com
+
+    # Commands to prepare for build_command
+    # ** likely specific to your build **
+    build_command_prepend: ./configure --enable-debug --enable-cassert --enable-coverage --enable-tap-tests --with-tcl --with-python --with-perl --with-ldap --with-icu
+
+    # The command that will be added as an argument to "cov-build" to compile your project for analysis,
+    # ** likely specific to your build **
+    build_command: make -j4 all contrib
+
+    # Pattern to match selecting branches that will run analysis. We recommend leaving this set to 'coverity_scan'.
+    # Take care in resource usage, and consider the build frequency allowances per
+    #   https://scan.coverity.com/faq#frequency
+    branch_pattern: master, coverity_scan
