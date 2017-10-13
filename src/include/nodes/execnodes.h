@@ -979,7 +979,7 @@ typedef struct ModifyTableState
 	int			mt_num_dispatch;	/* Number of entries in the above array */
 	int			mt_num_partitions;	/* Number of members in the following
 									 * arrays */
-	ResultRelInfo *mt_partitions;	/* Per partition result relation */
+	ResultRelInfo **mt_partitions;	/* Per partition result relation pointers */
 	TupleConversionMap **mt_partition_tupconv_maps;
 	/* Per partition tuple conversion map */
 	TupleTableSlot *mt_partition_tuple_slot;
@@ -1808,7 +1808,8 @@ typedef struct AggState
 	ExprContext **aggcontexts;	/* econtexts for long-lived data (per GS) */
 	ExprContext *tmpcontext;	/* econtext for input expressions */
 	ExprContext *curaggcontext; /* currently active aggcontext */
-	AggStatePerTrans curpertrans;	/* currently active trans state */
+	AggStatePerAgg curperagg;	/* currently active aggregate, if any */
+	AggStatePerTrans curpertrans;	/* currently active trans state, if any */
 	bool		input_done;		/* indicates end of input */
 	bool		agg_done;		/* indicates completion of Agg scan */
 	int			projected_set;	/* The last projected grouping set */
