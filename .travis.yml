@@ -45,7 +45,6 @@ after_failure:
       gdb --batch --quiet -ex "thread apply all bt full" -ex "quit" $binary $corefile
     done
 
-
 env:
   global:
     # COVERITY_SCAN_TOKEN
@@ -76,4 +75,4 @@ addons:
     # Pattern to match selecting branches that will run analysis. We recommend leaving this set to 'coverity_scan'.
     # Take care in resource usage, and consider the build frequency allowances per
     #   https://scan.coverity.com/faq#frequency
-    branch_pattern: master, coverity_scan
+    branch_pattern: coverity_scan
