@@ -248,9 +248,9 @@ typedef struct AggStatePerTransData
 	/*
 	 * Link to an Aggref expr this state value is for.
 	 *
-	 * There can be multiple Aggref's sharing the same state value, as long as
-	 * the inputs and transition function are identical. This points to the
-	 * first one of them.
+	 * There can be multiple Aggref's sharing the same state value, so long as
+	 * the inputs and transition functions are identical and the final
+	 * functions are not read-write.  This points to the first one of them.
 	 */
 	Aggref	   *aggref;
 
@@ -268,7 +268,12 @@ typedef struct AggStatePerTransData
 	 */
 	int			numInputs;
 
-	/* offset of input columns in AggState->evalslot */
+	/*
+	 * At each input row, we evaluate all argument expressions needed for all
+	 * the aggregates in this Agg node in a single ExecProject call.  inputoff
+	 * is the starting index of this aggregate's argument expressions in the
+	 * resulting tuple (in AggState->evalslot).
+	 */
 	int			inputoff;
 
 	/*
@@ -419,8 +424,8 @@ typedef struct AggStatePerAggData
 	Oid			finalfn_oid;
 
 	/*
-	 * fmgr lookup data for final function --- only valid when finalfn_oid oid
-	 * is not InvalidOid.
+	 * fmgr lookup data for final function --- only valid when finalfn_oid is
+	 * not InvalidOid.
 	 */
 	FmgrInfo	finalfn;
 
@@ -439,6 +444,11 @@ typedef struct AggStatePerAggData
 	int16		resulttypeLen;
 	bool		resulttypeByVal;
 
+	/*
+	 * "sharable" is false if this agg cannot share state values with other
+	 * aggregates because the final function is read-write.
+	 */
+	bool		sharable;
 }			AggStatePerAggData;
 
 /*
@@ -572,6 +582,7 @@ static void build_pertrans_for_aggref(AggStatePerTrans pertrans,
 static int find_compatible_peragg(Aggref *newagg, AggState *aggstate,
 					   int lastaggno, List **same_input_transnos);
 static int find_compatible_pertrans(AggState *aggstate, Aggref *newagg,
+						 bool sharable,
 						 Oid aggtransfn, Oid aggtranstype,
 						 Oid aggserialfn, Oid aggdeserialfn,
 						 Datum initValue, bool initValueIsNull,
@@ -2803,10 +2814,11 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 	/*
 	 * initialize child expressions
 	 *
-	 * We rely on the parser to have checked that no aggs contain other agg
-	 * calls in their arguments.  This would make no sense under SQL semantics
-	 * (and it's forbidden by the spec).  Because it is true, we don't need to
-	 * worry about evaluating the aggs in any particular order.
+	 * We expect the parser to have checked that no aggs contain other agg
+	 * calls in their arguments (and just to be sure, we verify it again while
+	 * initializing the plan node).  This would make no sense under SQL
+	 * semantics, and it's forbidden by the spec.  Because it is true, we
+	 * don't need to worry about evaluating the aggs in any particular order.
 	 *
 	 * Note: execExpr.c finds Aggrefs for us, and adds their AggrefExprState
 	 * nodes to aggstate->aggs.  Aggrefs in the qual are found here; Aggrefs
@@ -2845,17 +2857,6 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 	 */
 	numaggs = aggstate->numaggs;
 	Assert(numaggs == list_length(aggstate->aggs));
-	if (numaggs <= 0)
-	{
-		/*
-		 * This is not an error condition: we might be using the Agg node just
-		 * to do hash-based grouping.  Even in the regular case,
-		 * constant-expression simplification could optimize away all of the
-		 * Aggrefs in the targetlist and qual.  So keep going, but force local
-		 * copy of numaggs positive so that palloc()s below don't choke.
-		 */
-		numaggs = 1;
-	}
 
 	/*
 	 * For each phase, prepare grouping set data and fmgr lookup data for
@@ -3105,6 +3106,7 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 		AclResult	aclresult;
 		Oid			transfn_oid,
 					finalfn_oid;
+		bool		sharable;
 		Oid			serialfn_oid,
 					deserialfn_oid;
 		Expr	   *finalfnexpr;
@@ -3176,6 +3178,15 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 			peragg->finalfn_oid = finalfn_oid = InvalidOid;
 		else
 			peragg->finalfn_oid = finalfn_oid = aggform->aggfinalfn;
+
+		/*
+		 * If finalfn is marked read-write, we can't share transition states;
+		 * but it is okay to share states for AGGMODIFY_SHARABLE aggs.  Also,
+		 * if we're not executing the finalfn here, we can share regardless.
+		 */
+		sharable = (aggform->aggfinalmodify != AGGMODIFY_READ_WRITE) ||
+			(finalfn_oid == InvalidOid);
+		peragg->sharable = sharable;
 
 		serialfn_oid = InvalidOid;
 		deserialfn_oid = InvalidOid;
@@ -3315,11 +3326,12 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 		 * 2. Build working state for invoking the transition function, or
 		 * look up previously initialized working state, if we can share it.
 		 *
-		 * find_compatible_peragg() already collected a list of per-Trans's
-		 * with the same inputs. Check if any of them have the same transition
-		 * function and initial value.
+		 * find_compatible_peragg() already collected a list of sharable
+		 * per-Trans's with the same inputs. Check if any of them have the
+		 * same transition function and initial value.
 		 */
 		existing_transno = find_compatible_pertrans(aggstate, aggref,
+													sharable,
 													transfn_oid, aggtranstype,
 													serialfn_oid, deserialfn_oid,
 													initValue, initValueIsNull,
@@ -3347,19 +3359,19 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 	}
 
 	/*
-	 * Update numaggs to match the number of unique aggregates found. Also set
-	 * numstates to the number of unique aggregate states found.
+	 * Update aggstate->numaggs to be the number of unique aggregates found.
+	 * Also set numstates to the number of unique transition states found.
 	 */
 	aggstate->numaggs = aggno + 1;
 	aggstate->numtrans = transno + 1;
 
 	/*
 	 * Build a single projection computing the aggregate arguments for all
-	 * aggregates at once, that's considerably faster than doing it separately
-	 * for each.
+	 * aggregates at once; if there's more than one, that's considerably
+	 * faster than doing it separately for each.
 	 *
-	 * First create a targetlist combining the targetlist of all the
-	 * transitions.
+	 * First create a targetlist combining the targetlists of all the
+	 * per-trans states.
 	 */
 	combined_inputeval = NIL;
 	column_offset = 0;
@@ -3368,10 +3380,14 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 		AggStatePerTrans pertrans = &pertransstates[transno];
 		ListCell   *arg;
 
+		/*
+		 * Mark this per-trans state with its starting column in the combined
+		 * slot.
+		 */
 		pertrans->inputoff = column_offset;
 
 		/*
-		 * Adjust resno in a copied target entries, to point into the combined
+		 * Adjust resnos in the copied target entries to match the combined
 		 * slot.
 		 */
 		foreach(arg, pertrans->aggref->args)
@@ -3388,7 +3404,7 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 		column_offset += list_length(pertrans->aggref->args);
 	}
 
-	/* and then create a projection for that targetlist */
+	/* Now create a projection for the combined targetlist */
 	aggstate->evaldesc = ExecTypeFromTL(combined_inputeval, false);
 	aggstate->evalslot = ExecInitExtraTupleSlot(estate);
 	aggstate->evalproj = ExecBuildProjectionInfo(combined_inputeval,
@@ -3397,6 +3413,21 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 												 &aggstate->ss.ps,
 												 NULL);
 	ExecSetSlotDescriptor(aggstate->evalslot, aggstate->evaldesc);
+
+	/*
+	 * Last, check whether any more aggregates got added onto the node while
+	 * we processed the expressions for the aggregate arguments (including not
+	 * only the regular arguments handled immediately above, but any FILTER
+	 * expressions and direct arguments we might've handled earlier).  If so,
+	 * we have nested aggregate functions, which is semantically nonsensical,
+	 * so complain.  (This should have been caught by the parser, so we don't
+	 * need to work hard on a helpful error message; but we defend against it
+	 * here anyway, just to be sure.)
+	 */
+	if (numaggs != list_length(aggstate->aggs))
+		ereport(ERROR,
+				(errcode(ERRCODE_GROUPING_ERROR),
+				 errmsg("aggregate function calls cannot be nested")));
 
 	return aggstate;
 }
@@ -3427,7 +3458,6 @@ build_pertrans_for_aggref(AggStatePerTrans pertrans,
 	List	   *sortlist;
 	int			numSortCols;
 	int			numDistinctCols;
-	int			naggs;
 	int			i;
 
 	/* Begin filling in the pertrans data */
@@ -3569,21 +3599,10 @@ build_pertrans_for_aggref(AggStatePerTrans pertrans,
 	}
 
 	/* Initialize the input and FILTER expressions */
-	naggs = aggstate->numaggs;
 	pertrans->aggfilter = ExecInitExpr(aggref->aggfilter,
 									   (PlanState *) aggstate);
 	pertrans->aggdirectargs = ExecInitExprList(aggref->aggdirectargs,
 											   (PlanState *) aggstate);
-
-	/*
-	 * Complain if the aggregate's arguments contain any aggregates; nested
-	 * agg functions are semantically nonsensical.  (This should have been
-	 * caught earlier, but we defend against it here anyway.)
-	 */
-	if (naggs != aggstate->numaggs)
-		ereport(ERROR,
-				(errcode(ERRCODE_GROUPING_ERROR),
-				 errmsg("aggregate function calls cannot be nested")));
 
 	/*
 	 * If we're doing either DISTINCT or ORDER BY for a plain agg, then we
@@ -3724,10 +3743,10 @@ GetAggInitVal(Datum textInitVal, Oid transtype)
  * with this one, with the same input parameters. If no compatible aggregate
  * can be found, returns -1.
  *
- * As a side-effect, this also collects a list of existing per-Trans structs
- * with matching inputs. If no identical Aggref is found, the list is passed
- * later to find_compatible_pertrans, to see if we can at least reuse the
- * state value of another aggregate.
+ * As a side-effect, this also collects a list of existing, sharable per-Trans
+ * structs with matching inputs. If no identical Aggref is found, the list is
+ * passed later to find_compatible_pertrans, to see if we can at least reuse
+ * the state value of another aggregate.
  */
 static int
 find_compatible_peragg(Aggref *newagg, AggState *aggstate,
@@ -3785,11 +3804,15 @@ find_compatible_peragg(Aggref *newagg, AggState *aggstate,
 		}
 
 		/*
-		 * Not identical, but it had the same inputs. Return it to the caller,
-		 * in case we can re-use its per-trans state.
+		 * Not identical, but it had the same inputs.  If the final function
+		 * permits sharing, return its transno to the caller, in case we can
+		 * re-use its per-trans state.  (If there's already sharing going on,
+		 * we might report a transno more than once.  find_compatible_pertrans
+		 * is cheap enough that it's not worth spending cycles to avoid that.)
 		 */
-		*same_input_transnos = lappend_int(*same_input_transnos,
-										   peragg->transno);
+		if (peragg->sharable)
+			*same_input_transnos = lappend_int(*same_input_transnos,
+											   peragg->transno);
 	}
 
 	return -1;
@@ -3804,7 +3827,7 @@ find_compatible_peragg(Aggref *newagg, AggState *aggstate,
  * verified to match.)
  */
 static int
-find_compatible_pertrans(AggState *aggstate, Aggref *newagg,
+find_compatible_pertrans(AggState *aggstate, Aggref *newagg, bool sharable,
 						 Oid aggtransfn, Oid aggtranstype,
 						 Oid aggserialfn, Oid aggdeserialfn,
 						 Datum initValue, bool initValueIsNull,
@@ -3812,14 +3835,8 @@ find_compatible_pertrans(AggState *aggstate, Aggref *newagg,
 {
 	ListCell   *lc;
 
-	/*
-	 * For the moment, never try to share transition states between different
-	 * ordered-set aggregates.  This is necessary because the finalfns of the
-	 * built-in OSAs (see orderedsetaggs.c) are destructive of their
-	 * transition states.  We should fix them so we can allow this, but not
-	 * losing performance in the normal non-shared case will take some work.
-	 */
-	if (AGGKIND_IS_ORDERED_SET(newagg->aggkind))
+	/* If this aggregate can't share transition states, give up */
+	if (!sharable)
 		return -1;
 
 	foreach(lc, transnos)
