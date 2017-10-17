@@ -48,9 +48,9 @@ before_install:
     Pin-Priority: 500
     EOF
   - sudo apt-get update && sudo apt-get install make
-script: if [ "${COVERITY_SCAN_BRANCH}" != 1 ]; ./configure --enable-debug --enable-cassert --enable-coverage --enable-tap-tests --with-tcl --with-python --with-perl --with-ldap --with-icu && make -j4 all contrib docs && make -Otarget -j3 check-world ; fi
+script: if [ "${COVERITY_SCAN_BRANCH}" != 1 ]; then ./configure --enable-debug --enable-cassert --enable-coverage --enable-tap-tests --with-tcl --with-python --with-perl --with-ldap --with-icu && make -j4 all contrib docs && make -Otarget -j3 check-world ; fi
 after_success:
-  - bash <(curl -s https://codecov.io/bash)
+  - if [ "${COVERITY_SCAN_BRANCH}" != 1 ]; then bash <(curl -s https://codecov.io/bash) ; fi
 after_failure:
   - for f in ` find . -name regression.diffs ` ; do echo "========= Contents of $f" ; head -1000 $f ; done
   - |
