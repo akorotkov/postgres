@@ -33,7 +33,7 @@ before_install:
     Pin-Priority: 500
     EOF
   - sudo apt-get update && sudo apt-get install make
-script:./configure --enable-debug --enable-cassert --enable-coverage --enable-tap-tests --with-tcl --with-python --with-perl --with-ldap --with-icu && make -j4 all contrib docs && make -Otarget -j3 check-world 
+script: ./configure --enable-debug --enable-cassert --enable-coverage --enable-tap-tests --with-tcl --with-python --with-perl --with-ldap --with-icu && make -j4 all contrib docs && make -Otarget -j3 check-world
 after_success:
   - bash <(curl -s https://codecov.io/bash)
 after_failure:
