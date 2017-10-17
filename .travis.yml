@@ -1,8 +1,8 @@
 env:
   global:
-    # COVERITY_SCAN_TOKEN
-    # ** specific to your project **
-    - secure: "66dUcjaxG2bNu-cXsc1Ksw"
+   # The next declaration is the encrypted COVERITY_SCAN_TOKEN, created
+   #   via the "travis encrypt" command using the project repo's public key
+   - secure: "v8sMV9RZPgqAY+Ppb1cMvZ85f7nvzEHdF1mNPec7W2nvmrXEY9bqM+oPumIYZ99VbmhLNNbV7uPt2BDOkd/GvGXcs5Pgr3cTOEeN9N/fjMKXoUAIILVnAay7bjbybeTNTunNUp3RS8SzKW+HPdOGPNEuoAXxdtgYu7JySMFZ84DnMzc5B5p/iQ5ChdWO7G9LBcazLlCdm9dRBstyyLC7BNuegdXvrviUVm/0B3V3GmTPAs5D9s9sbL519hzgxDl9WJTqKOhNAoZwvYyBprqx4X1lr9L0QC4x3x4oiUILHp5zPld8JCOSfe2GNSC759WCrQ+Y8FpIi5YLsLr0FnOgUc2KHviQnHlJws1BnqKe8bRD9W5J57QxMuBhVDjkqyEXA3tR+EjIkbrjxs22kd1Jei1Vq8K78NmHMxnfm/ws+kuO/wlePsGCoGZfrjQOEZHQ1iO9dZkuE8toKALyvDEfAE8CxAVvbNgcoB3JO+VOvsDjxSzxsi9I2Joz4QXsxo4o3mVJeCopfdVKw82PATQ8k74vWyihWMvmGufrN57pB0y9gM2BxCQ8DLbIdPXFZaC0j0wW9IwLCNIvB6FTzKgl+eizATETWsqEXXxj6nRSNJ7aqE6Z8WAT9WmB8ZTVanRibEILIzjxd8n/M7B1B4w2wYGLL3GGezFGaYGV3Auy2f0="
 sudo: required
 addons:
   coverity_scan:
@@ -34,6 +34,7 @@ addons:
 language: c
 cache: ccache
 before_install:
+  - echo -n | openssl s_client -connect scan.coverity.com:443 | sed -ne '/-BEGIN CERTIFICATE-/,/-END CERTIFICATE-/p' | sudo tee -a /etc/ssl/certs/ca-
   - echo '/tmp/%e-%s-%p.core' | sudo tee /proc/sys/kernel/core_pattern
   - echo "deb http://archive.ubuntu.com/ubuntu xenial main" | sudo tee /etc/apt/sources.list.d/xenial.list > /dev/null
   - |
@@ -47,7 +48,7 @@ before_install:
     Pin-Priority: 500
     EOF
   - sudo apt-get update && sudo apt-get install make
-script: ./configure --enable-debug --enable-cassert --enable-coverage --enable-tap-tests --with-tcl --with-python --with-perl --with-ldap --with-icu && make -j4 all contrib docs && make -Otarget -j3 check-world
+script: if [ "${COVERITY_SCAN_BRANCH}" != 1 ]; ./configure --enable-debug --enable-cassert --enable-coverage --enable-tap-tests --with-tcl --with-python --with-perl --with-ldap --with-icu && make -j4 all contrib docs && make -Otarget -j3 check-world ; fi
 after_success:
   - bash <(curl -s https://codecov.io/bash)
 after_failure:
