@@ -79,22 +79,23 @@ static HTAB *TypeCacheHash = NULL;
 static TypeCacheEntry *firstDomainTypeEntry = NULL;
 
 /* Private flag bits in the TypeCacheEntry.flags field */
-#define TCFLAGS_CHECKED_BTREE_OPCLASS		0x0001
-#define TCFLAGS_CHECKED_HASH_OPCLASS		0x0002
-#define TCFLAGS_CHECKED_EQ_OPR				0x0004
-#define TCFLAGS_CHECKED_LT_OPR				0x0008
-#define TCFLAGS_CHECKED_GT_OPR				0x0010
-#define TCFLAGS_CHECKED_CMP_PROC			0x0020
-#define TCFLAGS_CHECKED_HASH_PROC			0x0040
-#define TCFLAGS_CHECKED_ELEM_PROPERTIES		0x0080
-#define TCFLAGS_HAVE_ELEM_EQUALITY			0x0100
-#define TCFLAGS_HAVE_ELEM_COMPARE			0x0200
-#define TCFLAGS_HAVE_ELEM_HASHING			0x0400
-#define TCFLAGS_CHECKED_FIELD_PROPERTIES	0x0800
-#define TCFLAGS_HAVE_FIELD_EQUALITY			0x1000
-#define TCFLAGS_HAVE_FIELD_COMPARE			0x2000
-#define TCFLAGS_CHECKED_DOMAIN_CONSTRAINTS	0x4000
-#define TCFLAGS_CHECKED_HASH_EXTENDED_PROC	0x8000
+#define TCFLAGS_CHECKED_BTREE_OPCLASS		0x000001
+#define TCFLAGS_CHECKED_HASH_OPCLASS		0x000002
+#define TCFLAGS_CHECKED_EQ_OPR				0x000004
+#define TCFLAGS_CHECKED_LT_OPR				0x000008
+#define TCFLAGS_CHECKED_GT_OPR				0x000010
+#define TCFLAGS_CHECKED_CMP_PROC			0x000020
+#define TCFLAGS_CHECKED_HASH_PROC			0x000040
+#define TCFLAGS_CHECKED_HASH_EXTENDED_PROC	0x000080
+#define TCFLAGS_CHECKED_ELEM_PROPERTIES		0x000100
+#define TCFLAGS_HAVE_ELEM_EQUALITY			0x000200
+#define TCFLAGS_HAVE_ELEM_COMPARE			0x000400
+#define TCFLAGS_HAVE_ELEM_HASHING			0x000800
+#define TCFLAGS_HAVE_ELEM_EXTENDED_HASHING	0x001000
+#define TCFLAGS_CHECKED_FIELD_PROPERTIES	0x002000
+#define TCFLAGS_HAVE_FIELD_EQUALITY			0x004000
+#define TCFLAGS_HAVE_FIELD_COMPARE			0x008000
+#define TCFLAGS_CHECKED_DOMAIN_CONSTRAINTS	0x010000
 
 /*
  * Data stored about a domain type's constraints.  Note that we do not create
@@ -273,10 +274,14 @@ static List *prep_domain_constraints(List *constraints, MemoryContext execctx);
 static bool array_element_has_equality(TypeCacheEntry *typentry);
 static bool array_element_has_compare(TypeCacheEntry *typentry);
 static bool array_element_has_hashing(TypeCacheEntry *typentry);
+static bool array_element_has_extended_hashing(TypeCacheEntry *typentry);
 static void cache_array_element_properties(TypeCacheEntry *typentry);
 static bool record_fields_have_equality(TypeCacheEntry *typentry);
 static bool record_fields_have_compare(TypeCacheEntry *typentry);
 static void cache_record_field_properties(TypeCacheEntry *typentry);
+static bool range_element_has_hashing(TypeCacheEntry *typentry);
+static bool range_element_has_extended_hashing(TypeCacheEntry *typentry);
+static void cache_range_element_properties(TypeCacheEntry *typentry);
 static void TypeCacheRelCallback(Datum arg, Oid relid);
 static void TypeCacheOpcCallback(Datum arg, int cacheid, uint32 hashvalue);
 static void TypeCacheConstrCallback(Datum arg, int cacheid, uint32 hashvalue);
@@ -451,8 +456,8 @@ lookup_type_cache(Oid type_id, int flags)
 		 * eq_opr; if we already found one from the btree opclass, that
 		 * decision is still good.
 		 */
-		typentry->flags &= ~(TCFLAGS_CHECKED_HASH_PROC);
-		typentry->flags &= ~(TCFLAGS_CHECKED_HASH_EXTENDED_PROC);
+		typentry->flags &= ~(TCFLAGS_CHECKED_HASH_PROC |
+							 TCFLAGS_CHECKED_HASH_EXTENDED_PROC);
 		typentry->flags |= TCFLAGS_CHECKED_HASH_OPCLASS;
 	}
 
@@ -478,9 +483,11 @@ lookup_type_cache(Oid type_id, int flags)
 
 		/*
 		 * If the proposed equality operator is array_eq or record_eq, check
-		 * to see if the element type or column types support equality. If
+		 * to see if the element type or column types support equality.  If
 		 * not, array_eq or record_eq would fail at runtime, so we don't want
-		 * to report that the type has equality.
+		 * to report that the type has equality.  (We can omit similar
+		 * checking for ranges because ranges can't be created in the first
+		 * place unless their subtypes support equality.)
 		 */
 		if (eq_opr == ARRAY_EQ_OP &&
 			!array_element_has_equality(typentry))
@@ -500,8 +507,8 @@ lookup_type_cache(Oid type_id, int flags)
 		 * equality operator.  This is so we can ensure that the hash
 		 * functions match the operator.
 		 */
-		typentry->flags &= ~(TCFLAGS_CHECKED_HASH_PROC);
-		typentry->flags &= ~(TCFLAGS_CHECKED_HASH_EXTENDED_PROC);
+		typentry->flags &= ~(TCFLAGS_CHECKED_HASH_PROC |
+							 TCFLAGS_CHECKED_HASH_EXTENDED_PROC);
 		typentry->flags |= TCFLAGS_CHECKED_EQ_OPR;
 	}
 	if ((flags & TYPECACHE_LT_OPR) &&
@@ -515,7 +522,10 @@ lookup_type_cache(Oid type_id, int flags)
 										 typentry->btree_opintype,
 										 BTLessStrategyNumber);
 
-		/* As above, make sure array_cmp or record_cmp will succeed */
+		/*
+		 * As above, make sure array_cmp or record_cmp will succeed; but again
+		 * we need no special check for ranges.
+		 */
 		if (lt_opr == ARRAY_LT_OP &&
 			!array_element_has_compare(typentry))
 			lt_opr = InvalidOid;
@@ -537,7 +547,10 @@ lookup_type_cache(Oid type_id, int flags)
 										 typentry->btree_opintype,
 										 BTGreaterStrategyNumber);
 
-		/* As above, make sure array_cmp or record_cmp will succeed */
+		/*
+		 * As above, make sure array_cmp or record_cmp will succeed; but again
+		 * we need no special check for ranges.
+		 */
 		if (gt_opr == ARRAY_GT_OP &&
 			!array_element_has_compare(typentry))
 			gt_opr = InvalidOid;
@@ -559,7 +572,10 @@ lookup_type_cache(Oid type_id, int flags)
 										 typentry->btree_opintype,
 										 BTORDER_PROC);
 
-		/* As above, make sure array_cmp or record_cmp will succeed */
+		/*
+		 * As above, make sure array_cmp or record_cmp will succeed; but again
+		 * we need no special check for ranges.
+		 */
 		if (cmp_proc == F_BTARRAYCMP &&
 			!array_element_has_compare(typentry))
 			cmp_proc = InvalidOid;
@@ -603,6 +619,13 @@ lookup_type_cache(Oid type_id, int flags)
 			!array_element_has_hashing(typentry))
 			hash_proc = InvalidOid;
 
+		/*
+		 * Likewise for hash_range.
+		 */
+		if (hash_proc == F_HASH_RANGE &&
+			!range_element_has_hashing(typentry))
+			hash_proc = InvalidOid;
+
 		/* Force update of hash_proc_finfo only if we're changing state */
 		if (typentry->hash_proc != hash_proc)
 			typentry->hash_proc_finfo.fn_oid = InvalidOid;
@@ -637,10 +660,17 @@ lookup_type_cache(Oid type_id, int flags)
 		 * we'll need more logic here to check that case too.
 		 */
 		if (hash_extended_proc == F_HASH_ARRAY_EXTENDED &&
-			!array_element_has_hashing(typentry))
+			!array_element_has_extended_hashing(typentry))
 			hash_extended_proc = InvalidOid;
 
-		/* Force update of hash_proc_finfo only if we're changing state */
+		/*
+		 * Likewise for hash_range_extended.
+		 */
+		if (hash_extended_proc == F_HASH_RANGE_EXTENDED &&
+			!range_element_has_extended_hashing(typentry))
+			hash_extended_proc = InvalidOid;
+
+		/* Force update of proc finfo only if we're changing state */
 		if (typentry->hash_extended_proc != hash_extended_proc)
 			typentry->hash_extended_proc_finfo.fn_oid = InvalidOid;
 
@@ -1269,6 +1299,14 @@ array_element_has_hashing(TypeCacheEntry *typentry)
 	return (typentry->flags & TCFLAGS_HAVE_ELEM_HASHING) != 0;
 }
 
+static bool
+array_element_has_extended_hashing(TypeCacheEntry *typentry)
+{
+	if (!(typentry->flags & TCFLAGS_CHECKED_ELEM_PROPERTIES))
+		cache_array_element_properties(typentry);
+	return (typentry->flags & TCFLAGS_HAVE_ELEM_EXTENDED_HASHING) != 0;
+}
+
 static void
 cache_array_element_properties(TypeCacheEntry *typentry)
 {
@@ -1281,16 +1319,23 @@ cache_array_element_properties(TypeCacheEntry *typentry)
 		elementry = lookup_type_cache(elem_type,
 									  TYPECACHE_EQ_OPR |
 									  TYPECACHE_CMP_PROC |
-									  TYPECACHE_HASH_PROC);
+									  TYPECACHE_HASH_PROC |
+									  TYPECACHE_HASH_EXTENDED_PROC);
 		if (OidIsValid(elementry->eq_opr))
 			typentry->flags |= TCFLAGS_HAVE_ELEM_EQUALITY;
 		if (OidIsValid(elementry->cmp_proc))
 			typentry->flags |= TCFLAGS_HAVE_ELEM_COMPARE;
 		if (OidIsValid(elementry->hash_proc))
 			typentry->flags |= TCFLAGS_HAVE_ELEM_HASHING;
+		if (OidIsValid(elementry->hash_extended_proc))
+			typentry->flags |= TCFLAGS_HAVE_ELEM_EXTENDED_HASHING;
 	}
 	typentry->flags |= TCFLAGS_CHECKED_ELEM_PROPERTIES;
 }
+
+/*
+ * Likewise, some helper functions for composite types.
+ */
 
 static bool
 record_fields_have_equality(TypeCacheEntry *typentry)
@@ -1361,6 +1406,54 @@ cache_record_field_properties(TypeCacheEntry *typentry)
 		DecrTupleDescRefCount(tupdesc);
 	}
 	typentry->flags |= TCFLAGS_CHECKED_FIELD_PROPERTIES;
+}
+
+/*
+ * Likewise, some helper functions for range types.
+ *
+ * We can borrow the flag bits for array element properties to use for range
+ * element properties, since those flag bits otherwise have no use in a
+ * range type's typcache entry.
+ */
+
+static bool
+range_element_has_hashing(TypeCacheEntry *typentry)
+{
+	if (!(typentry->flags & TCFLAGS_CHECKED_ELEM_PROPERTIES))
+		cache_range_element_properties(typentry);
+	return (typentry->flags & TCFLAGS_HAVE_ELEM_HASHING) != 0;
+}
+
+static bool
+range_element_has_extended_hashing(TypeCacheEntry *typentry)
+{
+	if (!(typentry->flags & TCFLAGS_CHECKED_ELEM_PROPERTIES))
+		cache_range_element_properties(typentry);
+	return (typentry->flags & TCFLAGS_HAVE_ELEM_EXTENDED_HASHING) != 0;
+}
+
+static void
+cache_range_element_properties(TypeCacheEntry *typentry)
+{
+	/* load up subtype link if we didn't already */
+	if (typentry->rngelemtype == NULL &&
+		typentry->typtype == TYPTYPE_RANGE)
+		load_rangetype_info(typentry);
+
+	if (typentry->rngelemtype != NULL)
+	{
+		TypeCacheEntry *elementry;
+
+		/* might need to calculate subtype's hash function properties */
+		elementry = lookup_type_cache(typentry->rngelemtype->type_id,
+									  TYPECACHE_HASH_PROC |
+									  TYPECACHE_HASH_EXTENDED_PROC);
+		if (OidIsValid(elementry->hash_proc))
+			typentry->flags |= TCFLAGS_HAVE_ELEM_HASHING;
+		if (OidIsValid(elementry->hash_extended_proc))
+			typentry->flags |= TCFLAGS_HAVE_ELEM_EXTENDED_HASHING;
+	}
+	typentry->flags |= TCFLAGS_CHECKED_ELEM_PROPERTIES;
 }
 
 /*
