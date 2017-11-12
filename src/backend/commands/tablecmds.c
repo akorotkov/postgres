@@ -426,7 +426,7 @@ static void ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId,
 					 bool rewrite);
 static void RebuildConstraintComment(AlteredTableInfo *tab, int pass,
 						 Oid objid, Relation rel, List *domname,
-						 char *conname);
+						 const char *conname);
 static void TryReuseIndex(Oid oldId, IndexStmt *stmt);
 static void TryReuseForeignKey(Oid oldId, Constraint *con);
 static void change_owner_fix_column_acls(Oid relationOid,
@@ -438,14 +438,14 @@ static ObjectAddress ATExecClusterOn(Relation rel, const char *indexName,
 static void ATExecDropCluster(Relation rel, LOCKMODE lockmode);
 static bool ATPrepChangePersistence(Relation rel, bool toLogged);
 static void ATPrepSetTableSpace(AlteredTableInfo *tab, Relation rel,
-					char *tablespacename, LOCKMODE lockmode);
+					const char *tablespacename, LOCKMODE lockmode);
 static void ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode);
 static void ATExecSetRelOptions(Relation rel, List *defList,
 					AlterTableType operation,
 					LOCKMODE lockmode);
-static void ATExecEnableDisableTrigger(Relation rel, char *trigname,
+static void ATExecEnableDisableTrigger(Relation rel, const char *trigname,
 						   char fires_when, bool skip_system, LOCKMODE lockmode);
-static void ATExecEnableDisableRule(Relation rel, char *rulename,
+static void ATExecEnableDisableRule(Relation rel, const char *rulename,
 						char fires_when, LOCKMODE lockmode);
 static void ATPrepAddInherit(Relation child_rel);
 static ObjectAddress ATExecAddInherit(Relation child_rel, RangeVar *parent, LOCKMODE lockmode);
@@ -471,7 +471,7 @@ static void RangeVarCallbackForAlterRelation(const RangeVar *rv, Oid relid,
 static bool is_partition_attr(Relation rel, AttrNumber attnum, bool *used_in_expr);
 static PartitionSpec *transformPartitionSpec(Relation rel, PartitionSpec *partspec, char *strategy);
 static void ComputePartitionAttrs(Relation rel, List *partParams, AttrNumber *partattrs,
-					  List **partexprs, Oid *partopclass, Oid *partcollation);
+					  List **partexprs, Oid *partopclass, Oid *partcollation, char strategy);
 static void CreateInheritance(Relation child_rel, Relation parent_rel);
 static void RemoveInheritance(Relation child_rel, Relation parent_rel);
 static ObjectAddress ATExecAttachPartition(List **wqueue, Relation rel,
@@ -894,7 +894,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 
 		ComputePartitionAttrs(rel, stmt->partspec->partParams,
 							  partattrs, &partexprs, partopclass,
-							  partcollation);
+							  partcollation, strategy);
 
 		StorePartitionKey(rel, strategy, partnatts, partattrs, partexprs,
 						  partopclass, partcollation);
@@ -9873,7 +9873,7 @@ ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId, char *cmd,
 static void
 RebuildConstraintComment(AlteredTableInfo *tab, int pass, Oid objid,
 						 Relation rel, List *domname,
-						 char *conname)
+						 const char *conname)
 {
 	CommentStmt *cmd;
 	char	   *comment_str;
@@ -10393,7 +10393,7 @@ ATExecDropCluster(Relation rel, LOCKMODE lockmode)
  * ALTER TABLE SET TABLESPACE
  */
 static void
-ATPrepSetTableSpace(AlteredTableInfo *tab, Relation rel, char *tablespacename, LOCKMODE lockmode)
+ATPrepSetTableSpace(AlteredTableInfo *tab, Relation rel, const char *tablespacename, LOCKMODE lockmode)
 {
 	Oid			tablespaceId;
 
@@ -11060,7 +11060,7 @@ copy_relation_data(SMgrRelation src, SMgrRelation dst,
  * We just pass this off to trigger.c.
  */
 static void
-ATExecEnableDisableTrigger(Relation rel, char *trigname,
+ATExecEnableDisableTrigger(Relation rel, const char *trigname,
 						   char fires_when, bool skip_system, LOCKMODE lockmode)
 {
 	EnableDisableTrigger(rel, trigname, fires_when, skip_system);
@@ -11072,7 +11072,7 @@ ATExecEnableDisableTrigger(Relation rel, char *trigname,
  * We just pass this off to rewriteDefine.c.
  */
 static void
-ATExecEnableDisableRule(Relation rel, char *rulename,
+ATExecEnableDisableRule(Relation rel, const char *rulename,
 						char fires_when, LOCKMODE lockmode)
 {
 	EnableDisableRule(rel, rulename, fires_when);
@@ -13337,7 +13337,9 @@ transformPartitionSpec(Relation rel, PartitionSpec *partspec, char *strategy)
 	newspec->location = partspec->location;
 
 	/* Parse partitioning strategy name */
-	if (pg_strcasecmp(partspec->strategy, "list") == 0)
+	if (pg_strcasecmp(partspec->strategy, "hash") == 0)
+		*strategy = PARTITION_STRATEGY_HASH;
+	else if (pg_strcasecmp(partspec->strategy, "list") == 0)
 		*strategy = PARTITION_STRATEGY_LIST;
 	else if (pg_strcasecmp(partspec->strategy, "range") == 0)
 		*strategy = PARTITION_STRATEGY_RANGE;
@@ -13407,10 +13409,12 @@ transformPartitionSpec(Relation rel, PartitionSpec *partspec, char *strategy)
  */
 static void
 ComputePartitionAttrs(Relation rel, List *partParams, AttrNumber *partattrs,
-					  List **partexprs, Oid *partopclass, Oid *partcollation)
+					  List **partexprs, Oid *partopclass, Oid *partcollation,
+					  char strategy)
 {
 	int			attn;
 	ListCell   *lc;
+	Oid			am_oid;
 
 	attn = 0;
 	foreach(lc, partParams)
@@ -13570,25 +13574,41 @@ ComputePartitionAttrs(Relation rel, List *partParams, AttrNumber *partattrs,
 		partcollation[attn] = attcollation;
 
 		/*
-		 * Identify a btree opclass to use. Currently, we use only btree
-		 * operators, which seems enough for list and range partitioning.
+		 * Identify the appropriate operator class.  For list and range
+		 * partitioning, we use a btree operator class; hash partitioning uses
+		 * a hash operator class.
 		 */
+		if (strategy == PARTITION_STRATEGY_HASH)
+			am_oid = HASH_AM_OID;
+		else
+			am_oid = BTREE_AM_OID;
+
 		if (!pelem->opclass)
 		{
-			partopclass[attn] = GetDefaultOpClass(atttype, BTREE_AM_OID);
+			partopclass[attn] = GetDefaultOpClass(atttype, am_oid);
 
 			if (!OidIsValid(partopclass[attn]))
-				ereport(ERROR,
-						(errcode(ERRCODE_UNDEFINED_OBJECT),
-						 errmsg("data type %s has no default btree operator class",
-								format_type_be(atttype)),
-						 errhint("You must specify a btree operator class or define a default btree operator class for the data type.")));
+			{
+				if (strategy == PARTITION_STRATEGY_HASH)
+					ereport(ERROR,
+							(errcode(ERRCODE_UNDEFINED_OBJECT),
+							 errmsg("data type %s has no default hash operator class",
+									format_type_be(atttype)),
+							 errhint("You must specify a hash operator class or define a default hash operator class for the data type.")));
+				else
+					ereport(ERROR,
+							(errcode(ERRCODE_UNDEFINED_OBJECT),
+							 errmsg("data type %s has no default btree operator class",
+									format_type_be(atttype)),
+							 errhint("You must specify a btree operator class or define a default btree operator class for the data type.")));
+
+			}
 		}
 		else
 			partopclass[attn] = ResolveOpClass(pelem->opclass,
 											   atttype,
-											   "btree",
-											   BTREE_AM_OID);
+											   am_oid == HASH_AM_OID ? "hash" : "btree",
+											   am_oid);
 
 		attn++;
 	}

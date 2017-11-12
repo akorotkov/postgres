@@ -66,7 +66,8 @@ ALLSGML := $(wildcard $(srcdir)/*.sgml $(srcdir)/ref/*.sgml) $(GENERATED_SGML)
 # Enable some extra warnings
 # -wfully-tagged needed to throw a warning on missing tags
 # for older tool chains, 2007-08-31
-override SPFLAGS += -wall -wno-unused-param -wfully-tagged
+# -wnet catches XML-style empty-element tags like <xref linkend="abc"/>.
+override SPFLAGS += -wall -wno-unused-param -wfully-tagged -wnet
 # Additional warnings for XML compatibility.  The conditional is meant
 # to detect whether we are using OpenSP rather than the ancient
 # original SP.
@@ -303,7 +304,7 @@ endif # sqlmansectnum != 7
 
 # tabs are harmless, but it is best to avoid them in SGML files
 check-tabs:
-	@( ! grep '	' $(wildcard $(srcdir)/*.sgml $(srcdir)/ref/*.sgml $(srcdir)/*.dsl $(srcdir)/*.xsl) ) || (echo "Tabs appear in SGML/XML files" 1>&2;  exit 1)
+	@( ! grep '	' $(wildcard $(srcdir)/*.sgml $(srcdir)/ref/*.sgml $(srcdir)/*.xsl) ) || (echo "Tabs appear in SGML/XML files" 1>&2;  exit 1)
 
 ##
 ## Clean
@@ -311,7 +312,7 @@ check-tabs:
 
 # This allows removing some files from the distribution tarballs while
 # keeping the dependencies satisfied.
-.SECONDARY: postgres.xml $(GENERATED_SGML) HTML.index
+.SECONDARY: postgres.xml $(GENERATED_SGML)
 .SECONDARY: INSTALL.html INSTALL.xml
 .SECONDARY: postgres-A4.fo postgres-US.fo
 
