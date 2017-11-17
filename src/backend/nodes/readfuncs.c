@@ -1480,7 +1480,7 @@ _readPlannedStmt(void)
 	READ_NODE_FIELD(rowMarks);
 	READ_NODE_FIELD(relationOids);
 	READ_NODE_FIELD(invalItems);
-	READ_INT_FIELD(nParamExec);
+	READ_NODE_FIELD(paramExecTypes);
 	READ_NODE_FIELD(utilityStmt);
 	READ_LOCATION_FIELD(stmt_location);
 	READ_LOCATION_FIELD(stmt_len);
@@ -2172,6 +2172,7 @@ _readGather(void)
 	READ_INT_FIELD(rescan_param);
 	READ_BOOL_FIELD(single_copy);
 	READ_BOOL_FIELD(invisible);
+	READ_BITMAPSET_FIELD(initParam);
 
 	READ_DONE();
 }
@@ -2193,6 +2194,7 @@ _readGatherMerge(void)
 	READ_OID_ARRAY(sortOperators, local_node->numCols);
 	READ_OID_ARRAY(collations, local_node->numCols);
 	READ_BOOL_ARRAY(nullsFirst, local_node->numCols);
+	READ_BITMAPSET_FIELD(initParam);
 
 	READ_DONE();
 }

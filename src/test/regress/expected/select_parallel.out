@@ -34,6 +34,49 @@ select count(*) from a_star;
     50
 (1 row)
 
+-- test with leader participation disabled
+set parallel_leader_participation = off;
+explain (costs off)
+  select count(*) from tenk1 where stringu1 = 'GRAAAA';
+                       QUERY PLAN                        
+---------------------------------------------------------
+ Finalize Aggregate
+   ->  Gather
+         Workers Planned: 4
+         ->  Partial Aggregate
+               ->  Parallel Seq Scan on tenk1
+                     Filter: (stringu1 = 'GRAAAA'::name)
+(6 rows)
+
+select count(*) from tenk1 where stringu1 = 'GRAAAA';
+ count 
+-------
+    15
+(1 row)
+
+-- test with leader participation disabled, but no workers available (so
+-- the leader will have to run the plan despite the setting)
+set max_parallel_workers = 0;
+explain (costs off)
+  select count(*) from tenk1 where stringu1 = 'GRAAAA';
+                       QUERY PLAN                        
+---------------------------------------------------------
+ Finalize Aggregate
+   ->  Gather
+         Workers Planned: 4
+         ->  Partial Aggregate
+               ->  Parallel Seq Scan on tenk1
+                     Filter: (stringu1 = 'GRAAAA'::name)
+(6 rows)
+
+select count(*) from tenk1 where stringu1 = 'GRAAAA';
+ count 
+-------
+    15
+(1 row)
+
+reset max_parallel_workers;
+reset parallel_leader_participation;
 -- test that parallel_restricted function doesn't run in worker
 alter table tenk1 set (parallel_workers = 4);
 explain (verbose, costs off)
@@ -158,6 +201,41 @@ explain (costs off)
      ->  Seq Scan on tenk2
 (4 rows)
 
+alter table tenk2 reset (parallel_workers);
+-- test parallel plan for a query containing initplan.
+set enable_indexscan = off;
+set enable_indexonlyscan = off;
+set enable_bitmapscan = off;
+alter table tenk2 set (parallel_workers = 2);
+explain (costs off)
+	select count(*) from tenk1
+        where tenk1.unique1 = (Select max(tenk2.unique1) from tenk2);
+                      QUERY PLAN                      
+------------------------------------------------------
+ Aggregate
+   InitPlan 1 (returns $2)
+     ->  Finalize Aggregate
+           ->  Gather
+                 Workers Planned: 2
+                 ->  Partial Aggregate
+                       ->  Parallel Seq Scan on tenk2
+   ->  Gather
+         Workers Planned: 4
+         Params Evaluated: $2
+         ->  Parallel Seq Scan on tenk1
+               Filter: (unique1 = $2)
+(12 rows)
+
+select count(*) from tenk1
+    where tenk1.unique1 = (Select max(tenk2.unique1) from tenk2);
+ count 
+-------
+     1
+(1 row)
+
+reset enable_indexscan;
+reset enable_indexonlyscan;
+reset enable_bitmapscan;
 alter table tenk2 reset (parallel_workers);
 -- test parallel index scans.
 set enable_seqscan to off;
@@ -375,6 +453,74 @@ select count(*) from tenk1 group by twenty;
    500
 (20 rows)
 
+--test expressions in targetlist are pushed down for gather merge
+create or replace function simple_func(var1 integer) returns integer
+as $$
+begin
+        return var1 + 10;
+end;
+$$ language plpgsql PARALLEL SAFE;
+explain (costs off, verbose)
+    select ten, simple_func(ten) from tenk1 where ten < 100 order by ten;
+                     QUERY PLAN                      
+-----------------------------------------------------
+ Gather Merge
+   Output: ten, (simple_func(ten))
+   Workers Planned: 4
+   ->  Result
+         Output: ten, simple_func(ten)
+         ->  Sort
+               Output: ten
+               Sort Key: tenk1.ten
+               ->  Parallel Seq Scan on public.tenk1
+                     Output: ten
+                     Filter: (tenk1.ten < 100)
+(11 rows)
+
+drop function simple_func(integer);
+-- test gather merge with parallel leader participation disabled
+set parallel_leader_participation = off;
+explain (costs off)
+   select count(*) from tenk1 group by twenty;
+                     QUERY PLAN                     
+----------------------------------------------------
+ Finalize GroupAggregate
+   Group Key: twenty
+   ->  Gather Merge
+         Workers Planned: 4
+         ->  Partial GroupAggregate
+               Group Key: twenty
+               ->  Sort
+                     Sort Key: twenty
+                     ->  Parallel Seq Scan on tenk1
+(9 rows)
+
+select count(*) from tenk1 group by twenty;
+ count 
+-------
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+(20 rows)
+
+reset parallel_leader_participation;
 --test rescan behavior of gather merge
 set enable_material = false;
 explain (costs off)
@@ -419,6 +565,24 @@ select * from
 
 reset enable_material;
 reset enable_hashagg;
+-- check parallelized int8 aggregate (bug #14897)
+explain (costs off)
+select avg(unique1::int8) from tenk1;
+                               QUERY PLAN                                
+-------------------------------------------------------------------------
+ Finalize Aggregate
+   ->  Gather
+         Workers Planned: 4
+         ->  Partial Aggregate
+               ->  Parallel Index Only Scan using tenk1_unique1 on tenk1
+(5 rows)
+
+select avg(unique1::int8) from tenk1;
+          avg          
+-----------------------
+ 4999.5000000000000000
+(1 row)
+
 -- gather merge test with a LIMIT
 explain (costs off)
   select fivethous from tenk1 order by fivethous limit 4;
@@ -465,6 +629,33 @@ select string4 from tenk1 order by string4 limit 5;
  AAAAxx
 (5 rows)
 
+-- gather merge test with 0 workers, with parallel leader
+-- participation disabled (the leader will have to run the plan
+-- despite the setting)
+set parallel_leader_participation = off;
+explain (costs off)
+   select string4 from tenk1 order by string4 limit 5;
+                  QUERY PLAN                  
+----------------------------------------------
+ Limit
+   ->  Gather Merge
+         Workers Planned: 4
+         ->  Sort
+               Sort Key: string4
+               ->  Parallel Seq Scan on tenk1
+(6 rows)
+
+select string4 from tenk1 order by string4 limit 5;
+ string4 
+---------
+ AAAAxx
+ AAAAxx
+ AAAAxx
+ AAAAxx
+ AAAAxx
+(5 rows)
+
+reset parallel_leader_participation;
 reset max_parallel_workers;
 SAVEPOINT settings;
 SET LOCAL force_parallel_mode = 1;
