@@ -151,8 +151,6 @@ typedef enum
 	FROM_CHAR_DATE_ISOWEEK		/* ISO 8601 week date */
 } FromCharDateMode;
 
-typedef struct FormatNode FormatNode;
-
 typedef struct
 {
 	const char *name;
@@ -162,13 +160,13 @@ typedef struct
 	FromCharDateMode date_mode;
 } KeyWord;
 
-struct FormatNode
+typedef struct
 {
-	int			type;			/* node type			*/
-	const KeyWord *key;			/* if node type is KEYWORD	*/
-	char		character;		/* if node type is CHAR		*/
-	int			suffix;			/* keyword suffix		*/
-};
+	int			type;			/* NODE_TYPE_XXX, see below */
+	const KeyWord *key;			/* if type is ACTION */
+	char		character[MAX_MULTIBYTE_CHAR_LEN + 1];	/* if type is CHAR */
+	int			suffix;			/* keyword prefix/suffix code, if any */
+} FormatNode;
 
 #define NODE_TYPE_END		1
 #define NODE_TYPE_ACTION	2
@@ -988,7 +986,7 @@ static char *get_last_relevant_decnum(char *num);
 static void NUM_numpart_from_char(NUMProc *Np, int id, int input_len);
 static void NUM_numpart_to_char(NUMProc *Np, int id);
 static char *NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
-			  char *number, int from_char_input_len, int to_char_out_pre_spaces,
+			  char *number, int input_len, int to_char_out_pre_spaces,
 			  int sign, bool is_to_char, Oid collid);
 static DCHCacheEntry *DCH_cache_getnew(const char *str);
 static DCHCacheEntry *DCH_cache_search(const char *str);
@@ -1227,11 +1225,7 @@ static void
 parse_format(FormatNode *node, const char *str, const KeyWord *kw,
 			 const KeySuffix *suf, const int *index, int ver, NUMDesc *Num)
 {
-	const KeySuffix *s;
 	FormatNode *n;
-	int			node_set = 0,
-				suffix,
-				last = 0;
 
 #ifdef DEBUG_TO_FROM_CHAR
 	elog(DEBUG_elog_output, "to_char/number(): run parser");
@@ -1241,12 +1235,14 @@ parse_format(FormatNode *node, const char *str, const KeyWord *kw,
 
 	while (*str)
 	{
-		suffix = 0;
+		int			suffix = 0;
+		const KeySuffix *s;
 
 		/*
 		 * Prefix
 		 */
-		if (ver == DCH_TYPE && (s = suff_search(str, suf, SUFFTYPE_PREFIX)) != NULL)
+		if (ver == DCH_TYPE &&
+			(s = suff_search(str, suf, SUFFTYPE_PREFIX)) != NULL)
 		{
 			suffix |= s->id;
 			if (s->len)
@@ -1259,8 +1255,7 @@ parse_format(FormatNode *node, const char *str, const KeyWord *kw,
 		if (*str && (n->key = index_seq_search(str, kw, index)) != NULL)
 		{
 			n->type = NODE_TYPE_ACTION;
-			n->suffix = 0;
-			node_set = 1;
+			n->suffix = suffix;
 			if (n->key->len)
 				str += n->key->len;
 
@@ -1273,70 +1268,63 @@ parse_format(FormatNode *node, const char *str, const KeyWord *kw,
 			/*
 			 * Postfix
 			 */
-			if (ver == DCH_TYPE && *str && (s = suff_search(str, suf, SUFFTYPE_POSTFIX)) != NULL)
+			if (ver == DCH_TYPE && *str &&
+				(s = suff_search(str, suf, SUFFTYPE_POSTFIX)) != NULL)
 			{
-				suffix |= s->id;
+				n->suffix |= s->id;
 				if (s->len)
 					str += s->len;
 			}
+
+			n++;
 		}
 		else if (*str)
 		{
-			/*
-			 * Special characters '\' and '"'
-			 */
-			if (*str == '"' && last != '\\')
-			{
-				int			x = 0;
+			int			chlen;
 
-				while (*(++str))
+			/*
+			 * Process double-quoted literal string, if any
+			 */
+			if (*str == '"')
+			{
+				str++;
+				while (*str)
 				{
-					if (*str == '"' && x != '\\')
+					if (*str == '"')
 					{
 						str++;
 						break;
 					}
-					else if (*str == '\\' && x != '\\')
-					{
-						x = '\\';
-						continue;
-					}
+					/* backslash quotes the next character, if any */
+					if (*str == '\\' && *(str + 1))
+						str++;
+					chlen = pg_mblen(str);
 					n->type = NODE_TYPE_CHAR;
-					n->character = *str;
+					memcpy(n->character, str, chlen);
+					n->character[chlen] = '\0';
 					n->key = NULL;
 					n->suffix = 0;
-					++n;
-					x = *str;
+					n++;
+					str += chlen;
 				}
-				node_set = 0;
-				suffix = 0;
-				last = 0;
 			}
-			else if (*str && *str == '\\' && last != '\\' && *(str + 1) == '"')
+			else
 			{
-				last = *str;
-				str++;
-			}
-			else if (*str)
-			{
+				/*
+				 * Outside double-quoted strings, backslash is only special if
+				 * it immediately precedes a double quote.
+				 */
+				if (*str == '\\' && *(str + 1) == '"')
+					str++;
+				chlen = pg_mblen(str);
 				n->type = NODE_TYPE_CHAR;
-				n->character = *str;
+				memcpy(n->character, str, chlen);
+				n->character[chlen] = '\0';
 				n->key = NULL;
-				node_set = 1;
-				last = 0;
-				str++;
+				n->suffix = 0;
+				n++;
+				str += chlen;
 			}
-		}
-
-		/* end */
-		if (node_set)
-		{
-			if (n->type == NODE_TYPE_ACTION)
-				n->suffix = suffix;
-			++n;
-
-			n->suffix = 0;
-			node_set = 0;
 		}
 	}
 
@@ -1367,7 +1355,8 @@ dump_node(FormatNode *node, int max)
 			elog(DEBUG_elog_output, "%d:\t NODE_TYPE_ACTION '%s'\t(%s,%s)",
 				 a, n->key->name, DUMP_THth(n->suffix), DUMP_FM(n->suffix));
 		else if (n->type == NODE_TYPE_CHAR)
-			elog(DEBUG_elog_output, "%d:\t NODE_TYPE_CHAR '%c'", a, n->character);
+			elog(DEBUG_elog_output, "%d:\t NODE_TYPE_CHAR '%s'",
+				 a, n->character);
 		else if (n->type == NODE_TYPE_END)
 		{
 			elog(DEBUG_elog_output, "%d:\t NODE_TYPE_END", a);
@@ -2026,8 +2015,8 @@ asc_toupper_z(const char *buff)
 	do { \
 		if (S_THth(_suf)) \
 		{ \
-			if (*(ptr)) (ptr)++; \
-			if (*(ptr)) (ptr)++; \
+			if (*(ptr)) (ptr) += pg_mblen(ptr); \
+			if (*(ptr)) (ptr) += pg_mblen(ptr); \
 		} \
 	} while (0)
 
@@ -2094,7 +2083,8 @@ is_next_separator(FormatNode *n)
 
 		return true;
 	}
-	else if (isdigit((unsigned char) n->character))
+	else if (n->character[1] == '\0' &&
+			 isdigit((unsigned char) n->character[0]))
 		return false;
 
 	return true;				/* some non-digit input (separator) */
@@ -2423,8 +2413,8 @@ DCH_to_char(FormatNode *node, bool is_interval, TmToChar *in, char *out, Oid col
 	{
 		if (n->type != NODE_TYPE_ACTION)
 		{
-			*s = n->character;
-			s++;
+			strcpy(s, n->character);
+			s += strlen(s);
 			continue;
 		}
 
@@ -2992,7 +2982,7 @@ DCH_from_char(FormatNode *node, char *in, TmFromChar *out)
 			 * we don't insist that the consumed character match the format's
 			 * character.
 			 */
-			s++;
+			s += pg_mblen(s);
 			continue;
 		}
 
@@ -4232,6 +4222,14 @@ get_last_relevant_decnum(char *num)
 	return result;
 }
 
+/*
+ * These macros are used in NUM_processor() and its subsidiary routines.
+ * OVERLOAD_TEST: true if we've reached end of input string
+ * AMOUNT_TEST(s): true if at least s bytes remain in string
+ */
+#define OVERLOAD_TEST	(Np->inout_p >= Np->inout + input_len)
+#define AMOUNT_TEST(s)	(Np->inout_p <= Np->inout + (input_len - (s)))
+
 /* ----------
  * Number extraction for TO_NUMBER()
  * ----------
@@ -4245,9 +4243,6 @@ NUM_numpart_from_char(NUMProc *Np, int id, int input_len)
 	elog(DEBUG_elog_output, " --- scan start --- id=%s",
 		 (id == NUM_0 || id == NUM_9) ? "NUM_0/9" : id == NUM_DEC ? "NUM_DEC" : "???");
 #endif
-
-#define OVERLOAD_TEST	(Np->inout_p >= Np->inout + input_len)
-#define AMOUNT_TEST(_s) (input_len-(Np->inout_p-Np->inout) >= _s)
 
 	if (OVERLOAD_TEST)
 		return;
@@ -4641,14 +4636,32 @@ NUM_numpart_to_char(NUMProc *Np, int id)
 	++Np->num_curr;
 }
 
+/*
+ * Skip over "n" input characters, but only if they aren't numeric data
+ */
+static void
+NUM_eat_non_data_chars(NUMProc *Np, int n, int input_len)
+{
+	while (n-- > 0)
+	{
+		if (OVERLOAD_TEST)
+			break;				/* end of input */
+		if (strchr("0123456789.,+-", *Np->inout_p) != NULL)
+			break;				/* it's a data character */
+		Np->inout_p += pg_mblen(Np->inout_p);
+	}
+}
+
 static char *
 NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
-			  char *number, int from_char_input_len, int to_char_out_pre_spaces,
+			  char *number, int input_len, int to_char_out_pre_spaces,
 			  int sign, bool is_to_char, Oid collid)
 {
 	FormatNode *n;
 	NUMProc		_Np,
 			   *Np = &_Np;
+	const char *pattern;
+	int			pattern_len;
 
 	MemSet(Np, 0, sizeof(NUMProc));
 
@@ -4816,9 +4829,11 @@ NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
 		if (!Np->is_to_char)
 		{
 			/*
-			 * Check non-string inout end
+			 * Check at least one byte remains to be scanned.  (In actions
+			 * below, must use AMOUNT_TEST if we want to read more bytes than
+			 * that.)
 			 */
-			if (Np->inout_p >= Np->inout + from_char_input_len)
+			if (OVERLOAD_TEST)
 				break;
 		}
 
@@ -4828,12 +4843,16 @@ NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
 		if (n->type == NODE_TYPE_ACTION)
 		{
 			/*
-			 * Create/reading digit/zero/blank/sing
+			 * Create/read digit/zero/blank/sign/special-case
 			 *
 			 * 'NUM_S' note: The locale sign is anchored to number and we
 			 * read/write it when we work with first or last number
-			 * (NUM_0/NUM_9). This is reason why NUM_S missing in follow
-			 * switch().
+			 * (NUM_0/NUM_9).  This is why NUM_S is missing in switch().
+			 *
+			 * Notice the "Np->inout_p++" at the bottom of the loop.  This is
+			 * why most of the actions advance inout_p one less than you might
+			 * expect.  In cases where we don't want that increment to happen,
+			 * a switch case ends with "continue" not "break".
 			 */
 			switch (n->key->id)
 			{
@@ -4848,7 +4867,7 @@ NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
 					}
 					else
 					{
-						NUM_numpart_from_char(Np, n->key->id, from_char_input_len);
+						NUM_numpart_from_char(Np, n->key->id, input_len);
 						break;	/* switch() case: */
 					}
 
@@ -4872,10 +4891,14 @@ NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
 							if (IS_FILLMODE(Np->Num))
 								continue;
 						}
+						if (*Np->inout_p != ',')
+							continue;
 					}
 					break;
 
 				case NUM_G:
+					pattern = Np->L_thousands_sep;
+					pattern_len = strlen(pattern);
 					if (Np->is_to_char)
 					{
 						if (!Np->num_in)
@@ -4884,16 +4907,16 @@ NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
 								continue;
 							else
 							{
-								int			x = strlen(Np->L_thousands_sep);
-
-								memset(Np->inout_p, ' ', x);
-								Np->inout_p += x - 1;
+								/* just in case there are MB chars */
+								pattern_len = pg_mbstrlen(pattern);
+								memset(Np->inout_p, ' ', pattern_len);
+								Np->inout_p += pattern_len - 1;
 							}
 						}
 						else
 						{
-							strcpy(Np->inout_p, Np->L_thousands_sep);
-							Np->inout_p += strlen(Np->inout_p) - 1;
+							strcpy(Np->inout_p, pattern);
+							Np->inout_p += pattern_len - 1;
 						}
 					}
 					else
@@ -4903,18 +4926,33 @@ NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
 							if (IS_FILLMODE(Np->Num))
 								continue;
 						}
-						Np->inout_p += strlen(Np->L_thousands_sep) - 1;
+
+						/*
+						 * Because L_thousands_sep typically contains data
+						 * characters (either '.' or ','), we can't use
+						 * NUM_eat_non_data_chars here.  Instead skip only if
+						 * the input matches L_thousands_sep.
+						 */
+						if (AMOUNT_TEST(pattern_len) &&
+							strncmp(Np->inout_p, pattern, pattern_len) == 0)
+							Np->inout_p += pattern_len - 1;
+						else
+							continue;
 					}
 					break;
 
 				case NUM_L:
+					pattern = Np->L_currency_symbol;
 					if (Np->is_to_char)
 					{
-						strcpy(Np->inout_p, Np->L_currency_symbol);
-						Np->inout_p += strlen(Np->inout_p) - 1;
+						strcpy(Np->inout_p, pattern);
+						Np->inout_p += strlen(pattern) - 1;
 					}
 					else
-						Np->inout_p += strlen(Np->L_currency_symbol) - 1;
+					{
+						NUM_eat_non_data_chars(Np, pg_mbstrlen(pattern), input_len);
+						continue;
+					}
 					break;
 
 				case NUM_RN:
@@ -4949,8 +4987,16 @@ NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
 						continue;
 
 					if (Np->is_to_char)
+					{
 						strcpy(Np->inout_p, get_th(Np->number, TH_LOWER));
-					Np->inout_p += 1;
+						Np->inout_p += 1;
+					}
+					else
+					{
+						/* All variants of 'th' occupy 2 characters */
+						NUM_eat_non_data_chars(Np, 2, input_len);
+						continue;
+					}
 					break;
 
 				case NUM_TH:
@@ -4959,8 +5005,16 @@ NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
 						continue;
 
 					if (Np->is_to_char)
+					{
 						strcpy(Np->inout_p, get_th(Np->number, TH_UPPER));
-					Np->inout_p += 1;
+						Np->inout_p += 1;
+					}
+					else
+					{
+						/* All variants of 'TH' occupy 2 characters */
+						NUM_eat_non_data_chars(Np, 2, input_len);
+						continue;
+					}
 					break;
 
 				case NUM_MI:
@@ -4977,6 +5031,11 @@ NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
 					{
 						if (*Np->inout_p == '-')
 							*Np->number = '-';
+						else
+						{
+							NUM_eat_non_data_chars(Np, 1, input_len);
+							continue;
+						}
 					}
 					break;
 
@@ -4994,22 +5053,30 @@ NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
 					{
 						if (*Np->inout_p == '+')
 							*Np->number = '+';
+						else
+						{
+							NUM_eat_non_data_chars(Np, 1, input_len);
+							continue;
+						}
 					}
 					break;
 
 				case NUM_SG:
 					if (Np->is_to_char)
 						*Np->inout_p = Np->sign;
-
 					else
 					{
 						if (*Np->inout_p == '-')
 							*Np->number = '-';
 						else if (*Np->inout_p == '+')
 							*Np->number = '+';
+						else
+						{
+							NUM_eat_non_data_chars(Np, 1, input_len);
+							continue;
+						}
 					}
 					break;
-
 
 				default:
 					continue;
@@ -5019,10 +5086,21 @@ NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
 		else
 		{
 			/*
-			 * Remove to output char from input in TO_CHAR
+			 * In TO_CHAR, non-pattern characters in the format are copied to
+			 * the output.  In TO_NUMBER, we skip one input character for each
+			 * non-pattern format character, whether or not it matches the
+			 * format character.
 			 */
 			if (Np->is_to_char)
-				*Np->inout_p = n->character;
+			{
+				strcpy(Np->inout_p, n->character);
+				Np->inout_p += strlen(Np->inout_p);
+			}
+			else
+			{
+				Np->inout_p += pg_mblen(Np->inout_p);
+			}
+			continue;
 		}
 		Np->inout_p++;
 	}
