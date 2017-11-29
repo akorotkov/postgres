@@ -2134,12 +2134,29 @@ get_qual_for_range(Relation parent, PartitionBoundSpec *spec,
 
 		if (or_expr_args != NIL)
 		{
-			/* OR all the non-default partition constraints; then negate it */
-			result = lappend(result,
-							 list_length(or_expr_args) > 1
-							 ? makeBoolExpr(OR_EXPR, or_expr_args, -1)
-							 : linitial(or_expr_args));
-			result = list_make1(makeBoolExpr(NOT_EXPR, result, -1));
+			Expr   *other_parts_constr;
+
+			/*
+			 * Combine the constraints obtained for non-default partitions
+			 * using OR.  As requested, each of the OR's args doesn't include
+			 * the NOT NULL test for partition keys (which is to avoid its
+			 * useless repetition).  Add the same now.
+			 */
+			other_parts_constr =
+						makeBoolExpr(AND_EXPR,
+							lappend(get_range_nulltest(key),
+									list_length(or_expr_args) > 1
+										? makeBoolExpr(OR_EXPR, or_expr_args,
+													   -1)
+										: linitial(or_expr_args)),
+									-1);
+
+			/*
+			 * Finally, the default partition contains everything *NOT*
+			 * contained in the non-default partitions.
+			 */
+			result = list_make1(makeBoolExpr(NOT_EXPR,
+										list_make1(other_parts_constr), -1));
 		}
 
 		return result;
@@ -2536,11 +2553,10 @@ get_partition_for_tuple(Relation relation, Datum *values, bool *isnull)
 				 */
 				for (i = 0; i < key->partnatts; i++)
 				{
-					if (isnull[i] &&
-						partition_bound_has_default(partdesc->boundinfo))
+					if (isnull[i])
 					{
 						range_partkey_has_null = true;
-						part_index = partdesc->boundinfo->default_index;
+						break;
 					}
 				}
 
