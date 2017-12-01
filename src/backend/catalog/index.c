@@ -2225,6 +2225,7 @@ IndexBuildHeapRangeScan(Relation heapRelation,
 	TransactionId OldestXmin;
 	BlockNumber root_blkno = InvalidBlockNumber;
 	OffsetNumber root_offsets[MaxHeapTuplesPerPage];
+	StorageAmRoutine *method;
 
 	/*
 	 * sanity checks
@@ -2280,6 +2281,7 @@ IndexBuildHeapRangeScan(Relation heapRelation,
 		OldestXmin = GetOldestXmin(heapRelation, PROCARRAY_FLAGS_VACUUM);
 	}
 
+	method = heapRelation->rd_stamroutine;
 	scan = heap_beginscan_strat(heapRelation,	/* relation */
 								snapshot,	/* snapshot */
 								0,	/* number of keys */
@@ -2360,8 +2362,8 @@ IndexBuildHeapRangeScan(Relation heapRelation,
 			 */
 			LockBuffer(scan->rs_cbuf, BUFFER_LOCK_SHARE);
 
-			switch (HeapTupleSatisfiesVacuum(heapTuple, OldestXmin,
-											 scan->rs_cbuf))
+			switch (method->snapshot_satisfiesVacuum(heapTuple, OldestXmin,
+													 scan->rs_cbuf))
 			{
 				case HEAPTUPLE_DEAD:
 					/* Definitely dead, we can ignore it */

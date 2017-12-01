@@ -45,6 +45,7 @@
 #include "access/multixact.h"
 #include "access/parallel.h"
 #include "access/relscan.h"
+#include "access/storageamapi.h"
 #include "access/sysattr.h"
 #include "access/transam.h"
 #include "access/tuptoaster.h"
@@ -438,7 +439,7 @@ heapgetpage(HeapScanDesc scan, BlockNumber page)
 			if (all_visible)
 				valid = true;
 			else
-				valid = HeapTupleSatisfiesVisibility(&loctup, snapshot, buffer);
+				valid = HeapTupleSatisfiesVisibility(scan->rs_rd->rd_stamroutine, &loctup, snapshot, buffer);
 
 			CheckForSerializableConflictOut(valid, scan->rs_rd, &loctup,
 											buffer, snapshot);
@@ -653,7 +654,8 @@ heapgettup(HeapScanDesc scan,
 				/*
 				 * if current tuple qualifies, return it.
 				 */
-				valid = HeapTupleSatisfiesVisibility(tuple,
+				valid = HeapTupleSatisfiesVisibility(scan->rs_rd->rd_stamroutine,
+													 tuple,
 													 snapshot,
 													 scan->rs_cbuf);
 
@@ -841,6 +843,7 @@ heapgettup_pagemode(HeapScanDesc scan,
 			lineindex = scan->rs_cindex + 1;
 		}
 
+		LockBuffer(scan->rs_cbuf, BUFFER_LOCK_SHARE);
 		dp = BufferGetPage(scan->rs_cbuf);
 		TestForOldSnapshot(scan->rs_snapshot, scan->rs_rd, dp);
 		lines = scan->rs_ntuples;
@@ -885,6 +888,7 @@ heapgettup_pagemode(HeapScanDesc scan,
 			page = scan->rs_cblock; /* current page */
 		}
 
+		LockBuffer(scan->rs_cbuf, BUFFER_LOCK_SHARE);
 		dp = BufferGetPage(scan->rs_cbuf);
 		TestForOldSnapshot(scan->rs_snapshot, scan->rs_rd, dp);
 		lines = scan->rs_ntuples;
@@ -954,22 +958,30 @@ heapgettup_pagemode(HeapScanDesc scan,
 			/*
 			 * if current tuple qualifies, return it.
 			 */
-			if (key != NULL)
+			if (HeapTupleSatisfiesVisibility(scan->rs_rd->rd_stamroutine, tuple, scan->rs_snapshot, scan->rs_cbuf))
 			{
-				bool		valid;
+				/*
+				 * if current tuple qualifies, return it.
+				 */
+				if (key != NULL)
+				{
+					bool		valid;
 
-				HeapKeyTest(tuple, RelationGetDescr(scan->rs_rd),
-							nkeys, key, valid);
-				if (valid)
+					HeapKeyTest(tuple, RelationGetDescr(scan->rs_rd),
+								nkeys, key, valid);
+					if (valid)
+					{
+						scan->rs_cindex = lineindex;
+						LockBuffer(scan->rs_cbuf, BUFFER_LOCK_UNLOCK);
+						return;
+					}
+				}
+				else
 				{
 					scan->rs_cindex = lineindex;
+					LockBuffer(scan->rs_cbuf, BUFFER_LOCK_UNLOCK);
 					return;
 				}
-			}
-			else
-			{
-				scan->rs_cindex = lineindex;
-				return;
 			}
 
 			/*
@@ -981,6 +993,12 @@ heapgettup_pagemode(HeapScanDesc scan,
 			else
 				++lineindex;
 		}
+
+		/*
+		 * if we get here, it means we've exhausted the items on this page and
+		 * it's time to move to the next.
+		 */
+		LockBuffer(scan->rs_cbuf, BUFFER_LOCK_UNLOCK);
 
 		/*
 		 * if we get here, it means we've exhausted the items on this page and
@@ -1039,6 +1057,7 @@ heapgettup_pagemode(HeapScanDesc scan,
 
 		heapgetpage(scan, page);
 
+		LockBuffer(scan->rs_cbuf, BUFFER_LOCK_SHARE);
 		dp = BufferGetPage(scan->rs_cbuf);
 		TestForOldSnapshot(scan->rs_snapshot, scan->rs_rd, dp);
 		lines = scan->rs_ntuples;
@@ -1831,7 +1850,7 @@ heap_getnext(HeapScanDesc scan, ScanDirection direction)
 
 	pgstat_count_heap_getnext(scan->rs_rd);
 
-	return &(scan->rs_ctup);
+	return heap_copytuple(&(scan->rs_ctup));
 }
 
 /*
@@ -1950,7 +1969,7 @@ heap_fetch(Relation relation,
 	/*
 	 * check time qualification of tuple, then release lock
 	 */
-	valid = HeapTupleSatisfiesVisibility(tuple, snapshot, buffer);
+	valid = HeapTupleSatisfiesVisibility(relation->rd_stamroutine, tuple, snapshot, buffer);
 
 	if (valid)
 		PredicateLockTuple(relation, tuple, snapshot);
@@ -2097,7 +2116,7 @@ heap_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
 			ItemPointerSet(&(heapTuple->t_self), BufferGetBlockNumber(buffer), offnum);
 
 			/* If it's visible per the snapshot, we must return it */
-			valid = HeapTupleSatisfiesVisibility(heapTuple, snapshot, buffer);
+			valid = HeapTupleSatisfiesVisibility(relation->rd_stamroutine, heapTuple, snapshot, buffer);
 			CheckForSerializableConflictOut(valid, relation, heapTuple,
 											buffer, snapshot);
 			/* reset to original, non-redirected, tid */
@@ -2271,7 +2290,7 @@ heap_get_latest_tid(Relation relation,
 		 * Check time qualification of tuple; if visible, set it as the new
 		 * result candidate.
 		 */
-		valid = HeapTupleSatisfiesVisibility(&tp, snapshot, buffer);
+		valid = HeapTupleSatisfiesVisibility(relation->rd_stamroutine, &tp, snapshot, buffer);
 		CheckForSerializableConflictOut(valid, relation, &tp, buffer, snapshot);
 		if (valid)
 			*tid = ctid;
@@ -3097,7 +3116,7 @@ heap_delete(Relation relation, ItemPointer tid,
 	tp.t_self = *tid;
 
 l1:
-	result = HeapTupleSatisfiesUpdate(&tp, cid, buffer);
+	result = relation->rd_stamroutine->snapshot_satisfiesUpdate(&tp, cid, buffer);
 
 	if (result == HeapTupleInvisible)
 	{
@@ -3208,7 +3227,7 @@ l1:
 	if (crosscheck != InvalidSnapshot && result == HeapTupleMayBeUpdated)
 	{
 		/* Perform additional check for transaction-snapshot mode RI updates */
-		if (!HeapTupleSatisfiesVisibility(&tp, crosscheck, buffer))
+		if (!HeapTupleSatisfiesVisibility(relation->rd_stamroutine, &tp, crosscheck, buffer))
 			result = HeapTupleUpdated;
 	}
 
@@ -3668,7 +3687,7 @@ heap_update(Relation relation, ItemPointer otid, HeapTuple newtup,
 l2:
 	checked_lockers = false;
 	locker_remains = false;
-	result = HeapTupleSatisfiesUpdate(&oldtup, cid, buffer);
+	result = relation->rd_stamroutine->snapshot_satisfiesUpdate(&oldtup, cid, buffer);
 
 	/* see below about the "no wait" case */
 	Assert(result != HeapTupleBeingUpdated || wait);
@@ -3849,7 +3868,7 @@ l2:
 	if (crosscheck != InvalidSnapshot && result == HeapTupleMayBeUpdated)
 	{
 		/* Perform additional check for transaction-snapshot mode RI updates */
-		if (!HeapTupleSatisfiesVisibility(&oldtup, crosscheck, buffer))
+		if (!HeapTupleSatisfiesVisibility(relation->rd_stamroutine, &oldtup, crosscheck, buffer))
 			result = HeapTupleUpdated;
 	}
 
@@ -4600,7 +4619,7 @@ heap_lock_tuple(Relation relation, HeapTuple tuple,
 	tuple->t_tableOid = RelationGetRelid(relation);
 
 l3:
-	result = HeapTupleSatisfiesUpdate(tuple, cid, *buffer);
+	result = relation->rd_stamroutine->snapshot_satisfiesUpdate(tuple, cid, *buffer);
 
 	if (result == HeapTupleInvisible)
 	{

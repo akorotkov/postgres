@@ -191,6 +191,7 @@ ExecProcessReturning(ResultRelInfo *resultRelInfo,
  */
 static void
 ExecCheckHeapTupleVisible(EState *estate,
+						  Relation rel,
 						  HeapTuple tuple,
 						  Buffer buffer)
 {
@@ -202,7 +203,7 @@ ExecCheckHeapTupleVisible(EState *estate,
 	 * Caller should be holding pin, but not lock.
 	 */
 	LockBuffer(buffer, BUFFER_LOCK_SHARE);
-	if (!HeapTupleSatisfiesVisibility(tuple, estate->es_snapshot, buffer))
+	if (!HeapTupleSatisfiesVisibility(rel->rd_stamroutine, tuple, estate->es_snapshot, buffer))
 	{
 		/*
 		 * We should not raise a serialization failure if the conflict is
@@ -237,7 +238,7 @@ ExecCheckTIDVisible(EState *estate,
 	tuple.t_self = *tid;
 	if (!heap_fetch(rel, SnapshotAny, &tuple, &buffer, false, NULL))
 		elog(ERROR, "failed to fetch conflicting tuple for ON CONFLICT");
-	ExecCheckHeapTupleVisible(estate, &tuple, buffer);
+	ExecCheckHeapTupleVisible(estate, rel, &tuple, buffer);
 	ReleaseBuffer(buffer);
 }
 
@@ -1313,7 +1314,7 @@ ExecOnConflictUpdate(ModifyTableState *mtstate,
 	 * snapshot.  This is in line with the way UPDATE deals with newer tuple
 	 * versions.
 	 */
-	ExecCheckHeapTupleVisible(estate, &tuple, buffer);
+	ExecCheckHeapTupleVisible(estate, relation, &tuple, buffer);
 
 	/* Store target's existing tuple in the state's dedicated slot */
 	ExecStoreTuple(&tuple, mtstate->mt_existing, buffer, false);

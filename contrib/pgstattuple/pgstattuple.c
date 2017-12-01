@@ -322,6 +322,7 @@ pgstat_heap(Relation rel, FunctionCallInfo fcinfo)
 	Buffer		buffer;
 	pgstattuple_type stat = {0};
 	SnapshotData SnapshotDirty;
+	StorageAmRoutine *method = rel->rd_stamroutine;
 
 	/* Disable syncscan because we assume we scan from block zero upwards */
 	scan = heap_beginscan_strat(rel, SnapshotAny, 0, NULL, true, false);
@@ -337,7 +338,7 @@ pgstat_heap(Relation rel, FunctionCallInfo fcinfo)
 		/* must hold a buffer lock to call HeapTupleSatisfiesVisibility */
 		LockBuffer(scan->rs_cbuf, BUFFER_LOCK_SHARE);
 
-		if (HeapTupleSatisfiesVisibility(tuple, &SnapshotDirty, scan->rs_cbuf))
+		if (HeapTupleSatisfiesVisibility(method, tuple, &SnapshotDirty, scan->rs_cbuf))
 		{
 			stat.tuple_len += tuple->t_len;
 			stat.tuple_count++;

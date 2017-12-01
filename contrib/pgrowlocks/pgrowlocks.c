@@ -26,6 +26,7 @@
 
 #include "access/multixact.h"
 #include "access/relscan.h"
+#include "access/storageamapi.h"
 #include "access/xact.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_authid.h"
@@ -149,9 +150,9 @@ pgrowlocks(PG_FUNCTION_ARGS)
 		/* must hold a buffer lock to call HeapTupleSatisfiesUpdate */
 		LockBuffer(scan->rs_cbuf, BUFFER_LOCK_SHARE);
 
-		htsu = HeapTupleSatisfiesUpdate(tuple,
-										GetCurrentCommandId(false),
-										scan->rs_cbuf);
+		htsu = rel->rd_stamroutine->snapshot_satisfiesUpdate(tuple,
+															 GetCurrentCommandId(false),
+															 scan->rs_cbuf);
 		xmax = HeapTupleHeaderGetRawXmax(tuple->t_data);
 		infomask = tuple->t_data->t_infomask;
 

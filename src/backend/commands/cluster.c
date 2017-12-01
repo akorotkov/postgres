@@ -21,6 +21,7 @@
 #include "access/multixact.h"
 #include "access/relscan.h"
 #include "access/rewriteheap.h"
+#include "access/storageamapi.h"
 #include "access/transam.h"
 #include "access/tuptoaster.h"
 #include "access/xact.h"
@@ -967,7 +968,7 @@ copy_heap_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex, bool verbose,
 
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
 
-		switch (HeapTupleSatisfiesVacuum(tuple, OldestXmin, buf))
+		switch (OldHeap->rd_stamroutine->snapshot_satisfiesVacuum(tuple, OldestXmin, buf))
 		{
 			case HEAPTUPLE_DEAD:
 				/* Definitely dead */

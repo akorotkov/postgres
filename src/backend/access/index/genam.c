@@ -472,7 +472,7 @@ systable_recheck_tuple(SysScanDesc sysscan, HeapTuple tup)
 		Assert(BufferIsValid(scan->xs_cbuf));
 		/* must hold a buffer lock to call HeapTupleSatisfiesVisibility */
 		LockBuffer(scan->xs_cbuf, BUFFER_LOCK_SHARE);
-		result = HeapTupleSatisfiesVisibility(tup, freshsnap, scan->xs_cbuf);
+		result = HeapTupleSatisfiesVisibility(sysscan->heap_rel->rd_stamroutine, tup, freshsnap, scan->xs_cbuf);
 		LockBuffer(scan->xs_cbuf, BUFFER_LOCK_UNLOCK);
 	}
 	else
@@ -484,7 +484,7 @@ systable_recheck_tuple(SysScanDesc sysscan, HeapTuple tup)
 		Assert(BufferIsValid(scan->rs_cbuf));
 		/* must hold a buffer lock to call HeapTupleSatisfiesVisibility */
 		LockBuffer(scan->rs_cbuf, BUFFER_LOCK_SHARE);
-		result = HeapTupleSatisfiesVisibility(tup, freshsnap, scan->rs_cbuf);
+		result = HeapTupleSatisfiesVisibility(sysscan->heap_rel->rd_stamroutine, tup, freshsnap, scan->rs_cbuf);
 		LockBuffer(scan->rs_cbuf, BUFFER_LOCK_UNLOCK);
 	}
 	return result;

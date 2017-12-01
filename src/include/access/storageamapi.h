@@ -11,11 +11,19 @@
 #ifndef STORAGEAMAPI_H
 #define STORAGEAMAPI_H
 
+#include "access/storage_common.h"
 #include "nodes/nodes.h"
+#include "utils/snapshot.h"
 #include "fmgr.h"
 
 /* A physical tuple coming from a storage AM scan */
 typedef void *StorageTuple;
+
+typedef bool (*SnapshotSatisfies_function) (StorageTuple htup, Snapshot snapshot, Buffer buffer);
+typedef HTSU_Result (*SnapshotSatisfiesUpdate_function) (StorageTuple htup, CommandId curcid, Buffer buffer);
+typedef HTSV_Result (*SnapshotSatisfiesVacuum_function) (StorageTuple htup, TransactionId OldestXmin, Buffer buffer);
+
+
 
 /*
  * API struct for a storage AM.  Note this must be stored in a single palloc'd
@@ -29,6 +37,10 @@ typedef void *StorageTuple;
 typedef struct StorageAmRoutine
 {
 	NodeTag		type;
+
+	SnapshotSatisfies_function snapshot_satisfies;
+	SnapshotSatisfiesUpdate_function snapshot_satisfiesUpdate;	/* HeapTupleSatisfiesUpdate */
+	SnapshotSatisfiesVacuum_function snapshot_satisfiesVacuum;	/* HeapTupleSatisfiesVacuum */
 
 }			StorageAmRoutine;
 

@@ -588,7 +588,8 @@ SampleTupleVisible(HeapTuple tuple, OffsetNumber tupoffset, HeapScanDesc scan)
 	else
 	{
 		/* Otherwise, we have to check the tuple individually. */
-		return HeapTupleSatisfiesVisibility(tuple,
+		return HeapTupleSatisfiesVisibility(scan->rs_rd->rd_stamroutine,
+											tuple,
 											scan->rs_snapshot,
 											scan->rs_cbuf);
 	}

@@ -12,6 +12,6 @@ subdir = src/backend/access/storage
 top_builddir = ../../../..
 include $(top_builddir)/src/Makefile.global
 
-OBJS = storageam.o storageamapi.o
+OBJS = storageam.o storageamapi.o storage_common.o
 
 include $(top_srcdir)/src/backend/common.mk
