@@ -2289,7 +2289,7 @@ ExecBRInsertTriggers(EState *estate, ResultRelInfo *relinfo,
 					 TupleTableSlot *slot)
 {
 	TriggerDesc *trigdesc = relinfo->ri_TrigDesc;
-	HeapTuple	slottuple = ExecMaterializeSlot(slot);
+	HeapTuple	slottuple = ExecHeapifySlot(slot);
 	HeapTuple	newtuple = slottuple;
 	HeapTuple	oldtuple;
 	TriggerData LocTriggerData;
@@ -2370,7 +2370,7 @@ ExecIRInsertTriggers(EState *estate, ResultRelInfo *relinfo,
 					 TupleTableSlot *slot)
 {
 	TriggerDesc *trigdesc = relinfo->ri_TrigDesc;
-	HeapTuple	slottuple = ExecMaterializeSlot(slot);
+	HeapTuple	slottuple = ExecHeapifySlot(slot);
 	HeapTuple	newtuple = slottuple;
 	HeapTuple	oldtuple;
 	TriggerData LocTriggerData;
@@ -2728,7 +2728,7 @@ ExecBRUpdateTriggers(EState *estate, EPQState *epqstate,
 					 TupleTableSlot *slot)
 {
 	TriggerDesc *trigdesc = relinfo->ri_TrigDesc;
-	HeapTuple	slottuple = ExecMaterializeSlot(slot);
+	HeapTuple	slottuple = ExecHeapifySlot(slot);
 	HeapTuple	newtuple = slottuple;
 	TriggerData LocTriggerData;
 	HeapTuple	trigtuple;
@@ -2770,7 +2770,7 @@ ExecBRUpdateTriggers(EState *estate, EPQState *epqstate,
 	if (newSlot != NULL)
 	{
 		slot = ExecFilterJunk(relinfo->ri_junkFilter, newSlot);
-		slottuple = ExecMaterializeSlot(slot);
+		slottuple = ExecHeapifySlot(slot);
 		newtuple = slottuple;
 	}
 
@@ -2879,7 +2879,7 @@ ExecIRUpdateTriggers(EState *estate, ResultRelInfo *relinfo,
 					 HeapTuple trigtuple, TupleTableSlot *slot)
 {
 	TriggerDesc *trigdesc = relinfo->ri_TrigDesc;
-	HeapTuple	slottuple = ExecMaterializeSlot(slot);
+	HeapTuple	slottuple = ExecHeapifySlot(slot);
 	HeapTuple	newtuple = slottuple;
 	TriggerData LocTriggerData;
 	HeapTuple	oldtuple;
@@ -4006,14 +4006,13 @@ AfterTriggerExecute(AfterTriggerEvent event,
 			 * because we start with a minimal tuple that ExecFetchSlotTuple()
 			 * must materialize anyway.
 			 */
-			LocTriggerData.tg_trigtuple =
-				ExecMaterializeSlot(trig_tuple_slot1);
+			LocTriggerData.tg_trigtuple = ExecHeapifySlot(trig_tuple_slot1);
 			LocTriggerData.tg_trigtuplebuf = InvalidBuffer;
 
 			LocTriggerData.tg_newtuple =
 				((evtshared->ats_event & TRIGGER_EVENT_OPMASK) ==
 				 TRIGGER_EVENT_UPDATE) ?
-				ExecMaterializeSlot(trig_tuple_slot2) : NULL;
+				ExecHeapifySlot(trig_tuple_slot2) : NULL;
 			LocTriggerData.tg_newtuplebuf = InvalidBuffer;
 
 			break;

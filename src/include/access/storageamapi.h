@@ -16,13 +16,12 @@
 #include "utils/snapshot.h"
 #include "fmgr.h"
 
-/* A physical tuple coming from a storage AM scan */
-typedef void *StorageTuple;
-
+/*
+ * Storage routine functions
+ */
 typedef bool (*SnapshotSatisfies_function) (StorageTuple htup, Snapshot snapshot, Buffer buffer);
 typedef HTSU_Result (*SnapshotSatisfiesUpdate_function) (StorageTuple htup, CommandId curcid, Buffer buffer);
 typedef HTSV_Result (*SnapshotSatisfiesVacuum_function) (StorageTuple htup, TransactionId OldestXmin, Buffer buffer);
-
 
 
 /*
@@ -41,6 +40,8 @@ typedef struct StorageAmRoutine
 	SnapshotSatisfies_function snapshot_satisfies;
 	SnapshotSatisfiesUpdate_function snapshot_satisfiesUpdate;	/* HeapTupleSatisfiesUpdate */
 	SnapshotSatisfiesVacuum_function snapshot_satisfiesVacuum;	/* HeapTupleSatisfiesVacuum */
+
+	slot_storageam_hook slot_storageam;
 
 }			StorageAmRoutine;
 

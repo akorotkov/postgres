@@ -39,5 +39,7 @@ heapam_storage_handler(PG_FUNCTION_ARGS)
 	amroutine->snapshot_satisfiesUpdate = HeapTupleSatisfiesUpdate;
 	amroutine->snapshot_satisfiesVacuum = HeapTupleSatisfiesVacuum;
 
+	amroutine->slot_storageam = heapam_storage_slot_handler;
+
 	PG_RETURN_POINTER(amroutine);
 }

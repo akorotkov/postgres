@@ -21,6 +21,19 @@
 #include "storage/bufpage.h"
 
 /*
+ * Opaque tuple representation for executor's TupleTableSlot tts_storage
+ * (XXX This should probably live in a separate header)
+ */
+typedef struct HeapamTuple
+{
+	HeapTuple	hst_heaptuple;
+	bool		hst_slow;
+	long		hst_off;
+	MinimalTuple hst_mintuple;	/* minimal tuple, or NULL if none */
+	HeapTupleData hst_minhdr;	/* workspace for minimal-tuple-only case */
+}			HeapamTuple;
+
+/*
  * MaxTupleAttributeNumber limits the number of (user) columns in a tuple.
  * The key limit on this value is that the size of the fixed overhead for
  * a tuple, plus the size of the null-values bitmap (at 1 bit per column),
@@ -658,7 +671,7 @@ struct MinimalTupleData
 /*
  * GETSTRUCT - given a HeapTuple pointer, return address of the user data
  */
-#define GETSTRUCT(TUP) ((char *) ((TUP)->t_data) + (TUP)->t_data->t_hoff)
+#define GETSTRUCT(TUP) ((char *) (((HeapTuple)(TUP))->t_data) + ((HeapTuple)(TUP))->t_data->t_hoff)
 
 /*
  * Accessor macros to be used with HeapTuple pointers.

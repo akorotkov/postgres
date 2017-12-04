@@ -588,7 +588,7 @@ intorel_receive(TupleTableSlot *slot, DestReceiver *self)
 	 * get the heap tuple out of the tuple table slot, making sure we have a
 	 * writable copy
 	 */
-	tuple = ExecMaterializeSlot(slot);
+	tuple = ExecHeapifySlot(slot);
 
 	/*
 	 * force assignment of new OID (see comments in ExecInsert)

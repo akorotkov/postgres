@@ -2720,7 +2720,7 @@ CopyFrom(CopyState cstate)
 			if (slot == NULL)	/* "do nothing" */
 				skip_tuple = true;
 			else				/* trigger might have changed tuple */
-				tuple = ExecMaterializeSlot(slot);
+				tuple = ExecHeapifySlot(slot);
 		}
 
 		if (!skip_tuple)

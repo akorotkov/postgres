@@ -21,9 +21,46 @@
 #include "access/transam.h"
 #include "access/xact.h"
 #include "access/xlog.h"
+#include "executor/tuptable.h"
 #include "storage/bufpage.h"
 #include "storage/bufmgr.h"
 
+/* A physical tuple coming from a storage AM scan */
+typedef void *StorageTuple;
+
+/*
+ * slot storage routine functions
+ */
+typedef void (*SlotStoreTuple_function) (TupleTableSlot *slot,
+										 StorageTuple tuple,
+										 bool shouldFree,
+										 bool minumumtuple);
+typedef void (*SlotClearTuple_function) (TupleTableSlot *slot);
+typedef Datum (*SlotGetattr_function) (TupleTableSlot *slot,
+									   int attnum, bool *isnull);
+typedef void (*SlotVirtualizeTuple_function) (TupleTableSlot *slot, int16 upto);
+
+typedef HeapTuple (*SlotGetTuple_function) (TupleTableSlot *slot, bool palloc_copy);
+typedef MinimalTuple (*SlotGetMinTuple_function) (TupleTableSlot *slot, bool palloc_copy);
+
+typedef void (*SlotUpdateTableoid_function) (TupleTableSlot *slot, Oid tableoid);
+
+typedef void (*SpeculativeAbort_function) (Relation rel,
+										   TupleTableSlot *slot);
+
+typedef struct StorageSlotAmRoutine
+{
+	/* Operations on TupleTableSlot */
+	SlotStoreTuple_function slot_store_tuple;
+	SlotVirtualizeTuple_function slot_virtualize_tuple;
+	SlotClearTuple_function slot_clear_tuple;
+	SlotGetattr_function slot_getattr;
+	SlotGetTuple_function slot_tuple;
+	SlotGetMinTuple_function slot_min_tuple;
+	SlotUpdateTableoid_function slot_update_tableoid;
+}			StorageSlotAmRoutine;
+
+typedef StorageSlotAmRoutine * (*slot_storageam_hook) (void);
 
 /* Result codes for HeapTupleSatisfiesVacuum */
 typedef enum
@@ -42,6 +79,7 @@ extern void HeapTupleSetHintBits(HeapTupleHeader tuple, Buffer buffer,
 extern bool HeapTupleHeaderIsOnlyLocked(HeapTupleHeader tuple);
 extern bool HeapTupleIsSurelyDead(HeapTuple htup, TransactionId OldestXmin);
 extern bool XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot);
+extern StorageSlotAmRoutine * heapam_storage_slot_handler(void);
 
 /*
  * SetHintBits()
