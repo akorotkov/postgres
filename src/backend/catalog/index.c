@@ -26,6 +26,7 @@
 #include "access/amapi.h"
 #include "access/multixact.h"
 #include "access/relscan.h"
+#include "access/storageam.h"
 #include "access/sysattr.h"
 #include "access/transam.h"
 #include "access/visibilitymap.h"
@@ -1907,10 +1908,10 @@ index_update_stats(Relation rel,
 					BTEqualStrategyNumber, F_OIDEQ,
 					ObjectIdGetDatum(relid));
 
-		pg_class_scan = heap_beginscan_catalog(pg_class, 1, key);
-		tuple = heap_getnext(pg_class_scan, ForwardScanDirection);
+		pg_class_scan = storage_beginscan_catalog(pg_class, 1, key);
+		tuple = storage_getnext(pg_class_scan, ForwardScanDirection);
 		tuple = heap_copytuple(tuple);
-		heap_endscan(pg_class_scan);
+		storage_endscan(pg_class_scan);
 	}
 	else
 	{
@@ -2282,16 +2283,16 @@ IndexBuildHeapRangeScan(Relation heapRelation,
 	}
 
 	method = heapRelation->rd_stamroutine;
-	scan = heap_beginscan_strat(heapRelation,	/* relation */
-								snapshot,	/* snapshot */
-								0,	/* number of keys */
-								NULL,	/* scan key */
-								true,	/* buffer access strategy OK */
-								allow_sync);	/* syncscan OK? */
+	scan = storage_beginscan_strat(heapRelation,	/* relation */
+								   snapshot,	/* snapshot */
+								   0,	/* number of keys */
+								   NULL,	/* scan key */
+								   true,	/* buffer access strategy OK */
+								   allow_sync); /* syncscan OK? */
 
 	/* set our scan endpoints */
 	if (!allow_sync)
-		heap_setscanlimits(scan, start_blockno, numblocks);
+		storage_setscanlimits(scan, start_blockno, numblocks);
 	else
 	{
 		/* syncscan can only be requested on whole relation */
@@ -2304,7 +2305,7 @@ IndexBuildHeapRangeScan(Relation heapRelation,
 	/*
 	 * Scan all tuples in the base relation.
 	 */
-	while ((heapTuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+	while ((heapTuple = storage_getnext(scan, ForwardScanDirection)) != NULL)
 	{
 		bool		tupleIsAlive;
 
@@ -2616,7 +2617,7 @@ IndexBuildHeapRangeScan(Relation heapRelation,
 		}
 	}
 
-	heap_endscan(scan);
+	storage_endscan(scan);
 
 	/* we can now forget our snapshot, if set */
 	if (IsBootstrapProcessingMode() || indexInfo->ii_Concurrent)
@@ -2687,14 +2688,14 @@ IndexCheckExclusion(Relation heapRelation,
 	 * Scan all live tuples in the base relation.
 	 */
 	snapshot = RegisterSnapshot(GetLatestSnapshot());
-	scan = heap_beginscan_strat(heapRelation,	/* relation */
-								snapshot,	/* snapshot */
-								0,	/* number of keys */
-								NULL,	/* scan key */
-								true,	/* buffer access strategy OK */
-								true);	/* syncscan OK */
+	scan = storage_beginscan_strat(heapRelation,	/* relation */
+								   snapshot,	/* snapshot */
+								   0,	/* number of keys */
+								   NULL,	/* scan key */
+								   true,	/* buffer access strategy OK */
+								   true);	/* syncscan OK */
 
-	while ((heapTuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+	while ((heapTuple = storage_getnext(scan, ForwardScanDirection)) != NULL)
 	{
 		CHECK_FOR_INTERRUPTS();
 
@@ -2730,7 +2731,7 @@ IndexCheckExclusion(Relation heapRelation,
 								   estate, true);
 	}
 
-	heap_endscan(scan);
+	storage_endscan(scan);
 	UnregisterSnapshot(snapshot);
 
 	ExecDropSingleTupleTableSlot(slot);
@@ -3007,17 +3008,17 @@ validate_index_heapscan(Relation heapRelation,
 	 * here, because it's critical that we read from block zero forward to
 	 * match the sorted TIDs.
 	 */
-	scan = heap_beginscan_strat(heapRelation,	/* relation */
-								snapshot,	/* snapshot */
-								0,	/* number of keys */
-								NULL,	/* scan key */
-								true,	/* buffer access strategy OK */
-								false); /* syncscan not OK */
+	scan = storage_beginscan_strat(heapRelation,	/* relation */
+								   snapshot,	/* snapshot */
+								   0,	/* number of keys */
+								   NULL,	/* scan key */
+								   true,	/* buffer access strategy OK */
+								   false);	/* syncscan not OK */
 
 	/*
 	 * Scan all tuples matching the snapshot.
 	 */
-	while ((heapTuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+	while ((heapTuple = storage_getnext(scan, ForwardScanDirection)) != NULL)
 	{
 		ItemPointer heapcursor = &heapTuple->t_self;
 		ItemPointerData rootTuple;
@@ -3174,7 +3175,7 @@ validate_index_heapscan(Relation heapRelation,
 		}
 	}
 
-	heap_endscan(scan);
+	storage_endscan(scan);
 
 	ExecDropSingleTupleTableSlot(slot);
 

@@ -148,8 +148,6 @@ heapam_heap_delete(Relation relation, ItemPointer tid, CommandId cid,
 	return heap_delete(relation, tid, cid, crosscheck, wait, hufd);
 }
 
-
-
 static HTSU_Result
 heapam_heap_update(Relation relation, ItemPointer otid, TupleTableSlot *slot,
 				   EState *estate, CommandId cid, Snapshot crosscheck,
@@ -254,6 +252,15 @@ heapam_storage_handler(PG_FUNCTION_ARGS)
 	amroutine->snapshot_satisfiesVacuum = HeapTupleSatisfiesVacuum;
 
 	amroutine->slot_storageam = heapam_storage_slot_handler;
+
+	amroutine->scan_begin = heap_beginscan;
+	amroutine->scansetlimits = heap_setscanlimits;
+	amroutine->scan_getnext = heap_getnext;
+	amroutine->scan_getnextslot = heap_getnextslot;
+	amroutine->scan_end = heap_endscan;
+	amroutine->scan_rescan = heap_rescan;
+	amroutine->scan_update_snapshot = heap_update_snapshot;
+	amroutine->hot_search_buffer = heap_hot_search_buffer;
 
 	amroutine->tuple_fetch = heapam_fetch;
 	amroutine->tuple_insert = heapam_heap_insert;

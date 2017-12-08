@@ -12,31 +12,11 @@
 #define STORAGEAMAPI_H
 
 #include "access/heapam.h"
-#include "access/storage_common.h"
+#include "access/storageam.h"
 #include "nodes/execnodes.h"
 #include "nodes/nodes.h"
 #include "utils/snapshot.h"
 #include "fmgr.h"
-
-typedef union tuple_data
-{
-	TransactionId xid;
-	CommandId	cid;
-	ItemPointerData tid;
-}			tuple_data;
-
-typedef enum tuple_data_flags
-{
-	XMIN = 0,
-	UPDATED_XID,
-	CMIN,
-	TID,
-	CTID
-}			tuple_data_flags;
-
-/* Function pointer to let the index tuple insert from storage am */
-typedef List *(*InsertIndexTuples) (TupleTableSlot *slot, EState *estate, bool noDupErr,
-									bool *specConflict, List *arbiterIndexes);
 
 /*
  * Storage routine functions
@@ -103,6 +83,39 @@ typedef void (*SpeculativeAbort_function) (Relation rel,
 
 typedef void (*RelationSync_function) (Relation relation);
 
+
+typedef HeapScanDesc (*ScanBegin_function) (Relation relation,
+											Snapshot snapshot,
+											int nkeys, ScanKey key,
+											ParallelHeapScanDesc parallel_scan,
+											bool allow_strat,
+											bool allow_sync,
+											bool allow_pagemode,
+											bool is_bitmapscan,
+											bool is_samplescan,
+											bool temp_snap);
+typedef void (*ScanSetlimits_function) (HeapScanDesc sscan, BlockNumber startBlk, BlockNumber numBlks);
+
+/* must return a TupleTableSlot? */
+typedef StorageTuple(*ScanGetnext_function) (HeapScanDesc scan,
+											 ScanDirection direction);
+
+typedef TupleTableSlot *(*ScanGetnextSlot_function) (HeapScanDesc scan,
+													 ScanDirection direction, TupleTableSlot *slot);
+
+typedef void (*ScanEnd_function) (HeapScanDesc scan);
+
+
+typedef void (*ScanGetpage_function) (HeapScanDesc scan, BlockNumber page);
+typedef void (*ScanRescan_function) (HeapScanDesc scan, ScanKey key, bool set_params,
+									 bool allow_strat, bool allow_sync, bool allow_pagemode);
+typedef void (*ScanUpdateSnapshot_function) (HeapScanDesc scan, Snapshot snapshot);
+
+typedef bool (*HotSearchBuffer_function) (ItemPointer tid, Relation relation,
+										  Buffer buffer, Snapshot snapshot, HeapTuple heapTuple,
+										  bool *all_dead, bool first_call);
+
+
 /*
  * API struct for a storage AM.  Note this must be stored in a single palloc'd
  * chunk of memory.
@@ -144,6 +157,17 @@ typedef struct StorageAmRoutine
 	SpeculativeAbort_function speculative_abort;
 
 	RelationSync_function relation_sync;	/* heap_sync */
+
+	/* Operations on relation scans */
+	ScanBegin_function scan_begin;
+	ScanSetlimits_function scansetlimits;
+	ScanGetnext_function scan_getnext;
+	ScanGetnextSlot_function scan_getnextslot;
+	ScanEnd_function scan_end;
+	ScanGetpage_function scan_getpage;
+	ScanRescan_function scan_rescan;
+	ScanUpdateSnapshot_function scan_update_snapshot;
+	HotSearchBuffer_function hot_search_buffer; /* heap_hot_search_buffer */
 
 }			StorageAmRoutine;
 

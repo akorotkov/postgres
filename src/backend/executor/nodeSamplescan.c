@@ -29,9 +29,11 @@
 static void InitScanRelation(SampleScanState *node, EState *estate, int eflags);
 static TupleTableSlot *SampleNext(SampleScanState *node);
 static void tablesample_init(SampleScanState *scanstate);
-static HeapTuple tablesample_getnext(SampleScanState *scanstate);
-static bool SampleTupleVisible(HeapTuple tuple, OffsetNumber tupoffset,
+static StorageTuple tablesample_getnext(SampleScanState *scanstate);
+static bool SampleTupleVisible(StorageTuple tuple, OffsetNumber tupoffset,
 				   HeapScanDesc scan);
+
+/* hari */
 
 /* ----------------------------------------------------------------
  *						Scan Support
@@ -47,7 +49,7 @@ static bool SampleTupleVisible(HeapTuple tuple, OffsetNumber tupoffset,
 static TupleTableSlot *
 SampleNext(SampleScanState *node)
 {
-	HeapTuple	tuple;
+	StorageTuple tuple;
 	TupleTableSlot *slot;
 
 	/*
@@ -244,7 +246,7 @@ ExecEndSampleScan(SampleScanState *node)
 	 * close heap scan
 	 */
 	if (node->ss.ss_currentScanDesc)
-		heap_endscan(node->ss.ss_currentScanDesc);
+		storage_endscan(node->ss.ss_currentScanDesc);
 
 	/*
 	 * close the heap relation.
@@ -349,19 +351,19 @@ tablesample_init(SampleScanState *scanstate)
 	if (scanstate->ss.ss_currentScanDesc == NULL)
 	{
 		scanstate->ss.ss_currentScanDesc =
-			heap_beginscan_sampling(scanstate->ss.ss_currentRelation,
-									scanstate->ss.ps.state->es_snapshot,
-									0, NULL,
-									scanstate->use_bulkread,
-									allow_sync,
-									scanstate->use_pagemode);
+			storage_beginscan_sampling(scanstate->ss.ss_currentRelation,
+									   scanstate->ss.ps.state->es_snapshot,
+									   0, NULL,
+									   scanstate->use_bulkread,
+									   allow_sync,
+									   scanstate->use_pagemode);
 	}
 	else
 	{
-		heap_rescan_set_params(scanstate->ss.ss_currentScanDesc, NULL,
-							   scanstate->use_bulkread,
-							   allow_sync,
-							   scanstate->use_pagemode);
+		storage_rescan_set_params(scanstate->ss.ss_currentScanDesc, NULL,
+								  scanstate->use_bulkread,
+								  allow_sync,
+								  scanstate->use_pagemode);
 	}
 
 	pfree(params);
@@ -376,7 +378,7 @@ tablesample_init(SampleScanState *scanstate)
  * Note: an awful lot of this is copied-and-pasted from heapam.c.  It would
  * perhaps be better to refactor to share more code.
  */
-static HeapTuple
+static StorageTuple
 tablesample_getnext(SampleScanState *scanstate)
 {
 	TsmRoutine *tsm = scanstate->tsmroutine;
@@ -554,7 +556,7 @@ tablesample_getnext(SampleScanState *scanstate)
  * Check visibility of the tuple.
  */
 static bool
-SampleTupleVisible(HeapTuple tuple, OffsetNumber tupoffset, HeapScanDesc scan)
+SampleTupleVisible(StorageTuple tuple, OffsetNumber tupoffset, HeapScanDesc scan) //hari
 {
 	if (scan->rs_pageatatime)
 	{

@@ -38,6 +38,7 @@
 #include <math.h>
 
 #include "access/relscan.h"
+#include "access/storageam.h"
 #include "access/transam.h"
 #include "access/visibilitymap.h"
 #include "executor/execdebug.h"
@@ -433,8 +434,8 @@ bitgetpage(HeapScanDesc scan, TBMIterateResult *tbmres)
 			HeapTupleData heapTuple;
 
 			ItemPointerSet(&tid, page, offnum);
-			if (heap_hot_search_buffer(&tid, scan->rs_rd, buffer, snapshot,
-									   &heapTuple, NULL, true))
+			if (storage_hot_search_buffer(&tid, scan->rs_rd, buffer, snapshot,
+										  &heapTuple, NULL, true))
 				scan->rs_vistuples[ntup++] = ItemPointerGetOffsetNumber(&tid);
 		}
 	}
@@ -747,7 +748,7 @@ ExecReScanBitmapHeapScan(BitmapHeapScanState *node)
 	PlanState  *outerPlan = outerPlanState(node);
 
 	/* rescan to release any page pin */
-	heap_rescan(node->ss.ss_currentScanDesc, NULL);
+	storage_rescan(node->ss.ss_currentScanDesc, NULL);
 
 	/* release bitmaps and buffers if any */
 	if (node->tbmiterator)
@@ -837,7 +838,7 @@ ExecEndBitmapHeapScan(BitmapHeapScanState *node)
 	/*
 	 * close heap scan
 	 */
-	heap_endscan(scanDesc);
+	storage_endscan(scanDesc);
 
 	/*
 	 * close the heap relation.
@@ -952,10 +953,10 @@ ExecInitBitmapHeapScan(BitmapHeapScan *node, EState *estate, int eflags)
 	 * Even though we aren't going to do a conventional seqscan, it is useful
 	 * to create a HeapScanDesc --- most of the fields in it are usable.
 	 */
-	scanstate->ss.ss_currentScanDesc = heap_beginscan_bm(currentRelation,
-														 estate->es_snapshot,
-														 0,
-														 NULL);
+	scanstate->ss.ss_currentScanDesc = storage_beginscan_bm(currentRelation,
+															estate->es_snapshot,
+															0,
+															NULL);
 
 	/*
 	 * get the scan type from the relation descriptor.
@@ -1123,5 +1124,5 @@ ExecBitmapHeapInitializeWorker(BitmapHeapScanState *node,
 	node->pstate = pstate;
 
 	snapshot = RestoreSnapshot(pstate->phs_snapshot_data);
-	heap_update_snapshot(node->ss.ss_currentScanDesc, snapshot);
+	storage_update_snapshot(node->ss.ss_currentScanDesc, snapshot);
 }

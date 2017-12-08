@@ -21,6 +21,7 @@
 #include "access/multixact.h"
 #include "access/relscan.h"
 #include "access/rewriteheap.h"
+#include "access/storageam.h"
 #include "access/storageamapi.h"
 #include "access/transam.h"
 #include "access/tuptoaster.h"
@@ -909,7 +910,7 @@ copy_heap_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex, bool verbose,
 	}
 	else
 	{
-		heapScan = heap_beginscan(OldHeap, SnapshotAny, 0, (ScanKey) NULL);
+		heapScan = storage_beginscan(OldHeap, SnapshotAny, 0, (ScanKey) NULL);
 		indexScan = NULL;
 	}
 
@@ -959,7 +960,7 @@ copy_heap_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex, bool verbose,
 		}
 		else
 		{
-			tuple = heap_getnext(heapScan, ForwardScanDirection);
+			tuple = storage_getnext(heapScan, ForwardScanDirection);
 			if (tuple == NULL)
 				break;
 
@@ -1045,7 +1046,7 @@ copy_heap_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex, bool verbose,
 	if (indexScan != NULL)
 		index_endscan(indexScan);
 	if (heapScan != NULL)
-		heap_endscan(heapScan);
+		storage_endscan(heapScan);
 
 	/*
 	 * In scan-and-sort mode, complete the sort, then read out all live tuples
@@ -1656,8 +1657,8 @@ get_tables_to_cluster(MemoryContext cluster_context)
 				Anum_pg_index_indisclustered,
 				BTEqualStrategyNumber, F_BOOLEQ,
 				BoolGetDatum(true));
-	scan = heap_beginscan_catalog(indRelation, 1, &entry);
-	while ((indexTuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+	scan = storage_beginscan_catalog(indRelation, 1, &entry);
+	while ((indexTuple = storage_getnext(scan, ForwardScanDirection)) != NULL)
 	{
 		index = (Form_pg_index) GETSTRUCT(indexTuple);
 
@@ -1677,7 +1678,7 @@ get_tables_to_cluster(MemoryContext cluster_context)
 
 		MemoryContextSwitchTo(old_context);
 	}
-	heap_endscan(scan);
+	storage_endscan(scan);
 
 	relation_close(indRelation, AccessShareLock);
 

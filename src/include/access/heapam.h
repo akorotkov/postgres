@@ -108,26 +108,25 @@ typedef struct ParallelHeapScanDescData *ParallelHeapScanDesc;
 #define HeapScanIsValid(scan) PointerIsValid(scan)
 
 extern HeapScanDesc heap_beginscan(Relation relation, Snapshot snapshot,
-			   int nkeys, ScanKey key);
-extern HeapScanDesc heap_beginscan_catalog(Relation relation, int nkeys,
-					   ScanKey key);
-extern HeapScanDesc heap_beginscan_strat(Relation relation, Snapshot snapshot,
-					 int nkeys, ScanKey key,
-					 bool allow_strat, bool allow_sync);
-extern HeapScanDesc heap_beginscan_bm(Relation relation, Snapshot snapshot,
-				  int nkeys, ScanKey key);
-extern HeapScanDesc heap_beginscan_sampling(Relation relation,
-						Snapshot snapshot, int nkeys, ScanKey key,
-						bool allow_strat, bool allow_sync, bool allow_pagemode);
+			   int nkeys, ScanKey key,
+			   ParallelHeapScanDesc parallel_scan,
+			   bool allow_strat,
+			   bool allow_sync,
+			   bool allow_pagemode,
+			   bool is_bitmapscan,
+			   bool is_samplescan,
+			   bool temp_snap);
 extern void heap_setscanlimits(HeapScanDesc scan, BlockNumber startBlk,
 				   BlockNumber endBlk);
 extern void heapgetpage(HeapScanDesc scan, BlockNumber page);
-extern void heap_rescan(HeapScanDesc scan, ScanKey key);
+extern void heap_rescan(HeapScanDesc scan, ScanKey key, bool set_params,
+			bool allow_strat, bool allow_sync, bool allow_pagemode);
 extern void heap_rescan_set_params(HeapScanDesc scan, ScanKey key,
 					   bool allow_strat, bool allow_sync, bool allow_pagemode);
 extern void heap_endscan(HeapScanDesc scan);
-extern HeapTuple heap_getnext(HeapScanDesc scan, ScanDirection direction);
-
+extern StorageTuple heap_getnext(HeapScanDesc scan, ScanDirection direction);
+extern TupleTableSlot *heap_getnextslot(HeapScanDesc sscan, ScanDirection direction,
+				 TupleTableSlot *slot);
 extern Size heap_parallelscan_estimate(Snapshot snapshot);
 extern void heap_parallelscan_initialize(ParallelHeapScanDesc target,
 							 Relation relation, Snapshot snapshot);

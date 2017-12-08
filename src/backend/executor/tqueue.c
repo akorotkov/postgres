@@ -168,7 +168,7 @@ DestroyTupleQueueReader(TupleQueueReader *reader)
  * accumulate bytes from a partially-read message, so it's useful to call
  * this with nowait = true even if nothing is returned.
  */
-HeapTuple
+StorageTuple
 TupleQueueReaderNext(TupleQueueReader *reader, bool nowait, bool *done)
 {
 	HeapTupleData htup;

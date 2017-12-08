@@ -325,13 +325,13 @@ pgstat_heap(Relation rel, FunctionCallInfo fcinfo)
 	StorageAmRoutine *method = rel->rd_stamroutine;
 
 	/* Disable syncscan because we assume we scan from block zero upwards */
-	scan = heap_beginscan_strat(rel, SnapshotAny, 0, NULL, true, false);
+	scan = storage_beginscan_strat(rel, SnapshotAny, 0, NULL, true, false);
 	InitDirtySnapshot(SnapshotDirty);
 
 	nblocks = scan->rs_nblocks; /* # blocks to be scanned */
 
 	/* scan the relation */
-	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+	while ((tuple = storage_getnext(scan, ForwardScanDirection)) != NULL)
 	{
 		CHECK_FOR_INTERRUPTS();
 
@@ -384,7 +384,7 @@ pgstat_heap(Relation rel, FunctionCallInfo fcinfo)
 		block++;
 	}
 
-	heap_endscan(scan);
+	storage_endscan(scan);
 	relation_close(rel, AccessShareLock);
 
 	stat.table_len = (uint64) nblocks * BLCKSZ;

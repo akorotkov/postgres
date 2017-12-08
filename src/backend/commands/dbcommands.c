@@ -26,6 +26,7 @@
 #include "access/genam.h"
 #include "access/heapam.h"
 #include "access/htup_details.h"
+#include "access/storageam.h"
 #include "access/xact.h"
 #include "access/xloginsert.h"
 #include "access/xlogutils.h"
@@ -590,8 +591,8 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 		 * each one to the new database.
 		 */
 		rel = heap_open(TableSpaceRelationId, AccessShareLock);
-		scan = heap_beginscan_catalog(rel, 0, NULL);
-		while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+		scan = storage_beginscan_catalog(rel, 0, NULL);
+		while ((tuple = storage_getnext(scan, ForwardScanDirection)) != NULL)
 		{
 			Oid			srctablespace = HeapTupleGetOid(tuple);
 			Oid			dsttablespace;
@@ -643,7 +644,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 								  XLOG_DBASE_CREATE | XLR_SPECIAL_REL_UPDATE);
 			}
 		}
-		heap_endscan(scan);
+		storage_endscan(scan);
 		heap_close(rel, AccessShareLock);
 
 		/*
@@ -1875,8 +1876,8 @@ remove_dbtablespaces(Oid db_id)
 	HeapTuple	tuple;
 
 	rel = heap_open(TableSpaceRelationId, AccessShareLock);
-	scan = heap_beginscan_catalog(rel, 0, NULL);
-	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+	scan = storage_beginscan_catalog(rel, 0, NULL);
+	while ((tuple = storage_getnext(scan, ForwardScanDirection)) != NULL)
 	{
 		Oid			dsttablespace = HeapTupleGetOid(tuple);
 		char	   *dstpath;
@@ -1917,7 +1918,7 @@ remove_dbtablespaces(Oid db_id)
 		pfree(dstpath);
 	}
 
-	heap_endscan(scan);
+	storage_endscan(scan);
 	heap_close(rel, AccessShareLock);
 }
 
@@ -1942,8 +1943,8 @@ check_db_file_conflict(Oid db_id)
 	HeapTuple	tuple;
 
 	rel = heap_open(TableSpaceRelationId, AccessShareLock);
-	scan = heap_beginscan_catalog(rel, 0, NULL);
-	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+	scan = storage_beginscan_catalog(rel, 0, NULL);
+	while ((tuple = storage_getnext(scan, ForwardScanDirection)) != NULL)
 	{
 		Oid			dsttablespace = HeapTupleGetOid(tuple);
 		char	   *dstpath;
@@ -1966,7 +1967,7 @@ check_db_file_conflict(Oid db_id)
 		pfree(dstpath);
 	}
 
-	heap_endscan(scan);
+	storage_endscan(scan);
 	heap_close(rel, AccessShareLock);
 
 	return result;

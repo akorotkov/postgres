@@ -125,7 +125,7 @@ pgrowlocks(PG_FUNCTION_ARGS)
 			aclcheck_error(aclresult, ACL_KIND_CLASS,
 						   RelationGetRelationName(rel));
 
-		scan = heap_beginscan(rel, GetActiveSnapshot(), 0, NULL);
+		scan = storage_beginscan(rel, GetActiveSnapshot(), 0, NULL);
 		mydata = palloc(sizeof(*mydata));
 		mydata->rel = rel;
 		mydata->scan = scan;
@@ -141,7 +141,7 @@ pgrowlocks(PG_FUNCTION_ARGS)
 	scan = mydata->scan;
 
 	/* scan the relation */
-	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+	while ((tuple = storage_getnext(scan, ForwardScanDirection)) != NULL)
 	{
 		HTSU_Result htsu;
 		TransactionId xmax;
@@ -306,7 +306,7 @@ pgrowlocks(PG_FUNCTION_ARGS)
 		}
 	}
 
-	heap_endscan(scan);
+	storage_endscan(scan);
 	heap_close(mydata->rel, AccessShareLock);
 
 	SRF_RETURN_DONE(funcctx);
