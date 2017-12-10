@@ -21,6 +21,7 @@
 #include "lib/pairingheap.h"
 #include "nodes/params.h"
 #include "nodes/plannodes.h"
+#include "storage/spin.h"
 #include "utils/hsearch.h"
 #include "utils/queryenvironment.h"
 #include "utils/reltrigger.h"
@@ -1000,13 +1001,22 @@ typedef struct ModifyTableState
  *		whichplan		which plan is being executed (0 .. n-1)
  * ----------------
  */
-typedef struct AppendState
+
+struct AppendState;
+typedef struct AppendState AppendState;
+struct ParallelAppendState;
+typedef struct ParallelAppendState ParallelAppendState;
+
+struct AppendState
 {
 	PlanState	ps;				/* its first field is NodeTag */
 	PlanState **appendplans;	/* array of PlanStates for my inputs */
 	int			as_nplans;
 	int			as_whichplan;
-} AppendState;
+	ParallelAppendState *as_pstate; /* parallel coordination info */
+	Size		pstate_len;		/* size of parallel coordination info */
+	bool		(*choose_next_subplan) (AppendState *);
+};
 
 /* ----------------
  *	 MergeAppendState information
@@ -1981,6 +1991,29 @@ typedef struct GatherMergeState
 } GatherMergeState;
 
 /* ----------------
+ *	 Values displayed by EXPLAIN ANALYZE
+ * ----------------
+ */
+typedef struct HashInstrumentation
+{
+	int			nbuckets;		/* number of buckets at end of execution */
+	int			nbuckets_original;	/* planned number of buckets */
+	int			nbatch;			/* number of batches at end of execution */
+	int			nbatch_original;	/* planned number of batches */
+	size_t		space_peak;		/* speak memory usage in bytes */
+} HashInstrumentation;
+
+/* ----------------
+ *	 Shared memory container for per-worker hash information
+ * ----------------
+ */
+typedef struct SharedHashInfo
+{
+	int			num_workers;
+	HashInstrumentation hinstrument[FLEXIBLE_ARRAY_MEMBER];
+} SharedHashInfo;
+
+/* ----------------
  *	 HashState information
  * ----------------
  */
@@ -1990,6 +2023,9 @@ typedef struct HashState
 	HashJoinTable hashtable;	/* hash table for the hashjoin */
 	List	   *hashkeys;		/* list of ExprState nodes */
 	/* hashkeys is same as parent's hj_InnerHashKeys */
+
+	SharedHashInfo *shared_info;	/* one entry per worker */
+	HashInstrumentation *hinstrument;	/* this worker's entry */
 } HashState;
 
 /* ----------------

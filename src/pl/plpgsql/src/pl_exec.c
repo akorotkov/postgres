@@ -272,8 +272,7 @@ static ParamListInfo setup_unshared_param_list(PLpgSQL_execstate *estate,
 						  PLpgSQL_expr *expr);
 static void plpgsql_param_fetch(ParamListInfo params, int paramid);
 static void exec_move_row(PLpgSQL_execstate *estate,
-			  PLpgSQL_rec *rec,
-			  PLpgSQL_row *row,
+			  PLpgSQL_variable *target,
 			  HeapTuple tup, TupleDesc tupdesc);
 static HeapTuple make_tuple_from_row(PLpgSQL_execstate *estate,
 					PLpgSQL_row *row,
@@ -281,8 +280,7 @@ static HeapTuple make_tuple_from_row(PLpgSQL_execstate *estate,
 static HeapTuple get_tuple_from_datum(Datum value);
 static TupleDesc get_tupdesc_from_datum(Datum value);
 static void exec_move_row_from_datum(PLpgSQL_execstate *estate,
-						 PLpgSQL_rec *rec,
-						 PLpgSQL_row *row,
+						 PLpgSQL_variable *target,
 						 Datum value);
 static char *convert_value_to_string(PLpgSQL_execstate *estate,
 						Datum value, Oid valtype);
@@ -425,13 +423,15 @@ plpgsql_exec_function(PLpgSQL_function *func, FunctionCallInfo fcinfo,
 					if (!fcinfo->argnull[i])
 					{
 						/* Assign row value from composite datum */
-						exec_move_row_from_datum(&estate, NULL, row,
+						exec_move_row_from_datum(&estate,
+												 (PLpgSQL_variable *) row,
 												 fcinfo->arg[i]);
 					}
 					else
 					{
 						/* If arg is null, treat it as an empty row */
-						exec_move_row(&estate, NULL, row, NULL, NULL);
+						exec_move_row(&estate, (PLpgSQL_variable *) row,
+									  NULL, NULL);
 					}
 					/* clean up after exec_move_row() */
 					exec_eval_cleanup(&estate);
@@ -1184,7 +1184,6 @@ exec_stmt_block(PLpgSQL_execstate *estate, PLpgSQL_stmt_block *block)
 {
 	volatile int rc = -1;
 	int			i;
-	int			n;
 
 	/*
 	 * First initialize all variables declared in this block
@@ -1193,13 +1192,17 @@ exec_stmt_block(PLpgSQL_execstate *estate, PLpgSQL_stmt_block *block)
 
 	for (i = 0; i < block->n_initvars; i++)
 	{
-		n = block->initvarnos[i];
+		int			n = block->initvarnos[i];
+		PLpgSQL_datum *datum = estate->datums[n];
 
-		switch (estate->datums[n]->dtype)
+		/*
+		 * The set of dtypes handled here must match plpgsql_add_initdatums().
+		 */
+		switch (datum->dtype)
 		{
 			case PLPGSQL_DTYPE_VAR:
 				{
-					PLpgSQL_var *var = (PLpgSQL_var *) (estate->datums[n]);
+					PLpgSQL_var *var = (PLpgSQL_var *) datum;
 
 					/*
 					 * Free any old value, in case re-entering block, and
@@ -1241,7 +1244,7 @@ exec_stmt_block(PLpgSQL_execstate *estate, PLpgSQL_stmt_block *block)
 
 			case PLPGSQL_DTYPE_REC:
 				{
-					PLpgSQL_rec *rec = (PLpgSQL_rec *) (estate->datums[n]);
+					PLpgSQL_rec *rec = (PLpgSQL_rec *) datum;
 
 					if (rec->freetup)
 					{
@@ -1258,13 +1261,8 @@ exec_stmt_block(PLpgSQL_execstate *estate, PLpgSQL_stmt_block *block)
 				}
 				break;
 
-			case PLPGSQL_DTYPE_RECFIELD:
-			case PLPGSQL_DTYPE_ARRAYELEM:
-				break;
-
 			default:
-				elog(ERROR, "unrecognized dtype: %d",
-					 estate->datums[n]->dtype);
+				elog(ERROR, "unrecognized dtype: %d", datum->dtype);
 		}
 	}
 
@@ -2327,7 +2325,7 @@ exec_stmt_forc(PLpgSQL_execstate *estate, PLpgSQL_stmt_forc *stmt)
 		set_args.sqlstmt = stmt->argquery;
 		set_args.into = true;
 		/* XXX historically this has not been STRICT */
-		set_args.row = (PLpgSQL_row *)
+		set_args.target = (PLpgSQL_variable *)
 			(estate->datums[curvar->cursor_explicit_argrow]);
 
 		if (exec_stmt_execsql(estate, &set_args) != PLPGSQL_RC_OK)
@@ -3755,8 +3753,7 @@ exec_stmt_execsql(PLpgSQL_execstate *estate,
 	{
 		SPITupleTable *tuptab = SPI_tuptable;
 		uint64		n = SPI_processed;
-		PLpgSQL_rec *rec = NULL;
-		PLpgSQL_row *row = NULL;
+		PLpgSQL_variable *target;
 
 		/* If the statement did not return a tuple table, complain */
 		if (tuptab == NULL)
@@ -3764,13 +3761,8 @@ exec_stmt_execsql(PLpgSQL_execstate *estate,
 					(errcode(ERRCODE_SYNTAX_ERROR),
 					 errmsg("INTO used with a command that cannot return data")));
 
-		/* Determine if we assign to a record or a row */
-		if (stmt->rec != NULL)
-			rec = (PLpgSQL_rec *) (estate->datums[stmt->rec->dno]);
-		else if (stmt->row != NULL)
-			row = (PLpgSQL_row *) (estate->datums[stmt->row->dno]);
-		else
-			elog(ERROR, "unsupported target");
+		/* Fetch target's datum entry */
+		target = (PLpgSQL_variable *) estate->datums[stmt->target->dno];
 
 		/*
 		 * If SELECT ... INTO specified STRICT, and the query didn't find
@@ -3794,7 +3786,7 @@ exec_stmt_execsql(PLpgSQL_execstate *estate,
 						 errdetail ? errdetail_internal("parameters: %s", errdetail) : 0));
 			}
 			/* set the target to NULL(s) */
-			exec_move_row(estate, rec, row, NULL, tuptab->tupdesc);
+			exec_move_row(estate, target, NULL, tuptab->tupdesc);
 		}
 		else
 		{
@@ -3813,7 +3805,7 @@ exec_stmt_execsql(PLpgSQL_execstate *estate,
 						 errdetail ? errdetail_internal("parameters: %s", errdetail) : 0));
 			}
 			/* Put the first result row into the target */
-			exec_move_row(estate, rec, row, tuptab->vals[0], tuptab->tupdesc);
+			exec_move_row(estate, target, tuptab->vals[0], tuptab->tupdesc);
 		}
 
 		/* Clean up */
@@ -3946,8 +3938,7 @@ exec_stmt_dynexecute(PLpgSQL_execstate *estate,
 	{
 		SPITupleTable *tuptab = SPI_tuptable;
 		uint64		n = SPI_processed;
-		PLpgSQL_rec *rec = NULL;
-		PLpgSQL_row *row = NULL;
+		PLpgSQL_variable *target;
 
 		/* If the statement did not return a tuple table, complain */
 		if (tuptab == NULL)
@@ -3955,13 +3946,8 @@ exec_stmt_dynexecute(PLpgSQL_execstate *estate,
 					(errcode(ERRCODE_SYNTAX_ERROR),
 					 errmsg("INTO used with a command that cannot return data")));
 
-		/* Determine if we assign to a record or a row */
-		if (stmt->rec != NULL)
-			rec = (PLpgSQL_rec *) (estate->datums[stmt->rec->dno]);
-		else if (stmt->row != NULL)
-			row = (PLpgSQL_row *) (estate->datums[stmt->row->dno]);
-		else
-			elog(ERROR, "unsupported target");
+		/* Fetch target's datum entry */
+		target = (PLpgSQL_variable *) estate->datums[stmt->target->dno];
 
 		/*
 		 * If SELECT ... INTO specified STRICT, and the query didn't find
@@ -3985,7 +3971,7 @@ exec_stmt_dynexecute(PLpgSQL_execstate *estate,
 						 errdetail ? errdetail_internal("parameters: %s", errdetail) : 0));
 			}
 			/* set the target to NULL(s) */
-			exec_move_row(estate, rec, row, NULL, tuptab->tupdesc);
+			exec_move_row(estate, target, NULL, tuptab->tupdesc);
 		}
 		else
 		{
@@ -4005,7 +3991,7 @@ exec_stmt_dynexecute(PLpgSQL_execstate *estate,
 			}
 
 			/* Put the first result row into the target */
-			exec_move_row(estate, rec, row, tuptab->vals[0], tuptab->tupdesc);
+			exec_move_row(estate, target, tuptab->vals[0], tuptab->tupdesc);
 		}
 		/* clean up after exec_move_row() */
 		exec_eval_cleanup(estate);
@@ -4163,7 +4149,7 @@ exec_stmt_open(PLpgSQL_execstate *estate, PLpgSQL_stmt_open *stmt)
 			set_args.sqlstmt = stmt->argquery;
 			set_args.into = true;
 			/* XXX historically this has not been STRICT */
-			set_args.row = (PLpgSQL_row *)
+			set_args.target = (PLpgSQL_variable *)
 				(estate->datums[curvar->cursor_explicit_argrow]);
 
 			if (exec_stmt_execsql(estate, &set_args) != PLPGSQL_RC_OK)
@@ -4221,8 +4207,6 @@ static int
 exec_stmt_fetch(PLpgSQL_execstate *estate, PLpgSQL_stmt_fetch *stmt)
 {
 	PLpgSQL_var *curvar;
-	PLpgSQL_rec *rec = NULL;
-	PLpgSQL_row *row = NULL;
 	long		how_many = stmt->how_many;
 	SPITupleTable *tuptab;
 	Portal		portal;
@@ -4269,16 +4253,7 @@ exec_stmt_fetch(PLpgSQL_execstate *estate, PLpgSQL_stmt_fetch *stmt)
 
 	if (!stmt->is_move)
 	{
-		/* ----------
-		 * Determine if we fetch into a record or a row
-		 * ----------
-		 */
-		if (stmt->rec != NULL)
-			rec = (PLpgSQL_rec *) (estate->datums[stmt->rec->dno]);
-		else if (stmt->row != NULL)
-			row = (PLpgSQL_row *) (estate->datums[stmt->row->dno]);
-		else
-			elog(ERROR, "unsupported target");
+		PLpgSQL_variable *target;
 
 		/* ----------
 		 * Fetch 1 tuple from the cursor
@@ -4292,10 +4267,11 @@ exec_stmt_fetch(PLpgSQL_execstate *estate, PLpgSQL_stmt_fetch *stmt)
 		 * Set the target appropriately.
 		 * ----------
 		 */
+		target = (PLpgSQL_variable *) estate->datums[stmt->target->dno];
 		if (n == 0)
-			exec_move_row(estate, rec, row, NULL, tuptab->tupdesc);
+			exec_move_row(estate, target, NULL, tuptab->tupdesc);
 		else
-			exec_move_row(estate, rec, row, tuptab->vals[0], tuptab->tupdesc);
+			exec_move_row(estate, target, tuptab->vals[0], tuptab->tupdesc);
 
 		exec_eval_cleanup(estate);
 		SPI_freetuptable(tuptab);
@@ -4514,7 +4490,8 @@ exec_assign_value(PLpgSQL_execstate *estate,
 				if (isNull)
 				{
 					/* If source is null, just assign nulls to the row */
-					exec_move_row(estate, NULL, row, NULL, NULL);
+					exec_move_row(estate, (PLpgSQL_variable *) row,
+								  NULL, NULL);
 				}
 				else
 				{
@@ -4523,7 +4500,8 @@ exec_assign_value(PLpgSQL_execstate *estate,
 						ereport(ERROR,
 								(errcode(ERRCODE_DATATYPE_MISMATCH),
 								 errmsg("cannot assign non-composite value to a row variable")));
-					exec_move_row_from_datum(estate, NULL, row, value);
+					exec_move_row_from_datum(estate, (PLpgSQL_variable *) row,
+											 value);
 				}
 				break;
 			}
@@ -4538,7 +4516,8 @@ exec_assign_value(PLpgSQL_execstate *estate,
 				if (isNull)
 				{
 					/* If source is null, just assign nulls to the record */
-					exec_move_row(estate, rec, NULL, NULL, NULL);
+					exec_move_row(estate, (PLpgSQL_variable *) rec,
+								  NULL, NULL);
 				}
 				else
 				{
@@ -4547,7 +4526,8 @@ exec_assign_value(PLpgSQL_execstate *estate,
 						ereport(ERROR,
 								(errcode(ERRCODE_DATATYPE_MISMATCH),
 								 errmsg("cannot assign non-composite value to a record variable")));
-					exec_move_row_from_datum(estate, rec, NULL, value);
+					exec_move_row_from_datum(estate, (PLpgSQL_variable *) rec,
+											 value);
 				}
 				break;
 			}
@@ -5341,22 +5321,14 @@ static int
 exec_for_query(PLpgSQL_execstate *estate, PLpgSQL_stmt_forq *stmt,
 			   Portal portal, bool prefetch_ok)
 {
-	PLpgSQL_rec *rec = NULL;
-	PLpgSQL_row *row = NULL;
+	PLpgSQL_variable *var;
 	SPITupleTable *tuptab;
 	bool		found = false;
 	int			rc = PLPGSQL_RC_OK;
 	uint64		n;
 
-	/*
-	 * Determine if we assign to a record or a row
-	 */
-	if (stmt->rec != NULL)
-		rec = (PLpgSQL_rec *) (estate->datums[stmt->rec->dno]);
-	else if (stmt->row != NULL)
-		row = (PLpgSQL_row *) (estate->datums[stmt->row->dno]);
-	else
-		elog(ERROR, "unsupported target");
+	/* Fetch loop variable's datum entry */
+	var = (PLpgSQL_variable *) estate->datums[stmt->var->dno];
 
 	/*
 	 * Make sure the portal doesn't get closed by the user statements we
@@ -5379,7 +5351,7 @@ exec_for_query(PLpgSQL_execstate *estate, PLpgSQL_stmt_forq *stmt,
 	 */
 	if (n == 0)
 	{
-		exec_move_row(estate, rec, row, NULL, tuptab->tupdesc);
+		exec_move_row(estate, var, NULL, tuptab->tupdesc);
 		exec_eval_cleanup(estate);
 	}
 	else
@@ -5397,7 +5369,7 @@ exec_for_query(PLpgSQL_execstate *estate, PLpgSQL_stmt_forq *stmt,
 			/*
 			 * Assign the tuple to the target
 			 */
-			exec_move_row(estate, rec, row, tuptab->vals[i], tuptab->tupdesc);
+			exec_move_row(estate, var, tuptab->vals[i], tuptab->tupdesc);
 			exec_eval_cleanup(estate);
 
 			/*
@@ -5949,16 +5921,17 @@ plpgsql_param_fetch(ParamListInfo params, int paramid)
  */
 static void
 exec_move_row(PLpgSQL_execstate *estate,
-			  PLpgSQL_rec *rec,
-			  PLpgSQL_row *row,
+			  PLpgSQL_variable *target,
 			  HeapTuple tup, TupleDesc tupdesc)
 {
 	/*
 	 * Record is simple - just copy the tuple and its descriptor into the
 	 * record variable
 	 */
-	if (rec != NULL)
+	if (target->dtype == PLPGSQL_DTYPE_REC)
 	{
+		PLpgSQL_rec *rec = (PLpgSQL_rec *) target;
+
 		/*
 		 * Copy input first, just in case it is pointing at variable's value
 		 */
@@ -6027,8 +6000,9 @@ exec_move_row(PLpgSQL_execstate *estate,
 	 * If we have no tuple data at all, we'll assign NULL to all columns of
 	 * the row variable.
 	 */
-	if (row != NULL)
+	if (target->dtype == PLPGSQL_DTYPE_ROW)
 	{
+		PLpgSQL_row *row = (PLpgSQL_row *) target;
 		int			td_natts = tupdesc ? tupdesc->natts : 0;
 		int			t_natts;
 		int			fnum;
@@ -6195,8 +6169,7 @@ get_tupdesc_from_datum(Datum value)
  */
 static void
 exec_move_row_from_datum(PLpgSQL_execstate *estate,
-						 PLpgSQL_rec *rec,
-						 PLpgSQL_row *row,
+						 PLpgSQL_variable *target,
 						 Datum value)
 {
 	HeapTupleHeader td = DatumGetHeapTupleHeader(value);
@@ -6217,7 +6190,7 @@ exec_move_row_from_datum(PLpgSQL_execstate *estate,
 	tmptup.t_data = td;
 
 	/* Do the move */
-	exec_move_row(estate, rec, row, &tmptup, tupdesc);
+	exec_move_row(estate, target, &tmptup, tupdesc);
 
 	/* Release tupdesc usage count */
 	ReleaseTupleDesc(tupdesc);
