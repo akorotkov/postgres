@@ -56,7 +56,7 @@ storage_lock_tuple(Relation relation, ItemPointer tid, StorageTuple * stuple,
  *		Caller must hold a suitable lock on the correct relation.
  * ----------------
  */
-HeapScanDesc
+StorageScanDesc
 storage_beginscan_parallel(Relation relation, ParallelHeapScanDesc parallel_scan)
 {
 	Snapshot	snapshot;
@@ -69,6 +69,25 @@ storage_beginscan_parallel(Relation relation, ParallelHeapScanDesc parallel_scan
 												true, true, true, false, false, true);
 }
 
+ParallelHeapScanDesc
+storageam_get_parallelheapscandesc(StorageScanDesc sscan)
+{
+	return sscan->rs_rd->rd_stamroutine->scan_get_parallelheapscandesc(sscan);
+}
+
+HeapPageScanDesc
+storageam_get_heappagescandesc(StorageScanDesc sscan)
+{
+	/*
+	 * Planner should have already validated whether the current storage
+	 * supports Page scans are not? This function will be called only from
+	 * Bitmap Heap scan and sample scan
+	 */
+	Assert(sscan->rs_rd->rd_stamroutine->scan_get_heappagescandesc != NULL);
+
+	return sscan->rs_rd->rd_stamroutine->scan_get_heappagescandesc(sscan);
+}
+
 /*
  * heap_setscanlimits - restrict range of a heapscan
  *
@@ -76,7 +95,7 @@ storage_beginscan_parallel(Relation relation, ParallelHeapScanDesc parallel_scan
  * numBlks is number of pages to scan (InvalidBlockNumber means "all")
  */
 void
-storage_setscanlimits(HeapScanDesc sscan, BlockNumber startBlk, BlockNumber numBlks)
+storage_setscanlimits(StorageScanDesc sscan, BlockNumber startBlk, BlockNumber numBlks)
 {
 	sscan->rs_rd->rd_stamroutine->scansetlimits(sscan, startBlk, numBlks);
 }
@@ -106,7 +125,7 @@ storage_setscanlimits(HeapScanDesc sscan, BlockNumber startBlk, BlockNumber numB
  * also allows control of whether page-mode visibility checking is used.
  * ----------------
  */
-HeapScanDesc
+StorageScanDesc
 storage_beginscan(Relation relation, Snapshot snapshot,
 				  int nkeys, ScanKey key)
 {
@@ -114,7 +133,7 @@ storage_beginscan(Relation relation, Snapshot snapshot,
 												true, true, true, false, false, false);
 }
 
-HeapScanDesc
+StorageScanDesc
 storage_beginscan_catalog(Relation relation, int nkeys, ScanKey key)
 {
 	Oid			relid = RelationGetRelid(relation);
@@ -124,7 +143,7 @@ storage_beginscan_catalog(Relation relation, int nkeys, ScanKey key)
 												true, true, true, false, false, true);
 }
 
-HeapScanDesc
+StorageScanDesc
 storage_beginscan_strat(Relation relation, Snapshot snapshot,
 						int nkeys, ScanKey key,
 						bool allow_strat, bool allow_sync)
@@ -134,7 +153,7 @@ storage_beginscan_strat(Relation relation, Snapshot snapshot,
 												false, false, false);
 }
 
-HeapScanDesc
+StorageScanDesc
 storage_beginscan_bm(Relation relation, Snapshot snapshot,
 					 int nkeys, ScanKey key)
 {
@@ -142,7 +161,7 @@ storage_beginscan_bm(Relation relation, Snapshot snapshot,
 												false, false, true, true, false, false);
 }
 
-HeapScanDesc
+StorageScanDesc
 storage_beginscan_sampling(Relation relation, Snapshot snapshot,
 						   int nkeys, ScanKey key,
 						   bool allow_strat, bool allow_sync, bool allow_pagemode)
@@ -157,7 +176,7 @@ storage_beginscan_sampling(Relation relation, Snapshot snapshot,
  * ----------------
  */
 void
-storage_rescan(HeapScanDesc scan,
+storage_rescan(StorageScanDesc scan,
 			   ScanKey key)
 {
 	scan->rs_rd->rd_stamroutine->scan_rescan(scan, key, false, false, false, false);
@@ -173,7 +192,7 @@ storage_rescan(HeapScanDesc scan,
  * ----------------
  */
 void
-storage_rescan_set_params(HeapScanDesc scan, ScanKey key,
+storage_rescan_set_params(StorageScanDesc scan, ScanKey key,
 						  bool allow_strat, bool allow_sync, bool allow_pagemode)
 {
 	scan->rs_rd->rd_stamroutine->scan_rescan(scan, key, true,
@@ -188,7 +207,7 @@ storage_rescan_set_params(HeapScanDesc scan, ScanKey key,
  * ----------------
  */
 void
-storage_endscan(HeapScanDesc scan)
+storage_endscan(StorageScanDesc scan)
 {
 	scan->rs_rd->rd_stamroutine->scan_end(scan);
 }
@@ -201,21 +220,27 @@ storage_endscan(HeapScanDesc scan)
  * ----------------
  */
 void
-storage_update_snapshot(HeapScanDesc scan, Snapshot snapshot)
+storage_update_snapshot(StorageScanDesc scan, Snapshot snapshot)
 {
 	scan->rs_rd->rd_stamroutine->scan_update_snapshot(scan, snapshot);
 }
 
 StorageTuple
-storage_getnext(HeapScanDesc sscan, ScanDirection direction)
+storage_getnext(StorageScanDesc sscan, ScanDirection direction)
 {
 	return sscan->rs_rd->rd_stamroutine->scan_getnext(sscan, direction);
 }
 
 TupleTableSlot *
-storage_getnextslot(HeapScanDesc sscan, ScanDirection direction, TupleTableSlot *slot)
+storage_getnextslot(StorageScanDesc sscan, ScanDirection direction, TupleTableSlot *slot)
 {
 	return sscan->rs_rd->rd_stamroutine->scan_getnextslot(sscan, direction, slot);
+}
+
+StorageTuple
+storage_fetch_tuple_from_offset(StorageScanDesc sscan, BlockNumber blkno, OffsetNumber offset)
+{
+	return sscan->rs_rd->rd_stamroutine->scan_fetch_tuple_from_offset(sscan, blkno, offset);
 }
 
 /*

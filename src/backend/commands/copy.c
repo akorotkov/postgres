@@ -2032,7 +2032,7 @@ CopyTo(CopyState cstate)
 	{
 		Datum	   *values;
 		bool	   *nulls;
-		HeapScanDesc scandesc;
+		StorageScanDesc scandesc;
 		HeapTuple	tuple;
 
 		values = (Datum *) palloc(num_phys_attrs * sizeof(Datum));

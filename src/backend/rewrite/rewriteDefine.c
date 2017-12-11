@@ -420,7 +420,7 @@ DefineQueryRewrite(const char *rulename,
 		if (event_relation->rd_rel->relkind != RELKIND_VIEW &&
 			event_relation->rd_rel->relkind != RELKIND_MATVIEW)
 		{
-			HeapScanDesc scanDesc;
+			StorageScanDesc scanDesc;
 			Snapshot	snapshot;
 
 			if (event_relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)

@@ -1207,7 +1207,7 @@ pgstat_collect_oids(Oid catalogid)
 	HTAB	   *htab;
 	HASHCTL		hash_ctl;
 	Relation	rel;
-	HeapScanDesc scan;
+	StorageScanDesc scan;
 	HeapTuple	tup;
 	Snapshot	snapshot;
 

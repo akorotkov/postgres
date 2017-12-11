@@ -27,7 +27,6 @@
 
 /* A physical tuple coming from a storage AM scan */
 typedef void *StorageTuple;
-typedef void *StorageScanDesc;
 
 /*
  * slot storage routine functions

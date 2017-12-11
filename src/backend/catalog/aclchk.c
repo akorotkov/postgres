@@ -822,7 +822,7 @@ objectsInSchemaToOids(GrantObjectType objtype, List *nspnames)
 					ScanKeyData key[2];
 					int			keycount;
 					Relation	rel;
-					HeapScanDesc scan;
+					StorageScanDesc scan;
 					HeapTuple	tuple;
 
 					keycount = 0;
@@ -880,7 +880,7 @@ getRelationsInNamespace(Oid namespaceId, char relkind)
 	List	   *relations = NIL;
 	ScanKeyData key[2];
 	Relation	rel;
-	HeapScanDesc scan;
+	StorageScanDesc scan;
 	HeapTuple	tuple;
 
 	ScanKeyInit(&key[0],

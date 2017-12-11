@@ -746,7 +746,7 @@ copy_heap_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex, bool verbose,
 	Datum	   *values;
 	bool	   *isnull;
 	IndexScanDesc indexScan;
-	HeapScanDesc heapScan;
+	StorageScanDesc heapScan;
 	bool		use_wal;
 	bool		is_system_catalog;
 	TransactionId OldestXmin;
@@ -1638,7 +1638,7 @@ static List *
 get_tables_to_cluster(MemoryContext cluster_context)
 {
 	Relation	indRelation;
-	HeapScanDesc scan;
+	StorageScanDesc scan;
 	ScanKeyData entry;
 	HeapTuple	indexTuple;
 	Form_pg_index index;

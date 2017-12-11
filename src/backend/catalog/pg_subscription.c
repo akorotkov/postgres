@@ -377,7 +377,7 @@ void
 RemoveSubscriptionRel(Oid subid, Oid relid)
 {
 	Relation	rel;
-	HeapScanDesc scan;
+	StorageScanDesc scan;
 	ScanKeyData skey[2];
 	HeapTuple	tup;
 	int			nkeys = 0;

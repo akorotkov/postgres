@@ -56,7 +56,7 @@ PG_FUNCTION_INFO_V1(pgrowlocks);
 typedef struct
 {
 	Relation	rel;
-	HeapScanDesc scan;
+	StorageScanDesc scan;
 	int			ncolumns;
 } MyData;
 
@@ -71,7 +71,7 @@ Datum
 pgrowlocks(PG_FUNCTION_ARGS)
 {
 	FuncCallContext *funcctx;
-	HeapScanDesc scan;
+	StorageScanDesc scan;
 	HeapTuple	tuple;
 	TupleDesc	tupdesc;
 	AttInMetadata *attinmeta;

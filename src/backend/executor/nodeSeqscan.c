@@ -317,9 +317,10 @@ void
 ExecSeqScanReInitializeDSM(SeqScanState *node,
 						   ParallelContext *pcxt)
 {
-	HeapScanDesc scan = node->ss.ss_currentScanDesc;
+	ParallelHeapScanDesc pscan;
 
-	heap_parallelscan_reinitialize(scan->rs_parallel);
+	pscan = storageam_get_parallelheapscandesc(node->ss.ss_currentScanDesc);
+	heap_parallelscan_reinitialize(pscan);
 }
 
 /* ----------------------------------------------------------------

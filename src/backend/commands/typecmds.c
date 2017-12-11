@@ -2382,7 +2382,7 @@ AlterDomainNotNull(List *names, bool notNull)
 			RelToCheck *rtc = (RelToCheck *) lfirst(rt);
 			Relation	testrel = rtc->rel;
 			TupleDesc	tupdesc = RelationGetDescr(testrel);
-			HeapScanDesc scan;
+			StorageScanDesc scan;
 			HeapTuple	tuple;
 			Snapshot	snapshot;
 
@@ -2778,7 +2778,7 @@ validateDomainConstraint(Oid domainoid, char *ccbin)
 		RelToCheck *rtc = (RelToCheck *) lfirst(rt);
 		Relation	testrel = rtc->rel;
 		TupleDesc	tupdesc = RelationGetDescr(testrel);
-		HeapScanDesc scan;
+		StorageScanDesc scan;
 		HeapTuple	tuple;
 		Snapshot	snapshot;
 

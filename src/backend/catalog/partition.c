@@ -1266,7 +1266,7 @@ check_default_allows_bound(Relation parent, Relation default_rel,
 		Snapshot	snapshot;
 		TupleDesc	tupdesc;
 		ExprContext *econtext;
-		HeapScanDesc scan;
+		StorageScanDesc scan;
 		MemoryContext oldCxt;
 		TupleTableSlot *tupslot;
 

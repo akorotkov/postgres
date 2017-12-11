@@ -31,9 +31,7 @@ static TupleTableSlot *SampleNext(SampleScanState *node);
 static void tablesample_init(SampleScanState *scanstate);
 static StorageTuple tablesample_getnext(SampleScanState *scanstate);
 static bool SampleTupleVisible(StorageTuple tuple, OffsetNumber tupoffset,
-				   HeapScanDesc scan);
-
-/* hari */
+				   SampleScanState *scanstate);
 
 /* ----------------------------------------------------------------
  *						Scan Support
@@ -357,6 +355,7 @@ tablesample_init(SampleScanState *scanstate)
 									   scanstate->use_bulkread,
 									   allow_sync,
 									   scanstate->use_pagemode);
+		scanstate->pagescan = storageam_get_heappagescandesc(scanstate->ss.ss_currentScanDesc);
 	}
 	else
 	{
@@ -382,10 +381,11 @@ static StorageTuple
 tablesample_getnext(SampleScanState *scanstate)
 {
 	TsmRoutine *tsm = scanstate->tsmroutine;
-	HeapScanDesc scan = scanstate->ss.ss_currentScanDesc;
-	HeapTuple	tuple = &(scan->rs_ctup);
+	StorageScanDesc scan = scanstate->ss.ss_currentScanDesc;
+	HeapPageScanDesc pagescan = scanstate->pagescan;
+	StorageTuple tuple;
 	Snapshot	snapshot = scan->rs_snapshot;
-	bool		pagemode = scan->rs_pageatatime;
+	bool		pagemode = pagescan->rs_pageatatime;
 	BlockNumber blockno;
 	Page		page;
 	bool		all_visible;
@@ -396,10 +396,9 @@ tablesample_getnext(SampleScanState *scanstate)
 		/*
 		 * return null immediately if relation is empty
 		 */
-		if (scan->rs_nblocks == 0)
+		if (pagescan->rs_nblocks == 0)
 		{
 			Assert(!BufferIsValid(scan->rs_cbuf));
-			tuple->t_data = NULL;
 			return NULL;
 		}
 		if (tsm->NextSampleBlock)
@@ -407,13 +406,12 @@ tablesample_getnext(SampleScanState *scanstate)
 			blockno = tsm->NextSampleBlock(scanstate);
 			if (!BlockNumberIsValid(blockno))
 			{
-				tuple->t_data = NULL;
 				return NULL;
 			}
 		}
 		else
-			blockno = scan->rs_startblock;
-		Assert(blockno < scan->rs_nblocks);
+			blockno = pagescan->rs_startblock;
+		Assert(blockno < pagescan->rs_nblocks);
 		heapgetpage(scan, blockno);
 		scan->rs_inited = true;
 	}
@@ -456,14 +454,12 @@ tablesample_getnext(SampleScanState *scanstate)
 			if (!ItemIdIsNormal(itemid))
 				continue;
 
-			tuple->t_data = (HeapTupleHeader) PageGetItem(page, itemid);
-			tuple->t_len = ItemIdGetLength(itemid);
-			ItemPointerSet(&(tuple->t_self), blockno, tupoffset);
+			tuple = storage_fetch_tuple_from_offset(scan, blockno, tupoffset);
 
 			if (all_visible)
 				visible = true;
 			else
-				visible = SampleTupleVisible(tuple, tupoffset, scan);
+				visible = SampleTupleVisible(tuple, tupoffset, scanstate);
 
 			/* in pagemode, heapgetpage did this for us */
 			if (!pagemode)
@@ -494,14 +490,14 @@ tablesample_getnext(SampleScanState *scanstate)
 		if (tsm->NextSampleBlock)
 		{
 			blockno = tsm->NextSampleBlock(scanstate);
-			Assert(!scan->rs_syncscan);
+			Assert(!pagescan->rs_syncscan);
 			finished = !BlockNumberIsValid(blockno);
 		}
 		else
 		{
 			/* Without NextSampleBlock, just do a plain forward seqscan. */
 			blockno++;
-			if (blockno >= scan->rs_nblocks)
+			if (blockno >= pagescan->rs_nblocks)
 				blockno = 0;
 
 			/*
@@ -514,10 +510,10 @@ tablesample_getnext(SampleScanState *scanstate)
 			 * a little bit backwards on every invocation, which is confusing.
 			 * We don't guarantee any specific ordering in general, though.
 			 */
-			if (scan->rs_syncscan)
+			if (pagescan->rs_syncscan)
 				ss_report_location(scan->rs_rd, blockno);
 
-			finished = (blockno == scan->rs_startblock);
+			finished = (blockno == pagescan->rs_startblock);
 		}
 
 		/*
@@ -529,12 +525,11 @@ tablesample_getnext(SampleScanState *scanstate)
 				ReleaseBuffer(scan->rs_cbuf);
 			scan->rs_cbuf = InvalidBuffer;
 			scan->rs_cblock = InvalidBlockNumber;
-			tuple->t_data = NULL;
 			scan->rs_inited = false;
 			return NULL;
 		}
 
-		Assert(blockno < scan->rs_nblocks);
+		Assert(blockno < pagescan->rs_nblocks);
 		heapgetpage(scan, blockno);
 
 		/* Re-establish state for new page */
@@ -549,16 +544,19 @@ tablesample_getnext(SampleScanState *scanstate)
 	/* Count successfully-fetched tuples as heap fetches */
 	pgstat_count_heap_getnext(scan->rs_rd);
 
-	return &(scan->rs_ctup);
+	return tuple;
 }
 
 /*
  * Check visibility of the tuple.
  */
 static bool
-SampleTupleVisible(StorageTuple tuple, OffsetNumber tupoffset, HeapScanDesc scan) //hari
+SampleTupleVisible(StorageTuple tuple, OffsetNumber tupoffset, SampleScanState *scanstate)
 {
-	if (scan->rs_pageatatime)
+	StorageScanDesc scan = scanstate->ss.ss_currentScanDesc;
+	HeapPageScanDesc pagescan = scanstate->pagescan;
+
+	if (pagescan->rs_pageatatime)
 	{
 		/*
 		 * In pageatatime mode, heapgetpage() already did visibility checks,
@@ -570,12 +568,12 @@ SampleTupleVisible(StorageTuple tuple, OffsetNumber tupoffset, HeapScanDesc scan
 		 * gain to justify the restriction.
 		 */
 		int			start = 0,
-					end = scan->rs_ntuples - 1;
+					end = pagescan->rs_ntuples - 1;
 
 		while (start <= end)
 		{
 			int			mid = (start + end) / 2;
-			OffsetNumber curoffset = scan->rs_vistuples[mid];
+			OffsetNumber curoffset = pagescan->rs_vistuples[mid];
 
 			if (tupoffset == curoffset)
 				return true;

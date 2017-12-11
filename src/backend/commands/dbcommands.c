@@ -99,7 +99,7 @@ static int	errdetail_busy_db(int notherbackends, int npreparedxacts);
 Oid
 createdb(ParseState *pstate, const CreatedbStmt *stmt)
 {
-	HeapScanDesc scan;
+	StorageScanDesc scan;
 	Relation	rel;
 	Oid			src_dboid;
 	Oid			src_owner;
@@ -1872,7 +1872,7 @@ static void
 remove_dbtablespaces(Oid db_id)
 {
 	Relation	rel;
-	HeapScanDesc scan;
+	StorageScanDesc scan;
 	HeapTuple	tuple;
 
 	rel = heap_open(TableSpaceRelationId, AccessShareLock);
@@ -1939,7 +1939,7 @@ check_db_file_conflict(Oid db_id)
 {
 	bool		result = false;
 	Relation	rel;
-	HeapScanDesc scan;
+	StorageScanDesc scan;
 	HeapTuple	tuple;
 
 	rel = heap_open(TableSpaceRelationId, AccessShareLock);

@@ -4492,7 +4492,7 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 		bool	   *isnull;
 		TupleTableSlot *oldslot;
 		TupleTableSlot *newslot;
-		HeapScanDesc scan;
+		StorageScanDesc scan;
 		HeapTuple	tuple;
 		MemoryContext oldCxt;
 		List	   *dropped_attrs = NIL;
@@ -5065,7 +5065,7 @@ find_typed_table_dependencies(Oid typeOid, const char *typeName, DropBehavior be
 {
 	Relation	classRel;
 	ScanKeyData key[1];
-	HeapScanDesc scan;
+	StorageScanDesc scan;
 	HeapTuple	tuple;
 	List	   *result = NIL;
 
@@ -8219,7 +8219,7 @@ validateCheckConstraint(Relation rel, HeapTuple constrtup)
 	Expr	   *origexpr;
 	ExprState  *exprstate;
 	TupleDesc	tupdesc;
-	HeapScanDesc scan;
+	StorageScanDesc scan;
 	HeapTuple	tuple;
 	ExprContext *econtext;
 	MemoryContext oldcxt;
@@ -8302,7 +8302,7 @@ validateForeignKeyConstraint(char *conname,
 							 Oid pkindOid,
 							 Oid constraintOid)
 {
-	HeapScanDesc scan;
+	StorageScanDesc scan;
 	HeapTuple	tuple;
 	Trigger		trig;
 	Snapshot	snapshot;
@@ -10809,7 +10809,7 @@ AlterTableMoveAll(AlterTableMoveAllStmt *stmt)
 	ListCell   *l;
 	ScanKeyData key[1];
 	Relation	rel;
-	HeapScanDesc scan;
+	StorageScanDesc scan;
 	HeapTuple	tuple;
 	Oid			orig_tablespaceoid;
 	Oid			new_tablespaceoid;

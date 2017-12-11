@@ -577,7 +577,7 @@ boot_openrel(char *relname)
 	int			i;
 	struct typmap **app;
 	Relation	rel;
-	HeapScanDesc scan;
+	StorageScanDesc scan;
 	HeapTuple	tup;
 
 	if (strlen(relname) >= NAMEDATALEN)
@@ -893,7 +893,7 @@ gettype(char *type)
 {
 	int			i;
 	Relation	rel;
-	HeapScanDesc scan;
+	StorageScanDesc scan;
 	HeapTuple	tup;
 	struct typmap **app;
 

@@ -1865,7 +1865,7 @@ get_database_list(void)
 {
 	List	   *dblist = NIL;
 	Relation	rel;
-	HeapScanDesc scan;
+	StorageScanDesc scan;
 	HeapTuple	tup;
 	MemoryContext resultcxt;
 
@@ -1931,7 +1931,7 @@ do_autovacuum(void)
 {
 	Relation	classRel;
 	HeapTuple	tuple;
-	HeapScanDesc relScan;
+	StorageScanDesc relScan;
 	Form_pg_database dbForm;
 	List	   *table_oids = NIL;
 	List	   *orphan_oids = NIL;

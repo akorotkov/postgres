@@ -314,7 +314,8 @@ pgstat_relation(Relation rel, FunctionCallInfo fcinfo)
 static Datum
 pgstat_heap(Relation rel, FunctionCallInfo fcinfo)
 {
-	HeapScanDesc scan;
+	StorageScanDesc scan;
+	HeapPageScanDesc pagescan;
 	HeapTuple	tuple;
 	BlockNumber nblocks;
 	BlockNumber block = 0;		/* next block to count free space in */
@@ -328,7 +329,8 @@ pgstat_heap(Relation rel, FunctionCallInfo fcinfo)
 	scan = storage_beginscan_strat(rel, SnapshotAny, 0, NULL, true, false);
 	InitDirtySnapshot(SnapshotDirty);
 
-	nblocks = scan->rs_nblocks; /* # blocks to be scanned */
+	pagescan = storageam_get_heappagescandesc(scan);
+	nblocks = pagescan->rs_nblocks; /* # blocks to be scanned */
 
 	/* scan the relation */
 	while ((tuple = storage_getnext(scan, ForwardScanDirection)) != NULL)
@@ -364,7 +366,7 @@ pgstat_heap(Relation rel, FunctionCallInfo fcinfo)
 			CHECK_FOR_INTERRUPTS();
 
 			buffer = ReadBufferExtended(rel, MAIN_FORKNUM, block,
-										RBM_NORMAL, scan->rs_strategy);
+										RBM_NORMAL, pagescan->rs_strategy);
 			LockBuffer(buffer, BUFFER_LOCK_SHARE);
 			stat.free_space += PageGetHeapFreeSpace((Page) BufferGetPage(buffer));
 			UnlockReleaseBuffer(buffer);
@@ -377,7 +379,7 @@ pgstat_heap(Relation rel, FunctionCallInfo fcinfo)
 		CHECK_FOR_INTERRUPTS();
 
 		buffer = ReadBufferExtended(rel, MAIN_FORKNUM, block,
-									RBM_NORMAL, scan->rs_strategy);
+									RBM_NORMAL, pagescan->rs_strategy);
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		stat.free_space += PageGetHeapFreeSpace((Page) BufferGetPage(buffer));
 		UnlockReleaseBuffer(buffer);

@@ -314,7 +314,7 @@ GetAllTablesPublicationRelations(void)
 {
 	Relation	classRel;
 	ScanKeyData key[1];
-	HeapScanDesc scan;
+	StorageScanDesc scan;
 	HeapTuple	tuple;
 	List	   *result = NIL;
 

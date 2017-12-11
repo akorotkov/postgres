@@ -1891,7 +1891,7 @@ ReindexMultipleTables(const char *objectName, ReindexObjectType objectKind,
 {
 	Oid			objectOid;
 	Relation	relationRelation;
-	HeapScanDesc scan;
+	StorageScanDesc scan;
 	ScanKeyData scan_keys[1];
 	HeapTuple	tuple;
 	MemoryContext private_context;
