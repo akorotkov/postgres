@@ -269,12 +269,12 @@ ExecCloseIndices(ResultRelInfo *resultRelInfo)
  */
 List *
 ExecInsertIndexTuples(TupleTableSlot *slot,
-					  ItemPointer tupleid,
 					  EState *estate,
 					  bool noDupErr,
 					  bool *specConflict,
 					  List *arbiterIndexes)
 {
+	ItemPointer tupleid = &slot->tts_tid;
 	List	   *result = NIL;
 	ResultRelInfo *resultRelInfo;
 	int			i;

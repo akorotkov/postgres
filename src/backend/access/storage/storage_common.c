@@ -30,20 +30,6 @@ SnapshotData SnapshotSelfData = {SELF_VISIBILITY};
 SnapshotData SnapshotAnyData = {ANY_VISIBILITY};
 
 /*
- * HeapTupleSetHintBits --- exported version of SetHintBits()
- *
- * This must be separate because of C99's brain-dead notions about how to
- * implement inline functions.
- */
-void
-HeapTupleSetHintBits(HeapTupleHeader tuple, Buffer buffer,
-					 uint16 infomask, TransactionId xid)
-{
-	SetHintBits(tuple, buffer, infomask, xid);
-}
-
-
-/*
  * Is the tuple really only locked?  That is, is it not updated?
  *
  * It's easy to check just infomask bits if the locker is not a multi; but
@@ -352,6 +338,8 @@ heapam_slot_store_tuple(TupleTableSlot *slot, StorageTuple tuple, bool shouldFre
 	MemoryContextSwitchTo(oldcontext);
 
 	slot->tts_tid = ((HeapTuple) tuple)->t_self;
+	if (slot->tts_tupleDescriptor->tdhasoid)
+		slot->tts_tupleOid = HeapTupleGetOid((HeapTuple) tuple);
 	slot->tts_storage = stuple;
 }
 

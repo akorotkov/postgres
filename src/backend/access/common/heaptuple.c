@@ -686,6 +686,30 @@ heap_copy_tuple_as_datum(HeapTuple tuple, TupleDesc tupleDesc)
 }
 
 /*
+ * heap_form_tuple_by_datum
+ *		construct a tuple from the given dataum
+ *
+ * The result is allocated in the current memory context.
+ */
+HeapTuple
+heap_form_tuple_by_datum(Datum data, Oid tableoid)
+{
+	HeapTuple	newTuple;
+	HeapTupleHeader td;
+
+	td = DatumGetHeapTupleHeader(data);
+
+	newTuple = (HeapTuple) palloc(HEAPTUPLESIZE + HeapTupleHeaderGetDatumLength(td));
+	newTuple->t_len = HeapTupleHeaderGetDatumLength(td);
+	newTuple->t_self = td->t_ctid;
+	newTuple->t_tableOid = tableoid;
+	newTuple->t_data = (HeapTupleHeader) ((char *) newTuple + HEAPTUPLESIZE);
+	memcpy((char *) newTuple->t_data, (char *) td, newTuple->t_len);
+
+	return newTuple;
+}
+
+/*
  * heap_form_tuple
  *		construct a tuple from the given values[] and isnull[] arrays,
  *		which are of the length indicated by tupleDescriptor->natts

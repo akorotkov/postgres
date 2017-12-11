@@ -20,6 +20,7 @@
 
 #include "access/heapam.h"
 #include "access/htup_details.h"
+#include "access/storageam.h"
 #include "access/sysattr.h"
 #include "access/xact.h"
 #include "access/xlog.h"
@@ -2719,8 +2720,6 @@ CopyFrom(CopyState cstate)
 
 			if (slot == NULL)	/* "do nothing" */
 				skip_tuple = true;
-			else				/* trigger might have changed tuple */
-				tuple = ExecHeapifySlot(slot);
 		}
 
 		if (!skip_tuple)
@@ -2783,19 +2782,11 @@ CopyFrom(CopyState cstate)
 					List	   *recheckIndexes = NIL;
 
 					/* OK, store the tuple and create index entries for it */
-					heap_insert(resultRelInfo->ri_RelationDesc, tuple, mycid,
-								hi_options, bistate);
-
-					if (resultRelInfo->ri_NumIndices > 0)
-						recheckIndexes = ExecInsertIndexTuples(slot,
-															   &(tuple->t_self),
-															   estate,
-															   false,
-															   NULL,
-															   NIL);
+					storage_insert(resultRelInfo->ri_RelationDesc, slot, mycid, hi_options,
+								   bistate, ExecInsertIndexTuples, estate, NIL, &recheckIndexes);
 
 					/* AFTER ROW INSERT Triggers */
-					ExecARInsertTriggers(estate, resultRelInfo, tuple,
+					ExecARInsertTriggers(estate, resultRelInfo, slot,
 										 recheckIndexes, cstate->transition_capture);
 
 					list_free(recheckIndexes);
@@ -2891,7 +2882,7 @@ CopyFrom(CopyState cstate)
 	 * indexes since those use WAL anyway)
 	 */
 	if (hi_options & HEAP_INSERT_SKIP_WAL)
-		heap_sync(cstate->rel);
+		storage_sync(cstate->rel);
 
 	return processed;
 }
@@ -2924,12 +2915,12 @@ CopyFromInsertBatch(CopyState cstate, EState *estate, CommandId mycid,
 	 * before calling it.
 	 */
 	oldcontext = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
-	heap_multi_insert(cstate->rel,
-					  bufferedTuples,
-					  nBufferedTuples,
-					  mycid,
-					  hi_options,
-					  bistate);
+	storage_multi_insert(cstate->rel,
+						 bufferedTuples,
+						 nBufferedTuples,
+						 mycid,
+						 hi_options,
+						 bistate);
 	MemoryContextSwitchTo(oldcontext);
 
 	/*
@@ -2945,10 +2936,9 @@ CopyFromInsertBatch(CopyState cstate, EState *estate, CommandId mycid,
 			cstate->cur_lineno = firstBufferedLineNo + i;
 			ExecStoreTuple(bufferedTuples[i], myslot, InvalidBuffer, false);
 			recheckIndexes =
-				ExecInsertIndexTuples(myslot, &(bufferedTuples[i]->t_self),
-									  estate, false, NULL, NIL);
+				ExecInsertIndexTuples(myslot, estate, false, NULL, NIL);
 			ExecARInsertTriggers(estate, resultRelInfo,
-								 bufferedTuples[i],
+								 myslot,
 								 recheckIndexes, cstate->transition_capture);
 			list_free(recheckIndexes);
 		}
@@ -2965,8 +2955,9 @@ CopyFromInsertBatch(CopyState cstate, EState *estate, CommandId mycid,
 		for (i = 0; i < nBufferedTuples; i++)
 		{
 			cstate->cur_lineno = firstBufferedLineNo + i;
+			ExecStoreTuple(bufferedTuples[i], myslot, InvalidBuffer, false);
 			ExecARInsertTriggers(estate, resultRelInfo,
-								 bufferedTuples[i],
+								 myslot,
 								 NIL, cstate->transition_capture);
 		}
 	}

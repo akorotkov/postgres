@@ -19,6 +19,7 @@
 #include "access/multixact.h"
 #include "access/reloptions.h"
 #include "access/relscan.h"
+#include "access/storageam.h"
 #include "access/sysattr.h"
 #include "access/tupconvert.h"
 #include "access/xact.h"
@@ -4663,7 +4664,8 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 
 			/* Write the tuple out to the new relation */
 			if (newrel)
-				heap_insert(newrel, tuple, mycid, hi_options, bistate);
+				storage_insert(newrel, newslot, mycid, hi_options, bistate,
+							   NULL, NULL, NIL, NULL);
 
 			ResetExprContext(econtext);
 
@@ -4687,7 +4689,7 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 
 		/* If we skipped writing WAL, then we need to sync the heap. */
 		if (hi_options & HEAP_INSERT_SKIP_WAL)
-			heap_sync(newrel);
+			storage_sync(newrel);
 
 		heap_close(newrel, NoLock);
 	}

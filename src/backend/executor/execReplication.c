@@ -15,6 +15,7 @@
 #include "postgres.h"
 
 #include "access/relscan.h"
+#include "access/storageam.h"
 #include "access/transam.h"
 #include "access/xact.h"
 #include "commands/trigger.h"
@@ -169,19 +170,19 @@ retry:
 		Buffer		buf;
 		HeapUpdateFailureData hufd;
 		HTSU_Result res;
-		HeapTupleData locktup;
-
-		ItemPointerCopy(&outslot->tts_tid, &locktup.t_self);
+		StorageTuple locktup;
 
 		PushActiveSnapshot(GetLatestSnapshot());
 
-		res = heap_lock_tuple(rel, &locktup, GetCurrentCommandId(false),
-							  lockmode,
-							  LockWaitBlock,
-							  false /* don't follow updates */ ,
-							  &buf, &hufd);
+		res = storage_lock_tuple(rel, &(outslot->tts_tid), &locktup, GetCurrentCommandId(false),
+								 lockmode,
+								 LockWaitBlock,
+								 false /* don't follow updates */ ,
+								 &buf, &hufd);
 		/* the tuple slot already has the buffer pinned */
-		ReleaseBuffer(buf);
+		if (BufferIsValid(buf))
+			ReleaseBuffer(buf);
+		pfree(locktup);
 
 		PopActiveSnapshot();
 
@@ -277,19 +278,20 @@ retry:
 		Buffer		buf;
 		HeapUpdateFailureData hufd;
 		HTSU_Result res;
-		HeapTupleData locktup;
-
-		ItemPointerCopy(&outslot->tts_tid, &locktup.t_self);
+		StorageTuple locktup;
 
 		PushActiveSnapshot(GetLatestSnapshot());
 
-		res = heap_lock_tuple(rel, &locktup, GetCurrentCommandId(false),
-							  lockmode,
-							  LockWaitBlock,
-							  false /* don't follow updates */ ,
-							  &buf, &hufd);
+		res = storage_lock_tuple(rel, &(outslot->tts_tid), &locktup, GetCurrentCommandId(false),
+								 lockmode,
+								 LockWaitBlock,
+								 false /* don't follow updates */ ,
+								 &buf, &hufd);
 		/* the tuple slot already has the buffer pinned */
-		ReleaseBuffer(buf);
+		if (BufferIsValid(buf))
+			ReleaseBuffer(buf);
+
+		pfree(locktup);
 
 		PopActiveSnapshot();
 
@@ -327,7 +329,6 @@ void
 ExecSimpleRelationInsert(EState *estate, TupleTableSlot *slot)
 {
 	bool		skip_tuple = false;
-	HeapTuple	tuple;
 	ResultRelInfo *resultRelInfo = estate->es_result_relation_info;
 	Relation	rel = resultRelInfo->ri_RelationDesc;
 
@@ -354,19 +355,12 @@ ExecSimpleRelationInsert(EState *estate, TupleTableSlot *slot)
 		if (rel->rd_att->constr)
 			ExecConstraints(resultRelInfo, slot, estate);
 
-		/* Store the slot into tuple that we can inspect. */
-		tuple = ExecHeapifySlot(slot);
-
-		/* OK, store the tuple and create index entries for it */
-		simple_heap_insert(rel, tuple);
-
-		if (resultRelInfo->ri_NumIndices > 0)
-			recheckIndexes = ExecInsertIndexTuples(slot, &(tuple->t_self),
-												   estate, false, NULL,
-												   NIL);
+		storage_insert(resultRelInfo->ri_RelationDesc, slot,
+					   GetCurrentCommandId(true), 0, NULL,
+					   ExecInsertIndexTuples, estate, NIL, &recheckIndexes);
 
 		/* AFTER ROW INSERT Triggers */
-		ExecARInsertTriggers(estate, resultRelInfo, tuple,
+		ExecARInsertTriggers(estate, resultRelInfo, slot,
 							 recheckIndexes, NULL);
 
 		/*
@@ -390,7 +384,7 @@ ExecSimpleRelationUpdate(EState *estate, EPQState *epqstate,
 						 TupleTableSlot *searchslot, TupleTableSlot *slot)
 {
 	bool		skip_tuple = false;
-	HeapTuple	tuple;
+	StorageTuple tuple;
 	ResultRelInfo *resultRelInfo = estate->es_result_relation_info;
 	Relation	rel = resultRelInfo->ri_RelationDesc;
 	ItemPointer tid = &(searchslot->tts_tid);
@@ -415,22 +409,18 @@ ExecSimpleRelationUpdate(EState *estate, EPQState *epqstate,
 	if (!skip_tuple)
 	{
 		List	   *recheckIndexes = NIL;
+		HeapUpdateFailureData hufd;
+		LockTupleMode lockmode;
+		InsertIndexTuples IndexFunc = ExecInsertIndexTuples;
 
 		/* Check the constraints of the tuple */
 		if (rel->rd_att->constr)
 			ExecConstraints(resultRelInfo, slot, estate);
 
-		/* Store the slot into tuple that we can write. */
+		storage_update(rel, tid, slot, estate, GetCurrentCommandId(true), InvalidSnapshot,
+					   true, &hufd, &lockmode, IndexFunc, &recheckIndexes);
+
 		tuple = ExecHeapifySlot(slot);
-
-		/* OK, update the tuple and index entries for it */
-		simple_heap_update(rel, tid, tuple);
-
-		if (resultRelInfo->ri_NumIndices > 0 &&
-			!HeapTupleIsHeapOnly(tuple))
-			recheckIndexes = ExecInsertIndexTuples(slot, tid,
-												   estate, false, NULL,
-												   NIL);
 
 		/* AFTER ROW UPDATE Triggers */
 		ExecARUpdateTriggers(estate, resultRelInfo,

@@ -45,9 +45,6 @@ typedef MinimalTuple (*SlotGetMinTuple_function) (TupleTableSlot *slot, bool pal
 
 typedef void (*SlotUpdateTableoid_function) (TupleTableSlot *slot, Oid tableoid);
 
-typedef void (*SpeculativeAbort_function) (Relation rel,
-										   TupleTableSlot *slot);
-
 typedef struct StorageSlotAmRoutine
 {
 	/* Operations on TupleTableSlot */
@@ -74,8 +71,6 @@ typedef enum
 
 
 /* in storage/storage_common.c */
-extern void HeapTupleSetHintBits(HeapTupleHeader tuple, Buffer buffer,
-					 uint16 infomask, TransactionId xid);
 extern bool HeapTupleHeaderIsOnlyLocked(HeapTupleHeader tuple);
 extern bool HeapTupleIsSurelyDead(HeapTuple htup, TransactionId OldestXmin);
 extern bool XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot);

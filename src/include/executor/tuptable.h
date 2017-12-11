@@ -133,6 +133,7 @@ typedef struct TupleTableSlot
 	Oid			tts_tupleOid;	/* XXX describe */
 	int			tts_nvalid;		/* # of valid values in tts_values */
 	uint32		tts_speculativeToken;	/* XXX describe */
+	bool		tts_specConflict;	/* XXX describe */
 	bool		tts_shouldFree;
 	bool		tts_shouldFreeMin;
 	Datum	   *tts_values;		/* current per-attribute values */
