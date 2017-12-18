@@ -2664,7 +2664,7 @@ EvalPlanQualFetch(EState *estate, Relation relation, int lockmode,
 			/*
 			 * This is a live tuple, so now try to lock it.
 			 */
-			test = storage_lock_tuple(relation, tid, tuple,
+			test = storage_lock_tuple(relation, tid, &tuple,
 									  estate->es_output_cid,
 									  lockmode, wait_policy,
 									  false, &buffer, &hufd);
