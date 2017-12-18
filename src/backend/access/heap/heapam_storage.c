@@ -215,27 +215,31 @@ heapam_heap_update(Relation relation, ItemPointer otid, TupleTableSlot *slot,
 static tuple_data
 heapam_get_tuple_data(StorageTuple tuple, tuple_data_flags flags)
 {
+	tuple_data	result;
+
 	switch (flags)
 	{
 		case XMIN:
-			return (tuple_data) HeapTupleHeaderGetXmin(((HeapTuple) tuple)->t_data);
+			result.xid = HeapTupleHeaderGetXmin(((HeapTuple) tuple)->t_data);
 			break;
 		case UPDATED_XID:
-			return (tuple_data) HeapTupleHeaderGetUpdateXid(((HeapTuple) tuple)->t_data);
+			result.xid = HeapTupleHeaderGetUpdateXid(((HeapTuple) tuple)->t_data);
 			break;
 		case CMIN:
-			return (tuple_data) HeapTupleHeaderGetCmin(((HeapTuple) tuple)->t_data);
+			result.cid = HeapTupleHeaderGetCmin(((HeapTuple) tuple)->t_data);
 			break;
 		case TID:
-			return (tuple_data) ((HeapTuple) tuple)->t_self;
+			result.tid = ((HeapTuple) tuple)->t_self;
 			break;
 		case CTID:
-			return (tuple_data) ((HeapTuple) tuple)->t_data->t_ctid;
+			result.tid = ((HeapTuple) tuple)->t_data->t_ctid;
 			break;
 		default:
 			Assert(0);
 			break;
 	}
+
+	return result;
 }
 
 static StorageTuple
