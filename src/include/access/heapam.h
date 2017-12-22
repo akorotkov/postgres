@@ -71,6 +71,7 @@ typedef struct HeapUpdateFailureData
 	ItemPointerData ctid;
 	TransactionId xmax;
 	CommandId	cmax;
+	bool		traversed;
 } HeapUpdateFailureData;
 
 
@@ -164,10 +165,10 @@ extern HTSU_Result heap_update(Relation relation, ItemPointer otid,
 			HeapTuple newtup,
 			CommandId cid, Snapshot crosscheck, bool wait,
 			HeapUpdateFailureData *hufd, LockTupleMode *lockmode);
-extern HTSU_Result heap_lock_tuple(Relation relation, ItemPointer tid, StorageTuple * tuple,
-				CommandId cid, LockTupleMode mode, LockWaitPolicy wait_policy,
-				bool follow_update,
-				Buffer *buffer, HeapUpdateFailureData *hufd);
+extern HTSU_Result heap_lock_tuple(Relation relation, HeapTuple tuple,
+			CommandId cid, LockTupleMode mode, LockWaitPolicy wait_policy,
+			bool follow_updates,
+			Buffer *buffer, HeapUpdateFailureData *hufd);
 
 extern void heap_inplace_update(Relation relation, HeapTuple tuple);
 extern bool heap_freeze_tuple(HeapTupleHeader tuple, TransactionId cutoff_xid,

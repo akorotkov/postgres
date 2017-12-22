@@ -85,10 +85,10 @@ extern bool storage_hot_search_buffer(ItemPointer tid, Relation relation, Buffer
 extern bool storage_hot_search(ItemPointer tid, Relation relation, Snapshot snapshot,
 				   bool *all_dead);
 
-extern HTSU_Result storage_lock_tuple(Relation relation, ItemPointer tid, StorageTuple * stuple,
-				   CommandId cid, LockTupleMode mode, LockWaitPolicy wait_policy,
-				   bool follow_updates,
-				   Buffer *buffer, HeapUpdateFailureData *hufd);
+extern HTSU_Result storage_lock_tuple(Relation relation, ItemPointer tid, Snapshot snapshot,
+				   StorageTuple *stuple, CommandId cid, LockTupleMode mode,
+				   LockWaitPolicy wait_policy, uint8 flags,
+				   HeapUpdateFailureData *hufd);
 
 extern Oid storage_insert(Relation relation, TupleTableSlot *slot, CommandId cid,
 			   int options, BulkInsertState bistate, InsertIndexTuples IndexFunc,

@@ -203,7 +203,8 @@ ExecCheckHeapTupleVisible(EState *estate,
 	 * We need buffer pin and lock to call HeapTupleSatisfiesVisibility.
 	 * Caller should be holding pin, but not lock.
 	 */
-	LockBuffer(buffer, BUFFER_LOCK_SHARE);
+	if (BufferIsValid(buffer))
+		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 	if (!HeapTupleSatisfiesVisibility(rel->rd_stamroutine, tuple, estate->es_snapshot, buffer))
 	{
 		tuple_data	t_data = storage_tuple_get_data(rel, tuple, XMIN);
@@ -219,7 +220,8 @@ ExecCheckHeapTupleVisible(EState *estate,
 					(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 					 errmsg("could not serialize access due to concurrent update")));
 	}
-	LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+	if (BufferIsValid(buffer))
+		LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
 }
 
 /*
@@ -678,6 +680,7 @@ ExecDelete(ModifyTableState *mtstate,
 	HTSU_Result result;
 	HeapUpdateFailureData hufd;
 	TupleTableSlot *slot = NULL;
+	StorageTuple	tuple;
 
 	/*
 	 * get information on the (current) result relation
@@ -759,6 +762,35 @@ ldelete:;
 								estate->es_crosscheck_snapshot,
 								true /* wait for commit */ ,
 								&hufd);
+
+		if (result == HeapTupleUpdated && !IsolationUsesXactSnapshot())
+		{
+			result = storage_lock_tuple(resultRelationDesc, tupleid,
+										estate->es_snapshot,
+										&tuple, estate->es_output_cid,
+										LockTupleExclusive, LockWaitBlock,
+										TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
+										&hufd);
+
+			Assert(result != HeapTupleUpdated && hufd.traversed);
+			if (result == HeapTupleMayBeUpdated)
+			{
+				TupleTableSlot *epqslot;
+
+				epqslot = EvalPlanQual(estate,
+									   epqstate,
+									   resultRelationDesc,
+									   resultRelInfo->ri_RangeTableIndex,
+									   tuple);
+				if (TupIsNull(epqslot))
+				{
+					/* Tuple no more passing quals, exiting... */
+					return NULL;
+				}
+				goto ldelete;
+			}
+		}
+
 		switch (result)
 		{
 			case HeapTupleSelfUpdated:
@@ -804,23 +836,16 @@ ldelete:;
 					ereport(ERROR,
 							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 							 errmsg("could not serialize access due to concurrent update")));
-				if (!ItemPointerEquals(tupleid, &hufd.ctid))
-				{
-					TupleTableSlot *epqslot;
+				else
+					/* shouldn't get there */
+					elog(ERROR, "wrong heap_delete status: %u", result);
+				break;
 
-					epqslot = EvalPlanQual(estate,
-										   epqstate,
-										   resultRelationDesc,
-										   resultRelInfo->ri_RangeTableIndex,
-										   LockTupleExclusive,
-										   &hufd.ctid,
-										   hufd.xmax);
-					if (!TupIsNull(epqslot))
-					{
-						*tupleid = hufd.ctid;
-						goto ldelete;
-					}
-				}
+			case HeapTupleDeleted:
+				if (IsolationUsesXactSnapshot())
+					ereport(ERROR,
+							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+							 errmsg("could not serialize access due to concurrent delete")));
 				/* tuple already deleted; nothing to do */
 				return NULL;
 
@@ -1059,6 +1084,37 @@ lreplace:;
 								&hufd, &lockmode,
 								ExecInsertIndexTuples,
 								&recheckIndexes);
+
+		if (result == HeapTupleUpdated && !IsolationUsesXactSnapshot())
+		{
+			result = storage_lock_tuple(resultRelationDesc, tupleid,
+										estate->es_snapshot,
+										&tuple, estate->es_output_cid,
+										lockmode, LockWaitBlock,
+										TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
+										&hufd);
+
+			Assert(result != HeapTupleUpdated && hufd.traversed);
+			if (result == HeapTupleMayBeUpdated)
+			{
+				TupleTableSlot *epqslot;
+
+				epqslot = EvalPlanQual(estate,
+									   epqstate,
+									   resultRelationDesc,
+									   resultRelInfo->ri_RangeTableIndex,
+									   tuple);
+				if (TupIsNull(epqslot))
+				{
+					/* Tuple no more passing quals, exiting... */
+					return NULL;
+				}
+				slot = ExecFilterJunk(resultRelInfo->ri_junkFilter, epqslot);
+				tuple = ExecHeapifySlot(slot);
+				goto lreplace;
+			}
+		}
+
 		switch (result)
 		{
 			case HeapTupleSelfUpdated:
@@ -1103,25 +1159,16 @@ lreplace:;
 					ereport(ERROR,
 							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 							 errmsg("could not serialize access due to concurrent update")));
-				if (!ItemPointerEquals(tupleid, &hufd.ctid))
-				{
-					TupleTableSlot *epqslot;
+				else
+					/* shouldn't get there */
+					elog(ERROR, "wrong heap_delete status: %u", result);
+				break;
 
-					epqslot = EvalPlanQual(estate,
-										   epqstate,
-										   resultRelationDesc,
-										   resultRelInfo->ri_RangeTableIndex,
-										   lockmode,
-										   &hufd.ctid,
-										   hufd.xmax);
-					if (!TupIsNull(epqslot))
-					{
-						*tupleid = hufd.ctid;
-						slot = ExecFilterJunk(resultRelInfo->ri_junkFilter, epqslot);
-						tuple = ExecHeapifySlot(slot);
-						goto lreplace;
-					}
-				}
+			case HeapTupleDeleted:
+				if (IsolationUsesXactSnapshot())
+					ereport(ERROR,
+							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+							 errmsg("could not serialize access due to concurrent delete")));
 				/* tuple already deleted; nothing to do */
 				return NULL;
 
@@ -1190,8 +1237,8 @@ ExecOnConflictUpdate(ModifyTableState *mtstate,
 	HeapUpdateFailureData hufd;
 	LockTupleMode lockmode;
 	HTSU_Result test;
-	Buffer		buffer;
 	tuple_data	t_data;
+	SnapshotData	snapshot;
 
 	/* Determine lock mode to use */
 	lockmode = ExecUpdateLockMode(estate, resultRelInfo);
@@ -1202,8 +1249,12 @@ ExecOnConflictUpdate(ModifyTableState *mtstate,
 	 * previous conclusion that the tuple is conclusively committed is not
 	 * true anymore.
 	 */
-	test = storage_lock_tuple(relation, conflictTid, &tuple, estate->es_output_cid,
-							  lockmode, LockWaitBlock, false, &buffer, &hufd);
+	InitDirtySnapshot(snapshot);
+	test = storage_lock_tuple(relation, conflictTid,
+							  &snapshot,
+							  /*estate->es_snapshot,*/
+							  &tuple, estate->es_output_cid,
+							  lockmode, LockWaitBlock, 0, &hufd);
 	switch (test)
 	{
 		case HeapTupleMayBeUpdated:
@@ -1260,8 +1311,15 @@ ExecOnConflictUpdate(ModifyTableState *mtstate,
 			 * loop here, as the new version of the row might not conflict
 			 * anymore, or the conflicting tuple has actually been deleted.
 			 */
-			if (BufferIsValid(buffer))
-				ReleaseBuffer(buffer);
+			pfree(tuple);
+			return false;
+
+		case HeapTupleDeleted:
+			if (IsolationUsesXactSnapshot())
+				ereport(ERROR,
+						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+						 errmsg("could not serialize access due to concurrent delete")));
+
 			pfree(tuple);
 			return false;
 
@@ -1290,10 +1348,10 @@ ExecOnConflictUpdate(ModifyTableState *mtstate,
 	 * snapshot.  This is in line with the way UPDATE deals with newer tuple
 	 * versions.
 	 */
-	ExecCheckHeapTupleVisible(estate, relation, tuple, buffer);
+	ExecCheckHeapTupleVisible(estate, relation, tuple, InvalidBuffer);
 
 	/* Store target's existing tuple in the state's dedicated slot */
-	ExecStoreTuple(tuple, mtstate->mt_existing, buffer, false);
+	ExecStoreTuple(tuple, mtstate->mt_existing, InvalidBuffer, false);
 
 	/*
 	 * Make tuple and any needed join variables available to ExecQual and
@@ -1308,8 +1366,6 @@ ExecOnConflictUpdate(ModifyTableState *mtstate,
 
 	if (!ExecQual(onConflictSetWhere, econtext))
 	{
-		if (BufferIsValid(buffer))
-			ReleaseBuffer(buffer);
 		pfree(tuple);
 		InstrCountFiltered1(&mtstate->ps, 1);
 		return true;			/* done with the tuple */
@@ -1355,8 +1411,6 @@ ExecOnConflictUpdate(ModifyTableState *mtstate,
 							&mtstate->mt_epqstate, mtstate->ps.state,
 							canSetTag);
 
-	if (BufferIsValid(buffer))
-		ReleaseBuffer(buffer);
 	pfree(tuple);
 	return true;
 }

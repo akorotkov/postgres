@@ -59,12 +59,12 @@ typedef bool (*TupleFetch_function) (Relation relation,
 
 typedef HTSU_Result (*TupleLock_function) (Relation relation,
 										   ItemPointer tid,
-										   StorageTuple * tuple,
+										   Snapshot snapshot,
+										   StorageTuple *tuple,
 										   CommandId cid,
 										   LockTupleMode mode,
 										   LockWaitPolicy wait_policy,
-										   bool follow_update,
-										   Buffer *buffer,
+										   uint8 flags,
 										   HeapUpdateFailureData *hufd);
 
 typedef void (*MultiInsert_function) (Relation relation, HeapTuple *tuples, int ntuples,

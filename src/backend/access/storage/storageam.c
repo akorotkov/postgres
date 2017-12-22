@@ -41,13 +41,14 @@ storage_fetch(Relation relation,
  *	storage_lock_tuple - lock a tuple in shared or exclusive mode
  */
 HTSU_Result
-storage_lock_tuple(Relation relation, ItemPointer tid, StorageTuple * stuple,
-				   CommandId cid, LockTupleMode mode, LockWaitPolicy wait_policy,
-				   bool follow_updates, Buffer *buffer, HeapUpdateFailureData *hufd)
+storage_lock_tuple(Relation relation, ItemPointer tid, Snapshot snapshot,
+				   StorageTuple *stuple, CommandId cid, LockTupleMode mode,
+				   LockWaitPolicy wait_policy, uint8 flags,
+				   HeapUpdateFailureData *hufd)
 {
-	return relation->rd_stamroutine->tuple_lock(relation, tid, stuple,
+	return relation->rd_stamroutine->tuple_lock(relation, tid, snapshot, stuple,
 												cid, mode, wait_policy,
-												follow_updates, buffer, hufd);
+												flags, hufd);
 }
 
 /* ----------------

@@ -79,13 +79,11 @@ lnext:
 		Datum		datum;
 		bool		isNull;
 		StorageTuple tuple;
-		Buffer		buffer;
 		HeapUpdateFailureData hufd;
 		LockTupleMode lockmode;
 		HTSU_Result test;
 		StorageTuple copyTuple;
 		ItemPointerData tid;
-		tuple_data	t_data;
 
 		/* clear any leftover test tuple for this rel */
 		testTuple = (StorageTuple) (&(node->lr_curtuples[erm->rti - 1]));
@@ -183,12 +181,12 @@ lnext:
 				break;
 		}
 
-		test = storage_lock_tuple(erm->relation, &tid, &tuple,
-								  estate->es_output_cid,
-								  lockmode, erm->waitPolicy, true,
-								  &buffer, &hufd);
-		if (BufferIsValid(buffer))
-			ReleaseBuffer(buffer);
+		test = storage_lock_tuple(erm->relation, &tid, estate->es_snapshot,
+								  &tuple, estate->es_output_cid,
+								  lockmode, erm->waitPolicy,
+								  (IsolationUsesXactSnapshot() ? 0 : TUPLE_LOCK_FLAG_FIND_LAST_VERSION)
+								  | TUPLE_LOCK_FLAG_LOCK_UPDATE_IN_PROGRESS,
+								  &hufd);
 
 		switch (test)
 		{
@@ -216,6 +214,16 @@ lnext:
 
 			case HeapTupleMayBeUpdated:
 				/* got the lock successfully */
+				if (hufd.traversed)
+				{
+					/* Save locked tuple for EvalPlanQual testing below */
+					*testTuple = tuple;
+
+					/* Remember we need to do EPQ testing */
+					epq_needed = true;
+
+					/* Continue loop until we have all target tuples */
+				}
 				break;
 
 			case HeapTupleUpdated:
@@ -223,38 +231,19 @@ lnext:
 					ereport(ERROR,
 							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 							 errmsg("could not serialize access due to concurrent update")));
-				t_data = erm->relation->rd_stamroutine->get_tuple_data(tuple, TID);
-				if (ItemPointerEquals(&hufd.ctid, &(t_data.tid)))
-				{
-					/* Tuple was deleted, so don't return it */
-					goto lnext;
-				}
+				/* skip lock */
+				goto lnext;
 
-				/* updated, so fetch and lock the updated version */
-				copyTuple = EvalPlanQualFetch(estate, erm->relation,
-											  lockmode, erm->waitPolicy,
-											  &hufd.ctid, hufd.xmax);
-
-				if (copyTuple == NULL)
-				{
-					/*
-					 * Tuple was deleted; or it's locked and we're under SKIP
-					 * LOCKED policy, so don't return it
-					 */
-					goto lnext;
-				}
-				/* remember the actually locked tuple's TID */
-				t_data = erm->relation->rd_stamroutine->get_tuple_data(copyTuple, TID);
-				tid = t_data.tid;
-
-				/* Save locked tuple for EvalPlanQual testing below */
-				*testTuple = copyTuple;
-
-				/* Remember we need to do EPQ testing */
-				epq_needed = true;
-
-				/* Continue loop until we have all target tuples */
-				break;
+			case HeapTupleDeleted:
+				if (IsolationUsesXactSnapshot())
+					ereport(ERROR,
+							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+							 errmsg("could not serialize access due to concurrent update")));
+				/*
+				 * Tuple was deleted; or it's locked and we're under SKIP
+				 * LOCKED policy, so don't return it
+				 */
+				goto lnext;
 
 			case HeapTupleInvisible:
 				elog(ERROR, "attempted to lock invisible tuple");

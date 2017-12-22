@@ -167,21 +167,19 @@ retry:
 	/* Found tuple, try to lock it in the lockmode. */
 	if (found)
 	{
-		Buffer		buf;
 		HeapUpdateFailureData hufd;
 		HTSU_Result res;
 		StorageTuple locktup;
 
 		PushActiveSnapshot(GetLatestSnapshot());
 
-		res = storage_lock_tuple(rel, &(outslot->tts_tid), &locktup, GetCurrentCommandId(false),
+		res = storage_lock_tuple(rel, &(outslot->tts_tid), GetLatestSnapshot(),
+								 &locktup,
+								 GetCurrentCommandId(false),
 								 lockmode,
 								 LockWaitBlock,
-								 false /* don't follow updates */ ,
-								 &buf, &hufd);
-		/* the tuple slot already has the buffer pinned */
-		if (BufferIsValid(buf))
-			ReleaseBuffer(buf);
+								 0 /* don't follow updates */ ,
+								 &hufd);
 		pfree(locktup);
 
 		PopActiveSnapshot();
@@ -195,6 +193,12 @@ retry:
 				ereport(LOG,
 						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 						 errmsg("concurrent update, retrying")));
+				goto retry;
+			case HeapTupleDeleted:
+				/* XXX: Improve handling here */
+				ereport(LOG,
+						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+						 errmsg("concurrent delete, retrying")));
 				goto retry;
 			case HeapTupleInvisible:
 				elog(ERROR, "attempted to lock invisible tuple");
@@ -274,21 +278,19 @@ retry:
 	/* Found tuple, try to lock it in the lockmode. */
 	if (found)
 	{
-		Buffer		buf;
 		HeapUpdateFailureData hufd;
 		HTSU_Result res;
 		StorageTuple locktup;
 
 		PushActiveSnapshot(GetLatestSnapshot());
 
-		res = storage_lock_tuple(rel, &(outslot->tts_tid), &locktup, GetCurrentCommandId(false),
+		res = storage_lock_tuple(rel, &(outslot->tts_tid), GetLatestSnapshot(),
+								 &locktup,
+								 GetCurrentCommandId(false),
 								 lockmode,
 								 LockWaitBlock,
-								 false /* don't follow updates */ ,
-								 &buf, &hufd);
-		/* the tuple slot already has the buffer pinned */
-		if (BufferIsValid(buf))
-			ReleaseBuffer(buf);
+								 0 /* don't follow updates */ ,
+								 &hufd);
 
 		pfree(locktup);
 
@@ -303,6 +305,12 @@ retry:
 				ereport(LOG,
 						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 						 errmsg("concurrent update, retrying")));
+				goto retry;
+			case HeapTupleDeleted:
+				/* XXX: Improve handling here */
+				ereport(LOG,
+						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+						 errmsg("concurrent delete, retrying")));
 				goto retry;
 			case HeapTupleInvisible:
 				elog(ERROR, "attempted to lock invisible tuple");
