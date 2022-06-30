@@ -2667,7 +2667,8 @@ xmax_infomask_changed(uint16 new_infomask, uint16 old_infomask)
 TM_Result
 heap_delete(Relation relation, ItemPointer tid,
 			CommandId cid, Snapshot crosscheck, bool wait,
-			TM_FailureData *tmfd, bool changingPart)
+			TM_FailureData *tmfd, bool changingPart, Snapshot snapshot,
+			LazyTupleTableSlot *lockedSlot)
 {
 	TM_Result	result;
 	TransactionId xid = GetCurrentTransactionId();
@@ -2863,6 +2864,28 @@ l1:
 		/* Perform additional check for transaction-snapshot mode RI updates */
 		if (!HeapTupleSatisfiesVisibility(&tp, crosscheck, buffer))
 			result = TM_Updated;
+	}
+
+	/*
+	 * If tuple was concurrently updates and 'lockedSlot' is given, then we
+	 * lock tuple saving our efforts on its finding.
+	 */
+	if (result == TM_Updated && lockedSlot)
+	{
+		HeapLockContext context = {buffer, vmbuffer, have_tuple_lock};
+
+		result = heapam_tuple_lock_context(relation, tid, snapshot,
+										   LAZY_TTS_EVAL(lockedSlot),
+										   cid, LockTupleExclusive,
+										   wait ? LockWaitBlock : LockWaitError,
+										   TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
+										   tmfd, &context);
+		if (result == TM_Ok)
+		{
+			tmfd->traversed = true;
+			return TM_Updated;
+		}
+		return result;
 	}
 
 	if (result != TM_Ok)
@@ -3088,7 +3111,8 @@ simple_heap_delete(Relation relation, ItemPointer tid)
 	result = heap_delete(relation, tid,
 						 GetCurrentCommandId(true), InvalidSnapshot,
 						 true /* wait for commit */ ,
-						 &tmfd, false /* changingPart */ );
+						 &tmfd, false /* changingPart */ ,
+						 SnapshotAny, NULL);
 	switch (result)
 	{
 		case TM_SelfModified:
@@ -3128,7 +3152,8 @@ simple_heap_delete(Relation relation, ItemPointer tid)
 TM_Result
 heap_update(Relation relation, ItemPointer otid, HeapTuple newtup,
 			CommandId cid, Snapshot crosscheck, bool wait,
-			TM_FailureData *tmfd, LockTupleMode *lockmode)
+			TM_FailureData *tmfd, LockTupleMode *lockmode, Snapshot snapshot,
+			LazyTupleTableSlot *lockedSlot)
 {
 	TM_Result	result;
 	TransactionId xid = GetCurrentTransactionId();
@@ -3493,6 +3518,33 @@ l2:
 			result = TM_Updated;
 			Assert(!ItemPointerEquals(&oldtup.t_self, &oldtup.t_data->t_ctid));
 		}
+	}
+
+	/*
+	 * If tuple was concurrently updates and 'lockedSlot' is given, then we
+	 * lock tuple saving our efforts on its finding.
+	 */
+	if (result == TM_Updated && lockedSlot)
+	{
+		HeapLockContext context = {buffer, vmbuffer, have_tuple_lock};
+
+		result = heapam_tuple_lock_context(relation, otid, snapshot,
+										   LAZY_TTS_EVAL(lockedSlot),
+										   cid, *lockmode,
+										   wait ? LockWaitBlock : LockWaitError,
+										   TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
+										   tmfd, &context);
+		bms_free(hot_attrs);
+		bms_free(key_attrs);
+		bms_free(id_attrs);
+		bms_free(modified_attrs);
+		bms_free(interesting_attrs);
+		if (result == TM_Ok)
+		{
+			tmfd->traversed = true;
+			return TM_Updated;
+		}
+		return result;
 	}
 
 	if (result != TM_Ok)
@@ -4173,7 +4225,7 @@ simple_heap_update(Relation relation, ItemPointer otid, HeapTuple tup)
 	result = heap_update(relation, otid, tup,
 						 GetCurrentCommandId(true), InvalidSnapshot,
 						 true /* wait for commit */ ,
-						 &tmfd, &lockmode);
+						 &tmfd, &lockmode, SnapshotAny, NULL);
 	switch (result)
 	{
 		case TM_SelfModified:
@@ -4234,10 +4286,12 @@ get_mxact_status_for_lock(LockTupleMode mode, bool is_update)
  *	wait_policy: what to do if tuple lock is not available
  *	follow_updates: if true, follow the update chain to also lock descendant
  *		tuples.
+ *	*context: a context containing the previous efforts on finding the
+ *		target tuple.
  *
  * Output parameters:
  *	*tuple: all fields filled in
- *	*buffer: set to buffer holding tuple (pinned but not locked at exit)
+ *	context->buffer: set to buffer holding tuple (pinned but not locked at exit)
  *	*tmfd: filled in failure cases (see below)
  *
  * Function results are the same as the ones for table_tuple_lock().
@@ -4255,13 +4309,14 @@ TM_Result
 heap_lock_tuple(Relation relation, HeapTuple tuple,
 				CommandId cid, LockTupleMode mode, LockWaitPolicy wait_policy,
 				bool follow_updates,
-				Buffer *buffer, TM_FailureData *tmfd)
+				HeapLockContext *context, TM_FailureData *tmfd)
 {
 	TM_Result	result;
 	ItemPointer tid = &(tuple->t_self);
 	ItemId		lp;
 	Page		page;
-	Buffer		vmbuffer = InvalidBuffer;
+	Buffer		buffer = context->buffer,
+				vmbuffer = context->vmbuffer;
 	BlockNumber block;
 	TransactionId xid,
 				xmax;
@@ -4270,10 +4325,11 @@ heap_lock_tuple(Relation relation, HeapTuple tuple,
 				new_infomask2;
 	bool		first_time = true;
 	bool		skip_tuple_lock = false;
-	bool		have_tuple_lock = false;
+	bool		have_tuple_lock = context->have_tuple_lock;
 	bool		cleared_all_frozen = false;
 
-	*buffer = ReadBuffer(relation, ItemPointerGetBlockNumber(tid));
+	if (BufferIsInvalid(buffer))
+		buffer = ReadBuffer(relation, ItemPointerGetBlockNumber(tid));
 	block = ItemPointerGetBlockNumber(tid);
 
 	/*
@@ -4282,12 +4338,17 @@ heap_lock_tuple(Relation relation, HeapTuple tuple,
 	 * in the middle of changing this, so we'll need to recheck after we have
 	 * the lock.
 	 */
-	if (PageIsAllVisible(BufferGetPage(*buffer)))
+	if (BufferIsInvalid(vmbuffer) && PageIsAllVisible(BufferGetPage(buffer)))
 		visibilitymap_pin(relation, block, &vmbuffer);
 
-	LockBuffer(*buffer, BUFFER_LOCK_EXCLUSIVE);
+	/*
+	 * If the valid buffer is given in the 'context' then it should be already
+	 * locked.  Lock it otherwise.
+	 */
+	if (BufferIsInvalid(context->buffer))
+		LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 
-	page = BufferGetPage(*buffer);
+	page = BufferGetPage(buffer);
 	lp = PageGetItemId(page, ItemPointerGetOffsetNumber(tid));
 	Assert(ItemIdIsNormal(lp));
 
@@ -4296,7 +4357,7 @@ heap_lock_tuple(Relation relation, HeapTuple tuple,
 	tuple->t_tableOid = RelationGetRelid(relation);
 
 l3:
-	result = HeapTupleSatisfiesUpdate(tuple, cid, *buffer);
+	result = HeapTupleSatisfiesUpdate(tuple, cid, buffer);
 
 	if (result == TM_Invisible)
 	{
@@ -4325,7 +4386,7 @@ l3:
 		infomask2 = tuple->t_data->t_infomask2;
 		ItemPointerCopy(&tuple->t_data->t_ctid, &t_ctid);
 
-		LockBuffer(*buffer, BUFFER_LOCK_UNLOCK);
+		LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
 
 		/*
 		 * If any subtransaction of the current top transaction already holds
@@ -4477,12 +4538,12 @@ l3:
 					{
 						result = res;
 						/* recovery code expects to have buffer lock held */
-						LockBuffer(*buffer, BUFFER_LOCK_EXCLUSIVE);
+						LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 						goto failed;
 					}
 				}
 
-				LockBuffer(*buffer, BUFFER_LOCK_EXCLUSIVE);
+				LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 
 				/*
 				 * Make sure it's still an appropriate lock, else start over.
@@ -4517,7 +4578,7 @@ l3:
 			if (HEAP_XMAX_IS_LOCKED_ONLY(infomask) &&
 				!HEAP_XMAX_IS_EXCL_LOCKED(infomask))
 			{
-				LockBuffer(*buffer, BUFFER_LOCK_EXCLUSIVE);
+				LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 
 				/*
 				 * Make sure it's still an appropriate lock, else start over.
@@ -4545,7 +4606,7 @@ l3:
 					 * No conflict, but if the xmax changed under us in the
 					 * meantime, start over.
 					 */
-					LockBuffer(*buffer, BUFFER_LOCK_EXCLUSIVE);
+					LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 					if (xmax_infomask_changed(tuple->t_data->t_infomask, infomask) ||
 						!TransactionIdEquals(HeapTupleHeaderGetRawXmax(tuple->t_data),
 											 xwait))
@@ -4557,7 +4618,7 @@ l3:
 			}
 			else if (HEAP_XMAX_IS_KEYSHR_LOCKED(infomask))
 			{
-				LockBuffer(*buffer, BUFFER_LOCK_EXCLUSIVE);
+				LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 
 				/* if the xmax changed in the meantime, start over */
 				if (xmax_infomask_changed(tuple->t_data->t_infomask, infomask) ||
@@ -4585,7 +4646,7 @@ l3:
 			TransactionIdIsCurrentTransactionId(xwait))
 		{
 			/* ... but if the xmax changed in the meantime, start over */
-			LockBuffer(*buffer, BUFFER_LOCK_EXCLUSIVE);
+			LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 			if (xmax_infomask_changed(tuple->t_data->t_infomask, infomask) ||
 				!TransactionIdEquals(HeapTupleHeaderGetRawXmax(tuple->t_data),
 									 xwait))
@@ -4607,7 +4668,7 @@ l3:
 		 */
 		if (require_sleep && (result == TM_Updated || result == TM_Deleted))
 		{
-			LockBuffer(*buffer, BUFFER_LOCK_EXCLUSIVE);
+			LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 			goto failed;
 		}
 		else if (require_sleep)
@@ -4632,7 +4693,7 @@ l3:
 				 */
 				result = TM_WouldBlock;
 				/* recovery code expects to have buffer lock held */
-				LockBuffer(*buffer, BUFFER_LOCK_EXCLUSIVE);
+				LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 				goto failed;
 			}
 
@@ -4658,7 +4719,7 @@ l3:
 						{
 							result = TM_WouldBlock;
 							/* recovery code expects to have buffer lock held */
-							LockBuffer(*buffer, BUFFER_LOCK_EXCLUSIVE);
+							LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 							goto failed;
 						}
 						break;
@@ -4698,7 +4759,7 @@ l3:
 						{
 							result = TM_WouldBlock;
 							/* recovery code expects to have buffer lock held */
-							LockBuffer(*buffer, BUFFER_LOCK_EXCLUSIVE);
+							LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 							goto failed;
 						}
 						break;
@@ -4724,12 +4785,12 @@ l3:
 				{
 					result = res;
 					/* recovery code expects to have buffer lock held */
-					LockBuffer(*buffer, BUFFER_LOCK_EXCLUSIVE);
+					LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 					goto failed;
 				}
 			}
 
-			LockBuffer(*buffer, BUFFER_LOCK_EXCLUSIVE);
+			LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 
 			/*
 			 * xwait is done, but if xwait had just locked the tuple then some
@@ -4751,7 +4812,7 @@ l3:
 				 * don't check for this in the multixact case, because some
 				 * locker transactions might still be running.
 				 */
-				UpdateXmaxHintBits(tuple->t_data, *buffer, xwait);
+				UpdateXmaxHintBits(tuple->t_data, buffer, xwait);
 			}
 		}
 
@@ -4810,9 +4871,9 @@ failed:
 	 */
 	if (vmbuffer == InvalidBuffer && PageIsAllVisible(page))
 	{
-		LockBuffer(*buffer, BUFFER_LOCK_UNLOCK);
+		LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
 		visibilitymap_pin(relation, block, &vmbuffer);
-		LockBuffer(*buffer, BUFFER_LOCK_EXCLUSIVE);
+		LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 		goto l3;
 	}
 
@@ -4875,7 +4936,7 @@ failed:
 		cleared_all_frozen = true;
 
 
-	MarkBufferDirty(*buffer);
+	MarkBufferDirty(buffer);
 
 	/*
 	 * XLOG stuff.  You might think that we don't need an XLOG record because
@@ -4895,7 +4956,7 @@ failed:
 		XLogRecPtr	recptr;
 
 		XLogBeginInsert();
-		XLogRegisterBuffer(0, *buffer, REGBUF_STANDARD);
+		XLogRegisterBuffer(0, buffer, REGBUF_STANDARD);
 
 		xlrec.offnum = ItemPointerGetOffsetNumber(&tuple->t_self);
 		xlrec.locking_xid = xid;
@@ -4916,7 +4977,7 @@ failed:
 	result = TM_Ok;
 
 out_locked:
-	LockBuffer(*buffer, BUFFER_LOCK_UNLOCK);
+	LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
 
 out_unlocked:
 	if (BufferIsValid(vmbuffer))
@@ -4933,6 +4994,10 @@ out_unlocked:
 	 */
 	if (have_tuple_lock)
 		UnlockTupleTuplock(relation, tid, mode);
+
+	context->buffer = buffer;
+	context->vmbuffer = InvalidBuffer;
+	context->have_tuple_lock = false;
 
 	return result;
 }
