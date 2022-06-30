@@ -45,6 +45,12 @@
 #include "utils/builtins.h"
 #include "utils/rel.h"
 
+static TM_Result heapam_tuple_lock_internal(Relation relation, ItemPointer tid,
+											Snapshot snapshot, TupleTableSlot *slot,
+											CommandId cid, LockTupleMode mode,
+											LockWaitPolicy wait_policy, uint8 flags,
+											TM_FailureData *tmfd, bool updated);
+
 static void reform_and_rewrite_tuple(HeapTuple tuple,
 									 Relation OldHeap, Relation NewHeap,
 									 Datum *values, bool *isnull, RewriteState rwstate);
@@ -299,14 +305,45 @@ heapam_tuple_complete_speculative(Relation relation, TupleTableSlot *slot,
 static TM_Result
 heapam_tuple_delete(Relation relation, ItemPointer tid, CommandId cid,
 					Snapshot snapshot, Snapshot crosscheck, bool wait,
-					TM_FailureData *tmfd, bool changingPart)
+					TM_FailureData *tmfd, bool changingPart,
+					GetSlotCallback lockedSlotCallback,
+					void *lockedSlotCallbackArg)
 {
+	TM_Result	result;
+
 	/*
 	 * Currently Deleting of index tuples are handled at vacuum, in case if
 	 * the storage itself is cleaning the dead tuples by itself, it is the
 	 * time to call the index tuple deletion also.
 	 */
-	return heap_delete(relation, tid, cid, crosscheck, wait, tmfd, changingPart);
+	result = heap_delete(relation, tid, cid, crosscheck, wait, tmfd, changingPart);
+
+	/*
+	 * If the tuple has been concurrently updated, get lock already so that on
+	 * retry it will succeed, provided that the caller asked to do this by
+	 * providing a lockedSlot.
+	 */
+	if (result == TM_Updated && lockedSlotCallback)
+	{
+		TupleTableSlot *lockedSlot;
+
+		Assert(wait);
+
+		lockedSlot = lockedSlotCallback(lockedSlotCallbackArg);
+		result = heapam_tuple_lock_internal(relation, tid, snapshot,
+											lockedSlot, cid, LockTupleExclusive,
+											LockWaitBlock,
+											TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
+											tmfd, true);
+
+		if (result == TM_Ok)
+		{
+			tmfd->traversed = true;
+			return TM_Updated;
+		}
+	}
+
+	return result;
 }
 
 
@@ -314,7 +351,9 @@ static TM_Result
 heapam_tuple_update(Relation relation, ItemPointer otid, TupleTableSlot *slot,
 					CommandId cid, Snapshot snapshot, Snapshot crosscheck,
 					bool wait, TM_FailureData *tmfd,
-					LockTupleMode *lockmode, bool *update_indexes)
+					LockTupleMode *lockmode, bool *update_indexes,
+					GetSlotCallback lockedSlotCallback,
+					void *lockedSlotCallbackArg)
 {
 	bool		shouldFree = true;
 	HeapTuple	tuple = ExecFetchSlotHeapTuple(slot, true, &shouldFree);
@@ -341,6 +380,31 @@ heapam_tuple_update(Relation relation, ItemPointer otid, TupleTableSlot *slot,
 	if (shouldFree)
 		pfree(tuple);
 
+	/*
+	 * If the tuple has been concurrently updated, get lock already so that on
+	 * retry it will succeed, provided that the caller asked to do this by
+	 * providing a lockedSlot.
+	 */
+	if (result == TM_Updated && lockedSlotCallback)
+	{
+		TupleTableSlot *lockedSlot;
+
+		Assert(wait);
+
+		lockedSlot = lockedSlotCallback(lockedSlotCallbackArg);
+		result = heapam_tuple_lock_internal(relation, otid, snapshot,
+											lockedSlot, cid, *lockmode,
+											LockWaitBlock,
+											TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
+											tmfd, true);
+
+		if (result == TM_Ok)
+		{
+			tmfd->traversed = true;
+			return TM_Updated;
+		}
+	}
+
 	return result;
 }
 
@@ -350,9 +414,24 @@ heapam_tuple_lock(Relation relation, ItemPointer tid, Snapshot snapshot,
 				  LockWaitPolicy wait_policy, uint8 flags,
 				  TM_FailureData *tmfd)
 {
+	return heapam_tuple_lock_internal(relation, tid, snapshot, slot, cid, mode,
+									  wait_policy, flags, tmfd, false);
+}
+
+/*
+ * This routine does the work for heapam_tuple_lock(), but also support
+ * `updated` to re-use the work done by heapam_tuple_update() or
+ * heapam_tuple_delete() on fetching tuple and checking its visibility.
+ */
+static TM_Result
+heapam_tuple_lock_internal(Relation relation, ItemPointer tid, Snapshot snapshot,
+						   TupleTableSlot *slot, CommandId cid, LockTupleMode mode,
+						   LockWaitPolicy wait_policy, uint8 flags,
+						   TM_FailureData *tmfd, bool updated)
+{
 	BufferHeapTupleTableSlot *bslot = (BufferHeapTupleTableSlot *) slot;
 	TM_Result	result;
-	Buffer		buffer;
+	Buffer		buffer = InvalidBuffer;
 	HeapTuple	tuple = &bslot->base.tupdata;
 	bool		follow_updates;
 
@@ -362,9 +441,16 @@ heapam_tuple_lock(Relation relation, ItemPointer tid, Snapshot snapshot,
 	Assert(TTS_IS_BUFFERTUPLE(slot));
 
 tuple_lock_retry:
+	if (updated)
+	{
+		/* it was updated, so look at the updated version */
+		*tid = tmfd->ctid;
+		tmfd->traversed = true;
+	}
 	tuple->t_self = *tid;
 	result = heap_lock_tuple(relation, tuple, cid, mode, wait_policy,
-							 follow_updates, &buffer, tmfd);
+								follow_updates, &buffer, tmfd);
+	updated = false;
 
 	if (result == TM_Updated &&
 		(flags & TUPLE_LOCK_FLAG_FIND_LAST_VERSION))

@@ -252,6 +252,9 @@ typedef void (*IndexBuildCallback) (Relation index,
 									bool tupleIsAlive,
 									void *state);
 
+/* Typedef for callback function for table_index_build_scan */
+typedef TupleTableSlot *(*GetSlotCallback) (void *arg);
+
 /*
  * API struct for a table AM.  Note this must be allocated in a
  * server-lifetime manner, typically as a static const struct, which then gets
@@ -514,7 +517,9 @@ typedef struct TableAmRoutine
 								 Snapshot crosscheck,
 								 bool wait,
 								 TM_FailureData *tmfd,
-								 bool changingPart);
+								 bool changingPart,
+								 GetSlotCallback lockedSlotCallback,
+								 void *lockedSlotCallbackArg);
 
 	/* see table_tuple_update() for reference about parameters */
 	TM_Result	(*tuple_update) (Relation rel,
@@ -526,7 +531,9 @@ typedef struct TableAmRoutine
 								 bool wait,
 								 TM_FailureData *tmfd,
 								 LockTupleMode *lockmode,
-								 bool *update_indexes);
+								 bool *update_indexes,
+								 GetSlotCallback lockedSlotCallback,
+								 void *lockedSlotCallbackArg);
 
 	/* see table_tuple_lock() for reference about parameters */
 	TM_Result	(*tuple_lock) (Relation rel,
@@ -1457,6 +1464,8 @@ table_multi_insert(Relation rel, TupleTableSlot **slots, int nslots,
  *	tmfd - filled in failure cases (see below)
  *	changingPart - true iff the tuple is being moved to another partition
  *		table due to an update of the partition key. Otherwise, false.
+ *	lockedSlot - slot to save the locked tuple if should lock the last row
+ *		version during the concurrent update. NULL if not needed.
  *
  * Normal, successful return value is TM_Ok, which means we did actually
  * delete it.  Failure return codes are TM_SelfModified, TM_Updated, and
@@ -1469,11 +1478,15 @@ table_multi_insert(Relation rel, TupleTableSlot **slots, int nslots,
 static inline TM_Result
 table_tuple_delete(Relation rel, ItemPointer tid, CommandId cid,
 				   Snapshot snapshot, Snapshot crosscheck, bool wait,
-				   TM_FailureData *tmfd, bool changingPart)
+				   TM_FailureData *tmfd, bool changingPart,
+				   GetSlotCallback lockedSlotCallback,
+				   void *lockedSlotCallbackArg)
 {
 	return rel->rd_tableam->tuple_delete(rel, tid, cid,
 										 snapshot, crosscheck,
-										 wait, tmfd, changingPart);
+										 wait, tmfd, changingPart,
+										 lockedSlotCallback,
+										 lockedSlotCallbackArg);
 }
 
 /*
@@ -1495,7 +1508,9 @@ table_tuple_delete(Relation rel, ItemPointer tid, CommandId cid,
  *	lockmode - filled with lock mode acquired on tuple
  *  update_indexes - in success cases this is set to true if new index entries
  *		are required for this tuple
- *
+ * 	lockedSlot - slot to save the locked tuple if should lock the last row
+ *		version during the concurrent update. NULL if not needed.
+
  * Normal, successful return value is TM_Ok, which means we did actually
  * update it.  Failure return codes are TM_SelfModified, TM_Updated, and
  * TM_BeingModified (the last only possible if wait == false).
@@ -1514,12 +1529,15 @@ static inline TM_Result
 table_tuple_update(Relation rel, ItemPointer otid, TupleTableSlot *slot,
 				   CommandId cid, Snapshot snapshot, Snapshot crosscheck,
 				   bool wait, TM_FailureData *tmfd, LockTupleMode *lockmode,
-				   bool *update_indexes)
+				   bool *update_indexes, GetSlotCallback lockedSlotCallback,
+				   void *lockedSlotCallbackArg)
 {
 	return rel->rd_tableam->tuple_update(rel, otid, slot,
 										 cid, snapshot, crosscheck,
 										 wait, tmfd,
-										 lockmode, update_indexes);
+										 lockmode, update_indexes,
+										 lockedSlotCallback,
+										 lockedSlotCallbackArg);
 }
 
 /*
