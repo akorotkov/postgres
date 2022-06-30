@@ -191,6 +191,14 @@ typedef struct HeapPageFreeze
 
 } HeapPageFreeze;
 
+typedef struct
+{
+	Buffer		buffer;
+	Buffer		vmbuffer;
+	bool		have_tuple_lock;
+} HeapLockContext;
+
+
 /* ----------------
  *		function prototypes for heap access method
  *
@@ -243,17 +251,24 @@ extern void heap_multi_insert(Relation relation, struct TupleTableSlot **slots,
 							  BulkInsertState bistate);
 extern TM_Result heap_delete(Relation relation, ItemPointer tid,
 							 CommandId cid, Snapshot crosscheck, bool wait,
-							 struct TM_FailureData *tmfd, bool changingPart);
+							 struct TM_FailureData *tmfd, bool changingPart,
+							 Snapshot snapshot,
+							 GetSlotCallback lockedSlotCallback,
+							 void *lockedSlotCallbackArg);
 extern void heap_finish_speculative(Relation relation, ItemPointer tid);
 extern void heap_abort_speculative(Relation relation, ItemPointer tid);
 extern TM_Result heap_update(Relation relation, ItemPointer otid,
 							 HeapTuple newtup,
 							 CommandId cid, Snapshot crosscheck, bool wait,
-							 struct TM_FailureData *tmfd, LockTupleMode *lockmode);
+							 struct TM_FailureData *tmfd, LockTupleMode *lockmode,
+							 Snapshot snapshot,
+							 GetSlotCallback lockedSlotCallback,
+							 void *lockedSlotCallbackArg);
 extern TM_Result heap_lock_tuple(Relation relation, HeapTuple tuple,
 								 CommandId cid, LockTupleMode mode, LockWaitPolicy wait_policy,
 								 bool follow_updates,
-								 Buffer *buffer, struct TM_FailureData *tmfd);
+								 HeapLockContext *context,
+								 struct TM_FailureData *tmfd);
 
 extern void heap_inplace_update(Relation relation, HeapTuple tuple);
 extern bool heap_prepare_freeze_tuple(HeapTupleHeader tuple,
@@ -327,5 +342,10 @@ extern bool ResolveCminCmaxDuringDecoding(struct HTAB *tuplecid_data,
 										  CommandId *cmin, CommandId *cmax);
 extern void HeapCheckForSerializableConflictOut(bool visible, Relation relation, HeapTuple tuple,
 												Buffer buffer, Snapshot snapshot);
+
+extern TM_Result heapam_tuple_lock_internal(Relation relation, ItemPointer tid, Snapshot snapshot,
+						   TupleTableSlot *slot, CommandId cid, LockTupleMode mode,
+						   LockWaitPolicy wait_policy, uint8 flags,
+						   TM_FailureData *tmfd, HeapLockContext *existingContext);
 
 #endif							/* HEAPAM_H */
