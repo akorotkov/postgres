@@ -220,6 +220,7 @@ struct PGPROC
 	bool		lwWaiting;		/* true if waiting for an LW lock */
 	uint8		lwWaitMode;		/* lwlock mode being waited for */
 	uint32		lwWaitLink;		/* next proc number in LW lock wait list */
+	uint32		lwReleaseLink;
 
 	/* Support for condition variables. */
 	proclist_node cvWaitLink;	/* position in CV wait list */

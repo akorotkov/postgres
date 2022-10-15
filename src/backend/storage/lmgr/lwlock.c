@@ -119,6 +119,7 @@ extern slock_t *ShmemLock;
 #define LW_SHARED_MASK				((uint64) ((1 << 19)-1))
 #define CurWaitMode(pgprocno) 		(GetPGProcByNumber(pgprocno)->lwWaitMode)
 #define NextWaitLink(pgprocno) 		(GetPGProcByNumber(pgprocno)->lwWaitLink)
+#define NextReleaseLink(pgprocno) 	(GetPGProcByNumber(pgprocno)->lwReleaseLink)
 #define CurIsWaiting(pgprocno) 		(GetPGProcByNumber(pgprocno)->lwWaiting)
 #define CurSem(pgprocno)			(GetPGProcByNumber(pgprocno)->sem)
 /*
@@ -925,11 +926,8 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode, bool noque
 
 			if (lock_free)
 			{
-				/*
-				 * elog(LOG, "lock acquire lock = %p, proc = %u, mode = %u,
-				 * state = %lX", lock, MyProc ? MyProc->pgprocno : -1, mode,
-				 * desired_state);
-				 */
+				 elog(LOG, "lock acquire lock = %p, proc = %u, mode = %u, state = %lX",
+				 	  lock, MyProc ? MyProc->pgprocno : -1, mode, desired_state);
 				/* Great! Got the lock. */
 #ifdef LOCK_DEBUG
 				if (mode == LW_EXCLUSIVE)
@@ -939,11 +937,9 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode, bool noque
 			}
 			else
 			{
-				/*
-				 * if (!noqueue) elog(LOG, "lock queue lock = %p, proc = %u,
-				 * mode = %u, oldState = %lX, newState = %lX", lock, MyProc ?
-				 * MyProc->pgprocno : -1, mode, old_state, desired_state);
-				 */
+				 if (!noqueue)
+				 	elog(LOG, "lock queue lock = %p, proc = %u, mode = %u, oldState = %lX, newState = %lX",
+						 lock, MyProc ? MyProc->pgprocno : -1, mode, old_state, desired_state);
 #ifdef LOCK_DEBUG
 				pg_atomic_fetch_add_u32(&lock->nwaiters, 1);
 #endif
@@ -1543,7 +1539,7 @@ awakenWaiters(uint32 pgprocno, LWLock *lock)
 		pg_write_barrier();
 		PGSemaphoreUnlock(CurSem(pgprocno));
 
-		pgprocno = NextWaitLink(pgprocno);
+		pgprocno = NextReleaseLink(pgprocno);
 	}
 }
 
@@ -1598,12 +1594,6 @@ LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 val)
 			uint32		nextPgprocno = NextWaitLink(pgprocno),
 						nextStepPgprocno = nextPgprocno;
 
-			/*
-			 * elog(LOG, "lock first run = %p, tail = %u, pgprocno = %u,
-			 * prevTail = %u, oldState = %lX", lock, tail, pgprocno, prevTail,
-			 * oldState);
-			 */
-
 			/* Lock tail is updated but queue tail haven't relinked yet. */
 			if (pgprocno != newTail &&
 				nextPgprocno == INVALID_LOCK_PROCNO)
@@ -1611,6 +1601,9 @@ LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 val)
 				wait_for_queue_relink(pgprocno);
 				nextPgprocno =  NextWaitLink(pgprocno);
 			}
+
+			elog(LOG, "lock release run = %p, oldState = %lX, pgprocno = %u, next = %u, oldHead = %u, oldTail = %u, oldReplaceHead = %u",
+				 lock, oldState, pgprocno, nextPgprocno, oldHead, oldTail, oldReplaceHead);
 
 			if (nextPgprocno == oldHead &&
 				nextPgprocno != INVALID_LOCK_PROCNO)
@@ -1645,9 +1638,9 @@ LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 val)
 
 				/* Push to the wakeup list */
 				Assert(pgprocno != wakeupTail);
-				NextWaitLink(pgprocno) = wakeupTail;
+				NextReleaseLink(pgprocno) = wakeupTail;
 				wakeupTail = pgprocno;
-				/* elog(LOG, "lock dequeue = %p, proc = %u", lock, pgprocno); */
+				elog(LOG, "lock dequeue = %p, proc = %u", lock, pgprocno);
 			}
 			else
 			{
@@ -1669,9 +1662,9 @@ LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 val)
 		oldReplaceHead = newHead;
 
 		if (pg_atomic_compare_exchange_u64(&lock->state, &oldState, newState))
+		{
 			break;
-
-		oldHead = newHead;
+		}
 	}
 
 	/* Awaken any waiters I removed from the queue. */
@@ -1752,8 +1745,8 @@ LWLockRelease(LWLock *lock)
 			(LW_FLAG_HAS_WAITERS) &&
 			(newState & LW_LOCK_MASK) == 0)
 		{
-/*			if (!wakeup)
-				elog(LOG, "lock wakeup = %p, proc = %u, mode = %u, state = %lX", lock, MyProc ? MyProc->pgprocno : -1, mode, oldState);*/
+			if (!wakeup)
+				elog(LOG, "lock wakeup = %p, proc = %u, mode = %u, state = %lX", lock, MyProc ? MyProc->pgprocno : -1, mode, oldState);
 
 			wakeup = true;
 		}
@@ -1761,7 +1754,45 @@ LWLockRelease(LWLock *lock)
 		if (wakeup)
 		{
 			/* Move all LW_WAIT_UNTIL_FREE waiters into wakeup list. */
-			pgprocno = newHead;
+			if (oldHead == INVALID_LOCK_PROCNO ||
+				oldTail == INVALID_LOCK_PROCNO ||
+				newHead != oldHead)
+			{
+				pgprocno = newHead;
+
+			}
+			else if (oldTail != newTail)
+			{
+				Assert(newHead != INVALID_LOCK_PROCNO &&
+					   newTail != INVALID_LOCK_PROCNO &&
+					   oldHead != INVALID_LOCK_PROCNO &&
+					   oldTail != INVALID_LOCK_PROCNO);
+
+				pgprocno = NextWaitLink(oldTail);
+				if (pgprocno == INVALID_LOCK_PROCNO)
+				{
+					wait_for_queue_relink(oldTail);
+					pgprocno = NextWaitLink(oldTail);
+				}
+				prevPgprocno = oldReplaceTail;
+
+				if (oldTail != oldReplaceTail)
+				{
+					if (oldReplaceTail != INVALID_LOCK_PROCNO)
+						NextWaitLink(prevPgprocno) = pgprocno;
+					else
+						newHead = pgprocno;
+				}
+			}
+			else
+			{
+				Assert(newHead == oldHead);
+				Assert(oldTail == newTail);
+				newHead = oldReplaceHead;
+				newTail = oldReplaceTail;
+				pgprocno = INVALID_LOCK_PROCNO;
+			}
+
 			while (pgprocno != INVALID_LOCK_PROCNO)
 			{
 				LWLockMode	curMode = CurWaitMode(pgprocno);
@@ -1769,11 +1800,8 @@ LWLockRelease(LWLock *lock)
 							nextStepPgprocno = nextPgprocno,
 							nextStepPrevPgprocno = pgprocno;
 
-				/*
-				 * elog(LOG, "lock first run = %p, tail = %u, pgprocno = %u,
-				 * prevTail = %u, oldState = %lX", lock, tail, pgprocno,
-				 * prevTail, oldState);
-				 */
+				elog(LOG, "lock release run = %p, oldState = %lX, pgprocno = %u, next = %u, oldHead = %u, oldTail = %u, oldReplaceHead = %u, oldReplaceTail = %u",
+					lock, oldState, pgprocno, nextPgprocno, oldHead, oldTail, oldReplaceHead, oldReplaceTail);
 
 				/* Lock tail is updated but queue tail haven't relinked yet. */
 				if (pgprocno != newTail &&
@@ -1798,13 +1826,23 @@ LWLockRelease(LWLock *lock)
 						nextStepPgprocno = NextWaitLink(oldTail);
 					}
 
-					if (nextStepPrevPgprocno != INVALID_LOCK_PROCNO)
-						NextWaitLink(nextStepPrevPgprocno) = nextStepPgprocno;
+					if (oldTail != oldReplaceTail &&
+						oldReplaceTail != INVALID_LOCK_PROCNO)
+						NextWaitLink(oldReplaceTail) = nextStepPgprocno;
 
 					if (oldReplaceHead != INVALID_LOCK_PROCNO)
-						nextPgprocno = NextWaitLink(pgprocno) = oldReplaceHead;
+					{
+						if (oldReplaceHead != nextPgprocno)
+							nextPgprocno = NextWaitLink(pgprocno) = oldReplaceHead;
+					}
 					else if (oldTail != newTail)
-						nextPgprocno = NextWaitLink(pgprocno) = nextStepPgprocno;
+					{
+						if (oldReplaceHead != nextPgprocno)
+							nextPgprocno = NextWaitLink(pgprocno) = nextStepPgprocno;
+					}
+
+					if (oldTail == newTail)
+						newTail = oldReplaceTail;
 				}
 
 				if (curMode != LW_WAIT_UNTIL_FREE)
@@ -1820,13 +1858,10 @@ LWLockRelease(LWLock *lock)
 
 					/* Push to the wakeup list */
 					Assert(pgprocno != wakeupTail);
-					NextWaitLink(pgprocno) = wakeupTail;
+					NextReleaseLink(pgprocno) = wakeupTail;
 					wakeupTail = pgprocno;
 
-					/*
-					 * elog(LOG, "lock dequeue = %p, proc = %u", lock,
-					 * pgprocno);
-					 */
+					elog(LOG, "lock dequeue = %p, proc = %u", lock, pgprocno);
 				}
 				else
 				{
@@ -1858,6 +1893,7 @@ LWLockRelease(LWLock *lock)
 								newTail = prevPgprocno;
 							}
 						}
+						nextStepPrevPgprocno = prevPgprocno;
 
 						if (newHead == INVALID_LOCK_PROCNO ||
 							newTail == INVALID_LOCK_PROCNO)
@@ -1866,9 +1902,11 @@ LWLockRelease(LWLock *lock)
 							newTail = INVALID_LOCK_PROCNO;
 						}
 
+						elog(LOG, "lock dequeue = %p, proc = %u", lock, pgprocno);
+
 						/* Push to the wakeup list */
 						Assert(pgprocno != wakeupTail);
-						NextWaitLink(pgprocno) = wakeupTail;
+						NextReleaseLink(pgprocno) = wakeupTail;
 						wakeupTail = pgprocno;
 					}
 				}
@@ -1877,7 +1915,6 @@ LWLockRelease(LWLock *lock)
 				pgprocno = nextStepPgprocno;
 			}
 		}
-
 
 		newState = LW_SET_WAITER(newState, newHead, newTail);
 
@@ -1901,17 +1938,14 @@ LWLockRelease(LWLock *lock)
 
 		if (pg_atomic_compare_exchange_u64(&lock->state, &oldState, newState))
 		{
-			/*
-			 * elog(LOG, "lock release = %p, proc = %u, oldState = %lX,
-			 * newState = %lX", lock, MyProc ? MyProc->pgprocno : -1,
-			 * oldState, newState);
-			 */
+			elog(LOG, "lock release = %p, proc = %u, oldState = %lX, newState = %lX",
+			 	 lock, MyProc ? MyProc->pgprocno : -1, oldState, newState);
 			break;
 		}
-
-		/* Awaken any waiters I removed from the queue. */
-		awakenWaiters(wakeupTail, lock);
 	}
+
+	/* Awaken any waiters I removed from the queue. */
+	awakenWaiters(wakeupTail, lock);
 
 	/* Now okay to allow cancel/die interrupts. */
 	RESUME_INTERRUPTS();
