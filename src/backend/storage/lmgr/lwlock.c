@@ -914,8 +914,8 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode, bool noque
 		{
 			if (lock_free)
 			{
-				elog(LOG, "lock acquire lock = %p, proc = %u, mode = %u, state = %lX",
-					 lock, MyProc ? MyProc->pgprocno : -1, mode, desired_state);
+				/*elog(LOG, "lock acquire lock = %p, proc = %u, mode = %u, state = %lX",
+					 lock, MyProc ? MyProc->pgprocno : -1, mode, desired_state);*/
 				/* Great! Got the lock. */
 #ifdef LOCK_DEBUG
 				if (mode == LW_EXCLUSIVE)
@@ -940,8 +940,8 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode, bool noque
 						Assert(LW_GET_WAIT_TAIL(old_state) != LW_GET_WAIT_TAIL(desired_state));
 						NextWaitLink(LW_GET_WAIT_TAIL(old_state)) = LW_GET_WAIT_TAIL(desired_state);
 					}
-					elog(LOG, "lock queue lock = %p, proc = %u, mode = %u, oldState = %lX, newState = %lX",
-						 lock, MyProc ? MyProc->pgprocno : -1, mode, old_state, desired_state);
+					/*elog(LOG, "lock queue lock = %p, proc = %u, mode = %u, oldState = %lX, newState = %lX",
+						 lock, MyProc ? MyProc->pgprocno : -1, mode, old_state, desired_state);*/
 				}
 #ifdef LOCK_DEBUG
 				pg_atomic_fetch_add_u32(&lock->nwaiters, 1);
@@ -1631,8 +1631,8 @@ LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 val)
 			}
 			nextStepPgprocno = nextPgprocno;
 
-			elog(LOG, "lock release run = %p, oldState = %lX, pgprocno = %u, next = %u, oldHead = %u, oldTail = %u, oldReplaceHead = %u",
-				 lock, oldState, pgprocno, nextPgprocno, oldHead, oldTail, oldReplaceHead);
+			/*elog(LOG, "lock release run = %p, oldState = %lX, pgprocno = %u, next = %u, oldHead = %u, oldTail = %u, oldReplaceHead = %u",
+				 lock, oldState, pgprocno, nextPgprocno, oldHead, oldTail, oldReplaceHead);*/
 
 			if (nextPgprocno == oldHead &&
 				nextPgprocno != INVALID_LOCK_PROCNO)
@@ -1680,7 +1680,7 @@ LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 val)
 				Assert(pgprocno != wakeupTail);
 				NextReleaseLink(pgprocno) = wakeupTail;
 				wakeupTail = pgprocno;
-				elog(LOG, "lock dequeue = %p, proc = %u", lock, pgprocno);
+				/*elog(LOG, "lock dequeue = %p, proc = %u", lock, pgprocno);*/
 			}
 			else
 			{
@@ -1785,8 +1785,8 @@ LWLockRelease(LWLock *lock)
 			(LW_FLAG_HAS_WAITERS) &&
 			(newState & LW_LOCK_MASK) == 0)
 		{
-			if (!wakeup)
-				elog(LOG, "lock wakeup = %p, proc = %u, mode = %u, state = %lX", lock, MyProc ? MyProc->pgprocno : -1, mode, oldState);
+			/*if (!wakeup)
+				elog(LOG, "lock wakeup = %p, proc = %u, mode = %u, state = %lX", lock, MyProc ? MyProc->pgprocno : -1, mode, oldState);*/
 
 			wakeup = true;
 		}
@@ -1844,8 +1844,8 @@ LWLockRelease(LWLock *lock)
 							nextStepPgprocno,
 							nextStepPrevPgprocno = pgprocno;
 
-				elog(LOG, "lock release run = %p, oldState = %lX, pgprocno = %u, next = %u, oldHead = %u, oldTail = %u, oldReplaceHead = %u, oldReplaceTail = %u",
-					 lock, oldState, pgprocno, nextPgprocno, oldHead, oldTail, oldReplaceHead, oldReplaceTail);
+				/*elog(LOG, "lock release run = %p, oldState = %lX, pgprocno = %u, next = %u, oldHead = %u, oldTail = %u, oldReplaceHead = %u, oldReplaceTail = %u",
+					 lock, oldState, pgprocno, nextPgprocno, oldHead, oldTail, oldReplaceHead, oldReplaceTail);*/
 
 				/* Lock tail is updated but queue tail haven't relinked yet. */
 				if (pgprocno != newTail &&
@@ -1916,7 +1916,7 @@ LWLockRelease(LWLock *lock)
 					NextReleaseLink(pgprocno) = wakeupTail;
 					wakeupTail = pgprocno;
 
-					elog(LOG, "lock dequeue = %p, proc = %u", lock, pgprocno);
+					/*elog(LOG, "lock dequeue = %p, proc = %u", lock, pgprocno);*/
 				}
 				else
 				{
@@ -1958,7 +1958,7 @@ LWLockRelease(LWLock *lock)
 							newTail = INVALID_LOCK_PROCNO;
 						}
 
-						elog(LOG, "lock dequeue = %p, proc = %u", lock, pgprocno);
+						/*elog(LOG, "lock dequeue = %p, proc = %u", lock, pgprocno);*/
 
 						/* Push to the wakeup list */
 						Assert(pgprocno != wakeupTail);
@@ -1994,8 +1994,8 @@ LWLockRelease(LWLock *lock)
 
 		if (pg_atomic_compare_exchange_u64(&lock->state, &oldState, newState))
 		{
-			elog(LOG, "lock release = %p, proc = %u, oldState = %lX, newState = %lX",
-				 lock, MyProc ? MyProc->pgprocno : -1, oldState, newState);
+			/*elog(LOG, "lock release = %p, proc = %u, oldState = %lX, newState = %lX",
+				 lock, MyProc ? MyProc->pgprocno : -1, oldState, newState);*/
 			break;
 		}
 	}
