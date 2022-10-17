@@ -1535,6 +1535,9 @@ awakenWaiters(uint32 pgprocno, LWLock *lock)
 {
 	while (pgprocno != INVALID_LOCK_PROCNO)
 	{
+		/* Must read this before WAKEUP! */
+		uint32		nextlink = NextReleaseLink(pgprocno);
+
 		LOG_LWDEBUG("LWLockRelease", lock, "release waiter");
 
 		pg_read_barrier();
@@ -1542,7 +1545,7 @@ awakenWaiters(uint32 pgprocno, LWLock *lock)
 		pg_write_barrier();
 		PGSemaphoreUnlock(CurSem(pgprocno));
 
-		pgprocno = NextReleaseLink(pgprocno);
+		pgprocno = nextlink;
 	}
 }
 
