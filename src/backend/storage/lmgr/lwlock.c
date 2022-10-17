@@ -1656,9 +1656,9 @@ LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 val)
 						nextPgprocno = NextWaitLink(pgprocno) = oldReplaceHead;
 					}
 				}
-				else if (oldTail != newTail)
+				else
 				{
-					if (oldReplaceHead != nextPgprocno)
+					if (nextStepPgprocno != nextPgprocno)
 					{
 						Assert(pgprocno != nextStepPgprocno);
 						nextPgprocno = NextWaitLink(pgprocno) = nextStepPgprocno;
@@ -1862,7 +1862,7 @@ LWLockRelease(LWLock *lock)
 					Assert(oldTail != INVALID_LOCK_PROCNO);
 					Assert(newTail != INVALID_LOCK_PROCNO);
 
-					nextStepPrevPgprocno = oldReplaceTail;
+					nextStepPrevPgprocno = (oldReplaceTail != INVALID_LOCK_PROCNO ? oldReplaceTail : pgprocno);
 					nextStepPgprocno = (oldTail != newTail ? NextWaitLink(oldTail) : INVALID_LOCK_PROCNO);
 					if (nextStepPgprocno == INVALID_LOCK_PROCNO &&
 						oldTail != newTail)
@@ -1886,9 +1886,9 @@ LWLockRelease(LWLock *lock)
 							nextPgprocno = NextWaitLink(pgprocno) = oldReplaceHead;
 						}
 					}
-					else if (oldTail != newTail)
+					else
 					{
-						if (oldReplaceHead != nextPgprocno)
+						if (nextStepPgprocno != nextPgprocno)
 						{
 							Assert(pgprocno != nextStepPgprocno);
 							nextPgprocno = NextWaitLink(pgprocno) = nextStepPgprocno;
@@ -1909,7 +1909,8 @@ LWLockRelease(LWLock *lock)
 					newHead = nextPgprocno;
 					if (newHead == INVALID_LOCK_PROCNO)
 						newTail = newHead;
-					nextStepPrevPgprocno = prevPgprocno;
+					if (nextStepPrevPgprocno == pgprocno)
+						nextStepPrevPgprocno = prevPgprocno;
 
 					/* Push to the wakeup list */
 					Assert(pgprocno != wakeupTail);
@@ -1949,7 +1950,9 @@ LWLockRelease(LWLock *lock)
 								newTail = prevPgprocno;
 							}
 						}
-						nextStepPrevPgprocno = prevPgprocno;
+
+						if (nextStepPrevPgprocno == pgprocno)
+							nextStepPrevPgprocno = prevPgprocno;
 
 						if (newHead == INVALID_LOCK_PROCNO ||
 							newTail == INVALID_LOCK_PROCNO)
