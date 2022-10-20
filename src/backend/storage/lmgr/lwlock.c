@@ -100,8 +100,7 @@ extern slock_t *ShmemLock;
 #define INVALID_LOCK_PROCNO			((uint32) 0x3FFFF)
 #define LW_WAITERS_LIST_MASK 		((uint64) 0xFFFFFFFFF0000000)
 #define LW_WAITERS_HEAD_MASK		((uint64) 0xFFFFC00000000000)
-#define LW_WAITERS_TAIL_MASK        ((uint64) 0x00003FFFF0000000)
-#define LW_FLAG_HAS_WAITERS 		((uint64) 1 << 22)
+#define LW_WAITERS_TAIL_MASK		((uint64) 0x00003FFFF0000000)
 #define LW_FLAG_RELEASE_OK			((uint64) 1 << 21)	/* If not set then don't
 														 * wakeup waiters */
 #define LW_FLAG_LOCK_VAR			((uint64) 1 << 20)
@@ -111,6 +110,7 @@ extern slock_t *ShmemLock;
 #define LW_SET_WAIT_HEAD(state, waiter) (((uint64)(state) & (~LW_WAITERS_HEAD_MASK)) | ((uint64)(waiter) << 46))
 #define LW_GET_WAIT_TAIL(state)		(((uint64)(state) & LW_WAITERS_TAIL_MASK) >> 28)
 #define LW_SET_WAIT_TAIL(state, waiter) (((uint64)(state) & (~LW_WAITERS_TAIL_MASK)) | ((uint64)(waiter) << 28))
+#define LW_HAS_WAITERS(state)		(LW_GET_WAIT_HEAD((state)) != INVALID_LOCK_PROCNO)
 #define LW_SET_WAITER(state, head, tail) (((uint64)(state) & (~LW_WAITERS_LIST_MASK)) | ((uint64)(head) << 46) | ((uint64)(tail) << 28))
 
 
@@ -305,7 +305,7 @@ PRINT_LWDEBUG(const char *where, LWLock *lock, LWLockMode mode)
 								 where, T_NAME(lock), lock,
 								 (state & LW_VAL_EXCLUSIVE) != 0,
 								 state & LW_SHARED_MASK,
-								 (state & LW_FLAG_HAS_WAITERS) != 0,
+								 LW_HAS_WAITERS(state),
 								 pg_atomic_read_u32(&lock->nwaiters),
 								 (state & LW_FLAG_RELEASE_OK) != 0)));
 	}
@@ -896,7 +896,6 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode, bool noque
 					desired_state = LW_SET_WAIT_TAIL(desired_state, MyProc->pgprocno);
 				MyProc->lwWaitLink = LW_GET_WAIT_HEAD(old_state);
 			}
-			desired_state |= LW_FLAG_HAS_WAITERS;
 		}
 
 		/*
@@ -1350,7 +1349,6 @@ LWLockConflictsWithVar(LWLock *lock,
 			MyProc->lwWaitMode = LW_WAIT_UNTIL_FREE;
 			MyProc->lwWaitLink = LW_GET_WAIT_HEAD(old_state);
 			Assert(LW_GET_WAIT_HEAD(old_state) != MyProc->pgprocno);
-			desired_state |= LW_FLAG_RELEASE_OK | LW_FLAG_HAS_WAITERS;
 			desired_state = LW_SET_WAIT_HEAD(desired_state, MyProc->pgprocno);
 			if (LW_GET_WAIT_TAIL(old_state) == INVALID_LOCK_PROCNO)
 				desired_state = LW_SET_WAIT_TAIL(desired_state, MyProc->pgprocno);
@@ -1674,10 +1672,7 @@ LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 val)
 			{
 				newHead = nextPgprocno;
 				if (newHead == INVALID_LOCK_PROCNO)
-				{
 					newTail = newHead;
-					newState &= ~LW_FLAG_HAS_WAITERS;
-				}
 
 				/* Push to the wakeup list */
 				Assert(pgprocno != wakeupTail);
@@ -1784,9 +1779,7 @@ LWLockRelease(LWLock *lock)
 		else
 			newState -= LW_VAL_SHARED;
 
-		if ((oldState & (LW_FLAG_HAS_WAITERS)) ==
-			(LW_FLAG_HAS_WAITERS) &&
-			(newState & LW_LOCK_MASK) == 0)
+		if (LW_HAS_WAITERS(oldState) && (newState & LW_LOCK_MASK) == 0)
 		{
 			/*if (!wakeup)
 				elog(LOG, "lock wakeup = %p, proc = %u, mode = %u, state = %lX", lock, MyProc ? MyProc->pgprocno : -1, mode, oldState);*/
@@ -1979,9 +1972,6 @@ LWLockRelease(LWLock *lock)
 		}
 
 		newState = LW_SET_WAITER(newState, newHead, newTail);
-
-		if (newTail == INVALID_LOCK_PROCNO)
-			newState &= ~LW_FLAG_HAS_WAITERS;
 
 		if (new_release_ok)
 			newState |= LW_FLAG_RELEASE_OK;
