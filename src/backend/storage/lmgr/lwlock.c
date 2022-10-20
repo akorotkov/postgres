@@ -101,8 +101,8 @@ extern slock_t *ShmemLock;
 #define LW_WAITERS_LIST_MASK 		((uint64) 0xFFFFFFFFF0000000)
 #define LW_WAITERS_HEAD_MASK		((uint64) 0xFFFFC00000000000)
 #define LW_WAITERS_TAIL_MASK		((uint64) 0x00003FFFF0000000)
-#define LW_FLAG_RELEASE_OK			((uint64) 1 << 21)	/* If not set then don't
-														 * wakeup waiters */
+#define LW_FLAG_EXCLUSIVE_WOKENUP	((uint64) 1 << 22)
+#define LW_FLAG_LOCKER_WOKENUP		((uint64) 1 << 21)
 #define LW_FLAG_LOCK_VAR			((uint64) 1 << 20)
 #define LW_VAL_EXCLUSIVE			((uint64) 1 << 19)
 #define LW_VAL_SHARED				1
@@ -747,7 +747,7 @@ RequestNamedLWLockTranche(const char *tranche_name, int num_lwlocks)
 void
 LWLockInitialize(LWLock *lock, int tranche_id)
 {
-	pg_atomic_init_u64(&lock->state, LW_SET_WAITER(LW_FLAG_RELEASE_OK, INVALID_LOCK_PROCNO, INVALID_LOCK_PROCNO));
+	pg_atomic_init_u64(&lock->state, LW_SET_WAITER(0, INVALID_LOCK_PROCNO, INVALID_LOCK_PROCNO));
 #ifdef LOCK_DEBUG
 	pg_atomic_init_u32(&lock->nwaiters, 0);
 #endif
@@ -825,9 +825,27 @@ GetLWLockIdentifier(uint32 classId, uint16 eventId)
  * Returns true if the lock isn't free and we need to wait.
  */
 static bool
-LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode, bool noqueue)
+LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode,
+				  bool noqueue, bool wakeup)
 {
-	uint64		old_state;
+	uint64		old_state,
+				mask,
+				increment;
+
+	if (mode == LW_EXCLUSIVE)
+	{
+		mask = LW_LOCK_MASK;
+		if (!wakeup)
+			mask |= LW_FLAG_LOCKER_WOKENUP;
+		increment = LW_VAL_EXCLUSIVE;
+	}
+	else
+	{
+		mask = LW_VAL_EXCLUSIVE;
+		if (!wakeup)
+			mask |= LW_FLAG_EXCLUSIVE_WOKENUP;
+		increment = LW_VAL_SHARED;
+	}
 
 	/*
 	 * Read once outside the loop, later iterations will get the newer value
@@ -841,18 +859,12 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode, bool noque
 		uint64		desired_state = old_state;
 		bool		lock_free;
 
-		if (mode == LW_EXCLUSIVE)
-		{
-			lock_free = (old_state & LW_LOCK_MASK) == 0;
-			if (lock_free)
-				desired_state += LW_VAL_EXCLUSIVE;
-		}
-		else
-		{
-			lock_free = (old_state & LW_VAL_EXCLUSIVE) == 0;
-			if (lock_free)
-				desired_state += LW_VAL_SHARED;
-		}
+		lock_free = (old_state & mask) == 0;
+		if (lock_free)
+			desired_state += increment;
+
+		if (wakeup)
+			desired_state &= ~(LW_FLAG_LOCKER_WOKENUP | LW_FLAG_EXCLUSIVE_WOKENUP);
 
 		if (!lock_free && !noqueue)
 		{
@@ -876,7 +888,6 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode, bool noque
 				/* if list was empty set head to same value as tail */
 				if (LW_GET_WAIT_HEAD(old_state) == INVALID_LOCK_PROCNO)
 					desired_state = LW_SET_WAIT_HEAD(desired_state, MyProc->pgprocno);
-				desired_state |= LW_FLAG_RELEASE_OK;
 				MyProc->lwWaitLink = INVALID_LOCK_PROCNO;
 
 				/*
@@ -971,6 +982,7 @@ LWLockAcquire(LWLock *lock, LWLockMode mode)
 	PGPROC	   *proc = MyProc;
 	bool		result = true;
 	int			extraWaits = 0;
+	bool		wakeup = false;
 #ifdef LWLOCK_STATS
 	lwlock_stats *lwstats;
 
@@ -1025,7 +1037,7 @@ LWLockAcquire(LWLock *lock, LWLockMode mode)
 	 */
 	for (;;)
 	{
-		if (!LWLockAttemptLock(lock, mode, mode, false))
+		if (!LWLockAttemptLock(lock, mode, mode, false, wakeup))
 		{
 			LOG_LWDEBUG("LWLockAcquire", lock, "immediately acquired lock");
 			break;				/* got the lock */
@@ -1056,9 +1068,7 @@ LWLockAcquire(LWLock *lock, LWLockMode mode)
 				break;
 			extraWaits++;
 		}
-
-		/* Retrying, allow LWLockRelease to release waiters again. */
-		pg_atomic_fetch_or_u64(&lock->state, LW_FLAG_RELEASE_OK);
+		wakeup = true;
 
 #ifdef LOCK_DEBUG
 		{
@@ -1123,7 +1133,7 @@ LWLockConditionalAcquire(LWLock *lock, LWLockMode mode)
 	HOLD_INTERRUPTS();
 
 	/* Check for the lock */
-	mustwait = LWLockAttemptLock(lock, mode, mode, true);
+	mustwait = LWLockAttemptLock(lock, mode, mode, true, false);
 
 	if (mustwait)
 	{
@@ -1190,7 +1200,7 @@ LWLockAcquireOrWait(LWLock *lock, LWLockMode mode)
 	 * NB: We're using nearly the same twice-in-a-row lock acquisition
 	 * protocol as LWLockAcquire(). Check its comments for details.
 	 */
-	mustwait = LWLockAttemptLock(lock, mode, LW_WAIT_UNTIL_FREE, false);
+	mustwait = LWLockAttemptLock(lock, mode, LW_WAIT_UNTIL_FREE, false, false);
 
 	if (mustwait)
 	{
@@ -1727,9 +1737,9 @@ LWLockRelease(LWLock *lock)
 				oldReplaceHead = INVALID_LOCK_PROCNO,
 				oldReplaceTail = INVALID_LOCK_PROCNO,
 				wakeupTail = INVALID_LOCK_PROCNO;
-	bool		new_release_ok = true;
 	bool		wakeup = false;
 	LWLockMode	lastMode = LW_WAIT_UNTIL_FREE;
+	uint64		wakeupFlags = 0;
 
 	/*
 	 * Remove lock from list of locks held.  Usually, but not always, it will
@@ -1895,9 +1905,6 @@ LWLockRelease(LWLock *lock)
 						newTail = oldReplaceTail;
 				}
 
-				if (curMode != LW_WAIT_UNTIL_FREE)
-					new_release_ok = false;
-
 				/* Remove LW_WAIT_UNTIL_FREE from the list head */
 				if (curMode == LW_WAIT_UNTIL_FREE)
 				{
@@ -1925,12 +1932,15 @@ LWLockRelease(LWLock *lock)
 
 					if (lastMode == curMode)
 					{
+						wakeupFlags |= LW_FLAG_LOCKER_WOKENUP;
+						if (lastMode == LW_EXCLUSIVE)
+							wakeupFlags |= LW_FLAG_EXCLUSIVE_WOKENUP;
+
 						/*
 						 * Prevent additional wakeups until retryer gets to
 						 * run. Backends that are just waiting for the lock to
 						 * become free don't retry automatically.
 						 */
-						new_release_ok = false;
 
 						if (prevPgprocno == INVALID_LOCK_PROCNO)
 						{
@@ -1972,13 +1982,8 @@ LWLockRelease(LWLock *lock)
 		}
 
 		newState = LW_SET_WAITER(newState, newHead, newTail);
-
-		if (new_release_ok)
-			newState |= LW_FLAG_RELEASE_OK;
-		else
-			newState &= ~LW_FLAG_RELEASE_OK;
-
 		newState &= ~LW_FLAG_LOCK_VAR;
+		newState |= wakeupFlags;
 
 		if (wakeup)
 		{
