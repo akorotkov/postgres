@@ -97,31 +97,41 @@
 /* We use the ShmemLock spinlock to protect LWLockCounter */
 extern slock_t *ShmemLock;
 
-#define INVALID_LOCK_PROCNO			((uint32) 0x3FFFF)
+/* 64-bit LWlock state layout is following:
+ * 18-bit waiting list head (number of backend in procarray)
+ * 18-bit waiting list tail (number of backend in procarray)
+ * LWlock state flags
+ * 19-bit LW_LOCK_MASK
+ */
 #define LW_WAITERS_LIST_MASK 		((uint64) 0xFFFFFFFFF0000000)
 #define LW_WAITERS_HEAD_MASK		((uint64) 0xFFFFC00000000000)
 #define LW_WAITERS_TAIL_MASK		((uint64) 0x00003FFFF0000000)
-#define LW_FLAG_RELEASE_OK			((uint64) 1 << 21)	/* If not set then don't
-														 * wakeup waiters */
+#define LW_FLAG_RELEASE_OK			((uint64) 1 << 21)	/* Wake up waiters only if set */
 #define LW_FLAG_LOCK_VAR			((uint64) 1 << 20)
+
 #define LW_VAL_EXCLUSIVE			((uint64) 1 << 19)
 #define LW_VAL_SHARED				1
-#define LW_GET_WAIT_HEAD(state)		((state) >> 46)
-#define LW_SET_WAIT_HEAD(state, waiter) (((uint64)(state) & (~LW_WAITERS_HEAD_MASK)) | ((uint64)(waiter) << 46))
-#define LW_GET_WAIT_TAIL(state)		(((uint64)(state) & LW_WAITERS_TAIL_MASK) >> 28)
-#define LW_SET_WAIT_TAIL(state, waiter) (((uint64)(state) & (~LW_WAITERS_TAIL_MASK)) | ((uint64)(waiter) << 28))
-#define LW_HAS_WAITERS(state)		(LW_GET_WAIT_HEAD((state)) != INVALID_LOCK_PROCNO)
-#define LW_SET_WAITER(state, head, tail) (((uint64)(state) & (~LW_WAITERS_LIST_MASK)) | ((uint64)(head) << 46) | ((uint64)(tail) << 28))
-
 
 #define LW_LOCK_MASK				((uint64) ((1 << 20)-1))
 /* Must be greater than MAX_BACKENDS - which is 2^18-1, so we're fine. */
 #define LW_SHARED_MASK				((uint64) ((1 << 19)-1))
+
+/* Access macros for procarray waiters queue */
 #define CurWaitMode(pgprocno) 		(GetPGProcByNumber(pgprocno)->lwWaitMode)
 #define NextWaitLink(pgprocno) 		(GetPGProcByNumber(pgprocno)->lwWaitLink)
 #define NextReleaseLink(pgprocno) 	(GetPGProcByNumber(pgprocno)->lwReleaseLink)
 #define CurIsWaiting(pgprocno) 		(GetPGProcByNumber(pgprocno)->lwWaiting)
 #define CurSem(pgprocno)			(GetPGProcByNumber(pgprocno)->sem)
+
+/* Access macros for LWlock state */
+#define INVALID_LOCK_PROCNO			((uint32) 0x3FFFF)
+#define LW_GET_WAIT_HEAD(state)		((state) >> 46)
+#define LW_SET_WAIT_HEAD(state, waiter) (((uint64)(state) & (~LW_WAITERS_HEAD_MASK)) | ((uint64)(waiter) << 46))
+#define LW_GET_WAIT_TAIL(state)		(((uint64)(state) & LW_WAITERS_TAIL_MASK) >> 28)
+#define LW_SET_WAIT_TAIL(state, waiter) (((uint64)(state) & (~LW_WAITERS_TAIL_MASK)) | ((uint64)(waiter) << 28))
+#define LW_HAS_WAITERS(state)		(LW_GET_WAIT_HEAD((state)) != INVALID_LOCK_PROCNO)
+#define LW_SET_STATE(state, head, tail) (((uint64)(state) & (~LW_WAITERS_LIST_MASK)) | ((uint64)(head) << 46) | ((uint64)(tail) << 28))
+
 /*
  * There are three sorts of LWLock "tranches":
  *
@@ -747,7 +757,7 @@ RequestNamedLWLockTranche(const char *tranche_name, int num_lwlocks)
 void
 LWLockInitialize(LWLock *lock, int tranche_id)
 {
-	pg_atomic_init_u64(&lock->state, LW_SET_WAITER(LW_FLAG_RELEASE_OK, INVALID_LOCK_PROCNO, INVALID_LOCK_PROCNO));
+	pg_atomic_init_u64(&lock->state, LW_SET_STATE(LW_FLAG_RELEASE_OK, INVALID_LOCK_PROCNO, INVALID_LOCK_PROCNO));
 #ifdef LOCK_DEBUG
 	pg_atomic_init_u32(&lock->nwaiters, 0);
 #endif
@@ -1687,7 +1697,7 @@ LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 val)
 			pgprocno = nextStepPgprocno;
 		}
 
-		newState = LW_SET_WAITER(newState, newHead, newTail);
+		newState = LW_SET_STATE(newState, newHead, newTail);
 		newState &= ~LW_FLAG_LOCK_VAR;
 
 		oldHead = LW_GET_WAIT_HEAD(oldState);
@@ -1953,7 +1963,7 @@ LWLockRelease(LWLock *lock)
 			}
 		}
 
-		newState = LW_SET_WAITER(newState, newHead, newTail);
+		newState = LW_SET_STATE(newState, newHead, newTail);
 
 		if (new_release_ok)
 			newState |= LW_FLAG_RELEASE_OK;
