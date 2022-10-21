@@ -836,7 +836,7 @@ GetLWLockIdentifier(uint32 classId, uint16 eventId)
  */
 static bool
 LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode,
-				  bool noqueue, bool wakeup)
+				  bool queue_ok, bool wakeup)
 {
 	uint64		old_state;
 
@@ -849,8 +849,10 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode,
 	/* loop until we've determined whether we could acquire the lock or not */
 	while (true)
 	{
-		uint64		desired_state = old_state;
+		uint64		desired_state;
 		bool		lock_free;
+
+		desired_state = old_state;
 
 		if (mode == LW_EXCLUSIVE)
 		{
@@ -867,7 +869,7 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode,
 		if (wakeup)
 			desired_state |= LW_FLAG_RELEASE_OK;
 
-		if (!lock_free && !noqueue)
+		if (!lock_free && queue_ok)
 		{
 			/*
 			 * If we don't have a PGPROC structure, there's no way to wait.
@@ -893,7 +895,7 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode,
 
 				/*
 				 * Added waiters are linked to the queue only after successful
-				 * CAS
+				 * atomic update of state.
 				 */
 			}
 			else
@@ -935,21 +937,17 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode,
 			}
 			else
 			{
-				if (!noqueue)
-				{
-					/*
-					 * In case we've pushed new items to a tail of non-empty
-					 * wait queue, relink lwWaitLink of a previous tail to a
-					 * current one.
-					 */
-					if (waitMode != LW_WAIT_UNTIL_FREE &&
+				/*
+				 * If we pushed new waiters to a tail of non-empty wait queue,
+				 * relink lwWaitLink of a previous tail item in the queue.
+				 */
+				if (queue_ok && waitMode != LW_WAIT_UNTIL_FREE &&
 						((LW_GET_WAIT_TAIL(old_state) != INVALID_LOCK_PROCNO)
 						 || LW_GET_WAIT_HEAD(old_state) != INVALID_LOCK_PROCNO))
-					{
-						Assert(NextWaitLink(LW_GET_WAIT_TAIL(old_state)) == INVALID_LOCK_PROCNO);
-						Assert(LW_GET_WAIT_TAIL(old_state) != LW_GET_WAIT_TAIL(desired_state));
-						NextWaitLink(LW_GET_WAIT_TAIL(old_state)) = LW_GET_WAIT_TAIL(desired_state);
-					}
+				{
+					Assert(NextWaitLink(LW_GET_WAIT_TAIL(old_state)) == INVALID_LOCK_PROCNO);
+					Assert(LW_GET_WAIT_TAIL(old_state) != LW_GET_WAIT_TAIL(desired_state));
+					NextWaitLink(LW_GET_WAIT_TAIL(old_state)) = LW_GET_WAIT_TAIL(desired_state);
 				}
 #ifdef LOCK_DEBUG
 				pg_atomic_fetch_add_u32(&lock->nwaiters, 1);
@@ -958,9 +956,7 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode,
 			}
 		}
 		else
-		{
 			MyProc->lwWaiting = false;
-		}
 	}
 	pg_unreachable();
 }
@@ -1035,7 +1031,7 @@ LWLockAcquire(LWLock *lock, LWLockMode mode)
 	 */
 	for (;;)
 	{
-		if (!LWLockAttemptLock(lock, mode, mode, false, wakeup))
+		if (!LWLockAttemptLock(lock, mode, mode, true, wakeup))
 		{
 			LOG_LWDEBUG("LWLockAcquire", lock, "immediately acquired lock");
 			break;				/* got the lock */
@@ -1131,7 +1127,7 @@ LWLockConditionalAcquire(LWLock *lock, LWLockMode mode)
 	HOLD_INTERRUPTS();
 
 	/* Check for the lock */
-	mustwait = LWLockAttemptLock(lock, mode, mode, true, false);
+	mustwait = LWLockAttemptLock(lock, mode, mode, false, false);
 
 	if (mustwait)
 	{
@@ -1198,7 +1194,7 @@ LWLockAcquireOrWait(LWLock *lock, LWLockMode mode)
 	 * NB: We're using nearly the same twice-in-a-row lock acquisition
 	 * protocol as LWLockAcquire(). Check its comments for details.
 	 */
-	mustwait = LWLockAttemptLock(lock, mode, LW_WAIT_UNTIL_FREE, false, false);
+	mustwait = LWLockAttemptLock(lock, mode, LW_WAIT_UNTIL_FREE, true, false);
 
 	if (mustwait)
 	{
