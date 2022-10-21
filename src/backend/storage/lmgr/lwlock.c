@@ -888,8 +888,8 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode,
 			if (waitMode != LW_WAIT_UNTIL_FREE)
 			{
 				/*
-				 * Shared and exclusive locks are added to the tail of a list.
-				 * So we need to iterate the whole list only if we wakeup shared lockers.
+				 * Shared and exclusive waiters are added to the tail of a list
+				 * so that we don't need to iterate the whole list at each wakeup.
 				 */
 				desired_state = LW_SET_WAIT_TAIL(desired_state, MyProc->pgprocno);
 				/* if list was empty set head to same value as tail */
@@ -911,8 +911,11 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode,
 				desired_state = LW_SET_WAIT_HEAD(desired_state, MyProc->pgprocno);
 				desired_state |= LW_FLAG_RELEASE_OK;
 				/* if list was empty set tail to same value as head */
-				if (LW_GET_WAIT_TAIL(old_state) == INVALID_LOCK_PROCNO)
+				if (!LW_HAS_WAITERS(old_state))
+				{
+					Assert(LW_GET_WAIT_TAIL(old_state) == INVALID_LOCK_PROCNO);
 					desired_state = LW_SET_WAIT_TAIL(desired_state, MyProc->pgprocno);
+				}
 				MyProc->lwWaitLink = LW_GET_WAIT_HEAD(old_state);
 			}
 		}
