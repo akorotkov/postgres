@@ -887,9 +887,13 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode,
 
 			if (waitMode != LW_WAIT_UNTIL_FREE)
 			{
+				/*
+				 * Shared and exclusive locks are added to the tail of a list.
+				 * So we need to iterate the whole list only if we wakeup shared lockers.
+				 */
 				desired_state = LW_SET_WAIT_TAIL(desired_state, MyProc->pgprocno);
 				/* if list was empty set head to same value as tail */
-				if (LW_GET_WAIT_HEAD(old_state) == INVALID_LOCK_PROCNO)
+				if (!LW_HAS_WAITERS(old_state))
 					desired_state = LW_SET_WAIT_HEAD(desired_state, MyProc->pgprocno);
 				MyProc->lwWaitLink = INVALID_LOCK_PROCNO;
 
@@ -941,10 +945,9 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode,
 				 * If we pushed new waiters to a tail of non-empty wait queue,
 				 * relink lwWaitLink of a previous tail item in the queue.
 				 */
-				if (queue_ok && waitMode != LW_WAIT_UNTIL_FREE &&
-						((LW_GET_WAIT_TAIL(old_state) != INVALID_LOCK_PROCNO)
-						 || LW_GET_WAIT_HEAD(old_state) != INVALID_LOCK_PROCNO))
+				if (queue_ok && waitMode != LW_WAIT_UNTIL_FREE && LW_HAS_WAITERS(old_state))
 				{
+					Assert(LW_GET_WAIT_TAIL(old_state) != INVALID_LOCK_PROCNO);
 					Assert(NextWaitLink(LW_GET_WAIT_TAIL(old_state)) == INVALID_LOCK_PROCNO);
 					Assert(LW_GET_WAIT_TAIL(old_state) != LW_GET_WAIT_TAIL(desired_state));
 					NextWaitLink(LW_GET_WAIT_TAIL(old_state)) = LW_GET_WAIT_TAIL(desired_state);
