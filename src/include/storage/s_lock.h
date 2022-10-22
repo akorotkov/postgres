@@ -840,6 +840,7 @@ init_spin_delay(SpinDelayStatus *status,
 }
 
 #define init_local_spin_delay(status) init_spin_delay(status, __FILE__, __LINE__, __func__)
+extern bool need_spin_delay(SpinDelayStatus *status);
 extern void perform_spin_delay(SpinDelayStatus *status);
 extern void finish_spin_delay(SpinDelayStatus *status);
 

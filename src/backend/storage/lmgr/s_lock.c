@@ -119,6 +119,39 @@ s_unlock(volatile slock_t *lock)
 #endif
 
 /*
+ * Check if spin delay is needed
+ */
+bool
+need_spin_delay(SpinDelayStatus *status)
+{
+	/* CPU-specific delay each time through the loop */
+	SPIN_DELAY();
+
+	/* Block the process every spins_per_delay tries */
+	if (++(status->spins) >= spins_per_delay)
+	{
+		if (++(status->delays) > NUM_DELAYS)
+			s_lock_stuck(status->file, status->line, status->func);
+
+		if (status->cur_delay == 0) /* first time to delay? */
+			status->cur_delay = MIN_DELAY_USEC;
+
+		/* increase delay by a random fraction between 1X and 2X */
+		status->cur_delay += (int) (status->cur_delay *
+									pg_prng_double(&pg_global_prng_state) + 0.5);
+		/* wrap back to minimum delay when max is exceeded */
+		if (status->cur_delay > MAX_DELAY_USEC)
+			status->cur_delay = MIN_DELAY_USEC;
+
+		status->spins = 0;
+
+		return true;
+	}
+
+	return false;
+}
+
+/*
  * Wait while spinning on a contended spinlock.
  */
 void

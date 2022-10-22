@@ -839,6 +839,19 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode,
 				  bool queue_ok, bool wakeup)
 {
 	uint64		old_state;
+	uint64		mask;
+	uint64		increment;
+
+	if (mode == LW_EXCLUSIVE)
+	{
+		mask = LW_LOCK_MASK;
+		increment = LW_VAL_EXCLUSIVE;
+	}
+	else
+	{
+		mask = LW_VAL_EXCLUSIVE;
+		increment = LW_VAL_SHARED;
+	}
 
 	/*
 	 * Read once outside the loop, later iterations will get the newer value
@@ -852,20 +865,26 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode,
 		uint64		desired_state;
 		bool		lock_free;
 
+		lock_free = (old_state & mask) == 0;
 		desired_state = old_state;
 
-		if (mode == LW_EXCLUSIVE)
+		if (!lock_free && queue_ok)
 		{
-			lock_free = (old_state & LW_LOCK_MASK) == 0;
-			if (lock_free)
-				desired_state += LW_VAL_EXCLUSIVE;
+			int		i = 0;
+
+			while ((lock_free = ((old_state & mask) == 0)) &&
+				   i < 20)
+			{
+				SPIN_DELAY();
+				old_state = pg_atomic_read_u64(&lock->state);
+				/* (void) pg_atomic_compare_exchange_u64(&lock->state, &old_state, old_state); */
+				i++;
+			}
 		}
-		else
-		{
-			lock_free = (old_state & LW_VAL_EXCLUSIVE) == 0;
-			if (lock_free)
-				desired_state += LW_VAL_SHARED;
-		}
+
+		if (lock_free)
+			desired_state += increment;
+
 		if (wakeup)
 			desired_state |= LW_FLAG_RELEASE_OK;
 
