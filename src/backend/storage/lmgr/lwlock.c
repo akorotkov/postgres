@@ -885,7 +885,22 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode,
 			MyProc->lwWaiting = true;
 			MyProc->lwWaitMode = waitMode;
 
-			if (waitMode != LW_WAIT_UNTIL_FREE)
+			if (waitMode == LW_WAIT_UNTIL_FREE)
+			{
+				/*
+				 * WAIT_UNTIL_FREE locks should be woken up at each wakeup,
+				 * push them to list head to save time iterating it at unlock.
+				 */
+				desired_state = LW_SET_WAIT_HEAD(desired_state | LW_FLAG_RELEASE_OK, MyProc->pgprocno);
+				/* if list was empty set tail to same value as head */
+				if (!LW_HAS_WAITERS(old_state))
+				{
+					Assert(LW_GET_WAIT_TAIL(old_state) == INVALID_LOCK_PROCNO);
+					desired_state = LW_SET_WAIT_TAIL(desired_state, MyProc->pgprocno);
+				}
+				MyProc->lwWaitLink = LW_GET_WAIT_HEAD(old_state);
+			}
+			else
 			{
 				/*
 				 * Shared and exclusive waiters are added to the tail of a list
@@ -901,22 +916,6 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode,
 				 * Added waiters are linked to the queue only after successful
 				 * atomic update of state.
 				 */
-			}
-			else
-			{
-				/*
-				 * WAIT_UNTIL_FREE locks should be woken up at each wakeup,
-				 * push them to list head to save time iterating it at unlock.
-				 */
-				desired_state = LW_SET_WAIT_HEAD(desired_state, MyProc->pgprocno);
-				desired_state |= LW_FLAG_RELEASE_OK;
-				/* if list was empty set tail to same value as head */
-				if (!LW_HAS_WAITERS(old_state))
-				{
-					Assert(LW_GET_WAIT_TAIL(old_state) == INVALID_LOCK_PROCNO);
-					desired_state = LW_SET_WAIT_TAIL(desired_state, MyProc->pgprocno);
-				}
-				MyProc->lwWaitLink = LW_GET_WAIT_HEAD(old_state);
 			}
 		}
 
@@ -1359,8 +1358,7 @@ LWLockConflictsWithVar(LWLock *lock,
 			MyProc->lwWaitMode = LW_WAIT_UNTIL_FREE;
 			MyProc->lwWaitLink = LW_GET_WAIT_HEAD(old_state);
 			Assert(LW_GET_WAIT_HEAD(old_state) != MyProc->pgprocno);
-			desired_state = LW_SET_WAIT_HEAD(desired_state, MyProc->pgprocno);
-			desired_state |= LW_FLAG_RELEASE_OK;
+			desired_state = LW_SET_WAIT_HEAD(desired_state | LW_FLAG_RELEASE_OK, MyProc->pgprocno);
 			/* if list was empty set tail to same value as head */
 			if (!LW_HAS_WAITERS(old_state))
 			{
@@ -1548,7 +1546,7 @@ awakenWaiters(uint32 pgprocno, LWLock *lock)
 {
 	while (pgprocno != INVALID_LOCK_PROCNO)
 	{
-		/* Must read this before WAKEUP! */
+		/* Must read this before wakeup! */
 		uint32		nextlink = NextReleaseLink(pgprocno);
 
 		LOG_LWDEBUG("LWLockRelease", lock, "release waiter");
@@ -1703,9 +1701,7 @@ LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 val)
 			pgprocno = nextStepPgprocno;
 		}
 
-		newState = LW_SET_STATE(newState, newHead, newTail);
-		newState &= ~LW_FLAG_LOCK_VAR;
-
+		newState = LW_SET_STATE(newState & ~LW_FLAG_LOCK_VAR, newHead, newTail);
 		oldHead = LW_GET_WAIT_HEAD(oldState);
 		oldTail = LW_GET_WAIT_TAIL(oldState);
 		oldReplaceHead = newHead;
@@ -1716,7 +1712,7 @@ LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 val)
 		}
 	}
 
-	/* Awaken any waiters I removed from the queue. */
+	/* Awaken any waiters removed from the queue. */
 	awakenWaiters(wakeupTail, lock);
 }
 
@@ -1969,14 +1965,12 @@ LWLockRelease(LWLock *lock)
 			}
 		}
 
-		newState = LW_SET_STATE(newState, newHead, newTail);
+		newState = LW_SET_STATE(newState & ~LW_FLAG_LOCK_VAR , newHead, newTail);
 
 		if (new_release_ok)
 			newState |= LW_FLAG_RELEASE_OK;
 		else
 			newState &= ~LW_FLAG_RELEASE_OK;
-
-		newState &= ~LW_FLAG_LOCK_VAR;
 
 		if (wakeup)
 		{
@@ -1990,7 +1984,7 @@ LWLockRelease(LWLock *lock)
 			break;
 	}
 
-	/* Awaken any waiters I removed from the queue. */
+	/* Awaken any waiters removed from the queue. */
 	awakenWaiters(wakeupTail, lock);
 
 	/* Now okay to allow cancel/die interrupts. */
