@@ -1361,8 +1361,12 @@ LWLockConflictsWithVar(LWLock *lock,
 			Assert(LW_GET_WAIT_HEAD(old_state) != MyProc->pgprocno);
 			desired_state = LW_SET_WAIT_HEAD(desired_state, MyProc->pgprocno);
 			desired_state |= LW_FLAG_RELEASE_OK;
-			if (LW_GET_WAIT_TAIL(old_state) == INVALID_LOCK_PROCNO)
+			/* if list was empty set tail to same value as head */
+			if (!LW_HAS_WAITERS(old_state))
+			{
+				Assert(LW_GET_WAIT_TAIL(old_state) == INVALID_LOCK_PROCNO);
 				desired_state = LW_SET_WAIT_TAIL(desired_state, MyProc->pgprocno);
+			}
 		}
 
 		if (pg_atomic_compare_exchange_u64(&lock->state,
@@ -1896,7 +1900,7 @@ LWLockRelease(LWLock *lock)
 						newTail = oldReplaceTail;
 				}
 
-				/* Remove LW_WAIT_UNTIL_FREE from the list head */
+				/* Remove LW_WAIT_UNTIL_FREE waiters from the list head */
 				if (curMode == LW_WAIT_UNTIL_FREE)
 				{
 					Assert(prevPgprocno == INVALID_LOCK_PROCNO);
@@ -1922,7 +1926,7 @@ LWLockRelease(LWLock *lock)
 					if (lastMode == curMode)
 					{
 						/*
-						 * Prevent additional wakeups until retryer gets to
+						 * Prevent additional wakeups until retrier gets to
 						 * run. Backends that are just waiting for the lock to
 						 * become free don't retry automatically.
 						 */
