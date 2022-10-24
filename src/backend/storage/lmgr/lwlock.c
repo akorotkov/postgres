@@ -1497,7 +1497,7 @@ LWLockWaitForVar(LWLock *lock, uint64 *valptr, uint64 oldval, uint64 *newval)
 }
 
 static uint64
-LockVar(LWLock *lock)
+lockVar(LWLock *lock)
 {
 	uint64		oldState;
 
@@ -1526,7 +1526,7 @@ LockVar(LWLock *lock)
 }
 
 static inline void
-wait_for_queue_relink(uint32 pgprocno)
+waitForQueueRelink(uint32 pgprocno)
 {
 	SpinDelayStatus delayStatus;
 
@@ -1584,7 +1584,7 @@ LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 val)
 
 	PRINT_LWDEBUG("LWLockUpdateVar", lock, LW_EXCLUSIVE);
 
-	oldState = LockVar(lock);
+	oldState = lockVar(lock);
 
 	Assert(oldState & LW_VAL_EXCLUSIVE);
 
@@ -1623,7 +1623,7 @@ LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 val)
 				newHead = NextWaitLink(oldTail);
 				if (newHead == INVALID_LOCK_PROCNO)
 				{
-					wait_for_queue_relink(oldTail);
+					waitForQueueRelink(oldTail);
 					newHead = NextWaitLink(oldTail);
 				}
 			}
@@ -1638,7 +1638,7 @@ LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 val)
 			if (pgprocno != newTail &&
 				nextPgprocno == INVALID_LOCK_PROCNO)
 			{
-				wait_for_queue_relink(pgprocno);
+				waitForQueueRelink(pgprocno);
 				nextPgprocno = NextWaitLink(pgprocno);
 			}
 			nextStepPgprocno = nextPgprocno;
@@ -1653,7 +1653,7 @@ LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 val)
 				if (nextStepPgprocno == INVALID_LOCK_PROCNO &&
 					oldTail != newTail)
 				{
-					wait_for_queue_relink(oldTail);
+					waitForQueueRelink(oldTail);
 					nextStepPgprocno = NextWaitLink(oldTail);
 				}
 
@@ -1811,7 +1811,7 @@ LWLockRelease(LWLock *lock)
 				pgprocno = NextWaitLink(oldTail);
 				if (pgprocno == INVALID_LOCK_PROCNO)
 				{
-					wait_for_queue_relink(oldTail);
+					waitForQueueRelink(oldTail);
 					pgprocno = NextWaitLink(oldTail);
 				}
 				prevPgprocno = oldReplaceTail;
@@ -1848,7 +1848,7 @@ LWLockRelease(LWLock *lock)
 				if (pgprocno != newTail &&
 					nextPgprocno == INVALID_LOCK_PROCNO)
 				{
-					wait_for_queue_relink(pgprocno);
+					waitForQueueRelink(pgprocno);
 					nextPgprocno = NextWaitLink(pgprocno);
 				}
 				nextStepPgprocno = nextPgprocno;
@@ -1864,7 +1864,7 @@ LWLockRelease(LWLock *lock)
 					if (nextStepPgprocno == INVALID_LOCK_PROCNO &&
 						oldTail != newTail)
 					{
-						wait_for_queue_relink(oldTail);
+						waitForQueueRelink(oldTail);
 						nextStepPgprocno = NextWaitLink(oldTail);
 					}
 
@@ -1999,7 +1999,7 @@ LWLockRelease(LWLock *lock)
 void
 LWLockReleaseClearVar(LWLock *lock, uint64 *valptr, uint64 val)
 {
-	(void) LockVar(lock);
+	(void) lockVar(lock);
 
 	*valptr = val;
 
