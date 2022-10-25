@@ -913,8 +913,10 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode,
 				MyProc->lwWaitLink = INVALID_LOCK_PROCNO;
 
 				/*
-				 * Added waiters are linked to the queue only after successful
-				 * atomic update of state.
+				 * Waiters linked to tail of a queue only after successful
+				 * atomic update of state. Otherwise we can get a queue with
+				 * tail entries behind a tail pointed from state, so that they
+				 * could be unlocked by a concurrent process before being locked.
 				 */
 			}
 		}
@@ -1527,6 +1529,19 @@ lockVar(LWLock *lock)
 	return oldState;
 }
 
+/*
+ * waitForQueueRelink - Wait on a spinlock until concurrent
+ * lock procedure links new tail to waiters list.
+ *
+ * This is to process the rare case when the
+ * concurrent process try to iterate waiters list after lock
+ * procedure updated lock state but before it linked tail of
+ * the queue.
+ *
+ * The vice versa situation of linking tail to waiters list
+ * before updating lock state could lead to releasing waiters
+ * that haven't added to a wait queue yet.
+ */
 static inline void
 waitForQueueRelink(uint32 pgprocno)
 {
@@ -1540,7 +1555,7 @@ waitForQueueRelink(uint32 pgprocno)
 	return;
 }
 
-/* Awaken all waiters from the wake queue */
+/* awakenWaiters - Awaken all waiters from the wake queue */
 static inline void
 awakenWaiters(uint32 pgprocno, LWLock *lock)
 {
@@ -1559,8 +1574,6 @@ awakenWaiters(uint32 pgprocno, LWLock *lock)
 		pgprocno = nextlink;
 	}
 }
-
-
 
 /*
  * LWLockUpdateVar - Update a variable and wake up waiters atomically
@@ -1595,7 +1608,16 @@ LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 val)
 
 	/*
 	 * See if there are any LW_WAIT_UNTIL_FREE waiters that need to be woken
-	 * up. They are always in the front of the queue.
+	 * up. They are always in the front of the queue. Add them to release queue.
+	 *
+	 * If during a processing, concurrent process adds some waiters in the wait queue
+	 * atomic compare-and-exchange on lock state will not succeed. Then we construct
+	 * lock state again and update existing release queue with items from added head
+	 * of wait queue.
+	 *
+	 * Only after we suceeded in updating atomic lock state, we actually wakeup
+	 * processes from release queue.
+
 	 */
 	while (true)
 	{
@@ -1766,13 +1788,24 @@ LWLockRelease(LWLock *lock)
 	if (TRACE_POSTGRESQL_LWLOCK_RELEASE_ENABLED())
 		TRACE_POSTGRESQL_LWLOCK_RELEASE(T_NAME(lock));
 
-	/*
-	 * As waking up waiters requires the spinlock to be acquired, only do so
-	 * if necessary.
-	 */
 	/* XXX: remove before commit? */
 	LOG_LWDEBUG("LWLockRelease", lock, "releasing waiters");
 
+	/*
+	 * Move waiters to be awaken from wait queue to a release queue are:
+	 * - all LW_WAIT_UNTIL_FREE waiters
+	 * And after all LW_WAIT_UNTIL_FREE are removed:
+	 * - if first in the queue is LW_EXCLUSIVE then only one LW_EXCLUSIVE
+	 * - if first in the queue is LW_SHARED then all LW_SHARED from the queue.
+	 *
+	 * If during a processing, concurrent process adds some waiters in the wait queue
+	 * atomic compare-and-exchange on lock state will not succeed. Then we construct
+	 * lock state again and update existing release queue with items from added tail
+	 * and head of wait queue.
+	 *
+	 * Only after we suceeded in updating atomic lock state, we actually wakeup
+	 * processes from release queue.
+	 */
 	while (true)
 	{
 		uint64		newState = oldState;
