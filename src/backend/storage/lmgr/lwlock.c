@@ -940,6 +940,7 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode,
 		 *
 		 * Retry if the value changed since we last looked at it.
 		 */
+		Assert(!LW_HAS_WAITERS(desired_state) || LW_GET_WAIT_TAIL(desired_state) != INVALID_LOCK_PROCNO);
 		if (pg_atomic_compare_exchange_u64(&lock->state,
 										   &old_state, desired_state))
 		{
@@ -1521,6 +1522,8 @@ LWLockConflictsWithVar(LWLock *lock,
 			}
 		}
 
+
+		Assert(!LW_HAS_WAITERS(desired_state) || LW_GET_WAIT_TAIL(desired_state) != INVALID_LOCK_PROCNO);
 		if (pg_atomic_compare_exchange_u64(&lock->state,
 										   &old_state, desired_state))
 		{
@@ -1914,6 +1917,7 @@ LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 val)
 		oldTail = LW_GET_WAIT_TAIL(oldState);
 		oldReplaceHead = newHead;
 
+		Assert(!LW_HAS_WAITERS(newState) || LW_GET_WAIT_TAIL(newState) != INVALID_LOCK_PROCNO);
 		if (pg_atomic_compare_exchange_u64(&lock->state, &oldState, newState))
 		{
 			break;
@@ -2036,6 +2040,9 @@ LWLockRelease(LWLock *lock)
 				else
 					newHead = pgprocno;
 
+				if (newHead == INVALID_LOCK_PROCNO)
+					newTail = INVALID_LOCK_PROCNO;
+
 				if (oldTail != oldReplaceTail &&
 					oldReplaceTail != INVALID_LOCK_PROCNO)
 				{
@@ -2108,7 +2115,11 @@ LWLockRelease(LWLock *lock)
 					}
 
 					if (oldTail == newTail)
+					{
 						newTail = oldReplaceTail;
+						if (newTail == INVALID_LOCK_PROCNO)
+							newHead = INVALID_LOCK_PROCNO;
+					}
 				}
 
 				if (lastMode == LW_EXCLUSIVE &&
@@ -2192,6 +2203,7 @@ LWLockRelease(LWLock *lock)
 			oldReplaceTail = newTail;
 		}
 
+		Assert(!LW_HAS_WAITERS(newState) || LW_GET_WAIT_TAIL(newState) != INVALID_LOCK_PROCNO);
 		if (pg_atomic_compare_exchange_u64(&lock->state, &oldState, newState))
 			break;
 	}
