@@ -2040,8 +2040,7 @@ LWLockRelease(LWLock *lock)
 				else
 					newHead = pgprocno;
 
-				if (newHead == INVALID_LOCK_PROCNO)
-					newTail = INVALID_LOCK_PROCNO;
+				Assert(newHead != INVALID_LOCK_PROCNO);
 
 				if (oldTail != oldReplaceTail &&
 					oldReplaceTail != INVALID_LOCK_PROCNO)
@@ -2116,9 +2115,10 @@ LWLockRelease(LWLock *lock)
 
 					if (oldTail == newTail)
 					{
-						newTail = oldReplaceTail;
-						if (newTail == INVALID_LOCK_PROCNO)
-							newHead = INVALID_LOCK_PROCNO;
+						if (oldReplaceTail != INVALID_LOCK_PROCNO)
+							newTail = oldReplaceTail;
+						else
+							newTail = pgprocno;
 					}
 				}
 
