@@ -866,6 +866,7 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode,
 			if (lock_free)
 				desired_state += LW_VAL_SHARED;
 		}
+
 		if (wakeup)
 			desired_state |= LW_FLAG_RELEASE_OK;
 
@@ -1926,7 +1927,12 @@ LWLockRelease(LWLock *lock)
 					}
 
 					if (oldTail == newTail)
-						newTail = oldReplaceTail;
+					{
+						if (oldReplaceTail != INVALID_LOCK_PROCNO)
+							newTail = oldReplaceTail;
+						else
+							newTail = pgprocno;
+					}
 				}
 
 				/* Remove LW_WAIT_UNTIL_FREE waiters from the list head */
