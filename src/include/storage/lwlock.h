@@ -102,17 +102,20 @@ typedef enum LWLockMode
 {
 	LW_EXCLUSIVE,
 	LW_SHARED,
+	LW_EXCLUSIVE_CALLBACK,
 	LW_WAIT_UNTIL_FREE			/* A special mode used in PGPROC->lwWaitMode,
 								 * when waiting for lock to become free. Not
 								 * to be used as LWLockAcquire argument */
 } LWLockMode;
 
+typedef void (*LWLockCallback) (LWLock *lwlock, struct PGPROC *proc);
 
 #ifdef LOCK_DEBUG
 extern PGDLLIMPORT bool Trace_lwlocks;
 #endif
 
 extern bool LWLockAcquire(LWLock *lock, LWLockMode mode);
+extern void LWLockDoCallback(LWLock *lock);
 extern bool LWLockConditionalAcquire(LWLock *lock, LWLockMode mode);
 extern bool LWLockAcquireOrWait(LWLock *lock, LWLockMode mode);
 extern void LWLockRelease(LWLock *lock);

@@ -85,6 +85,7 @@
 #include "storage/ipc.h"
 #include "storage/predicate.h"
 #include "storage/proc.h"
+#include "storage/procarray.h"
 #include "storage/proclist.h"
 #include "storage/spin.h"
 #include "utils/memutils.h"
@@ -255,6 +256,7 @@ typedef struct NamedLWLockTrancheRequest
 
 static NamedLWLockTrancheRequest *NamedLWLockTrancheRequestArray = NULL;
 static int	NamedLWLockTrancheRequestsAllocated = 0;
+static LWLockCallback fixedLWLockCallbacks[NUM_FIXED_LWLOCKS] = {NULL};
 
 /*
  * NamedLWLockTrancheRequests is both the valid length of the request array,
@@ -495,6 +497,8 @@ CreateLWLocks(void)
 
 	StaticAssertStmt(sizeof(LWLock) <= LWLOCK_PADDED_SIZE,
 					 "Miscalculated LWLock padding");
+
+	fixedLWLockCallbacks[(LWLockPadded *) ProcArrayLock - MainLWLockArray] = ProcArrayLWLockCallback;
 
 	if (!IsUnderPostmaster)
 	{
@@ -868,20 +872,6 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode,
 		lock_free = (old_state & mask) == 0;
 		desired_state = old_state;
 
-		if (!lock_free && queue_ok)
-		{
-			int		i = 0;
-
-			while ((lock_free = ((old_state & mask) == 0)) &&
-				   i < 20)
-			{
-				SPIN_DELAY();
-				old_state = pg_atomic_read_u64(&lock->state);
-				/* (void) pg_atomic_compare_exchange_u64(&lock->state, &old_state, old_state); */
-				i++;
-			}
-		}
-
 		if (lock_free)
 			desired_state += increment;
 
@@ -904,7 +894,7 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode,
 			MyProc->lwWaiting = true;
 			MyProc->lwWaitMode = waitMode;
 
-			if (waitMode == LW_WAIT_UNTIL_FREE)
+			if (waitMode == LW_WAIT_UNTIL_FREE || waitMode == LW_EXCLUSIVE_CALLBACK)
 			{
 				/*
 				 * WAIT_UNTIL_FREE locks should be woken up at each wakeup,
@@ -968,7 +958,7 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode, LWLockMode waitMode,
 				 * If we pushed new waiters to a tail of non-empty wait queue,
 				 * relink lwWaitLink of a previous tail item in the queue.
 				 */
-				if (queue_ok && waitMode != LW_WAIT_UNTIL_FREE && LW_HAS_WAITERS(old_state))
+				if (queue_ok && waitMode != LW_WAIT_UNTIL_FREE && waitMode != LW_EXCLUSIVE_CALLBACK && LW_HAS_WAITERS(old_state))
 				{
 					Assert(LW_GET_WAIT_TAIL(old_state) != INVALID_LOCK_PROCNO);
 					Assert(NextWaitLink(LW_GET_WAIT_TAIL(old_state)) == INVALID_LOCK_PROCNO);
@@ -1123,6 +1113,149 @@ LWLockAcquire(LWLock *lock, LWLockMode mode)
 		PGSemaphoreUnlock(proc->sem);
 
 	return result;
+}
+
+/*
+ * LWLockAcquire - acquire a lightweight lock in the specified mode
+ *
+ * If the lock is not available, sleep until it is.  Returns true if the lock
+ * was available immediately, false if we had to sleep.
+ *
+ * Side effect: cancel/die interrupts are held off until lock release.
+ */
+void
+LWLockDoCallback(LWLock *lock)
+{
+	PGPROC	   *proc = MyProc;
+	bool		wakeup = false;
+	int			extraWaits = 0;
+#ifdef LWLOCK_STATS
+	lwlock_stats *lwstats;
+
+	lwstats = get_lwlock_stats_entry(lock);
+#endif
+
+	PRINT_LWDEBUG("LWLockAcquire", lock, mode);
+
+#ifdef LWLOCK_STATS
+	/* Count lock acquisition attempts */
+	if (mode == LW_EXCLUSIVE)
+		lwstats->ex_acquire_count++;
+	else
+		lwstats->sh_acquire_count++;
+#endif							/* LWLOCK_STATS */
+
+	/*
+	 * We can't wait if we haven't got a PGPROC.  This should only occur
+	 * during bootstrap or shared memory initialization.  Put an Assert here
+	 * to catch unsafe coding practices.
+	 */
+	Assert(!(proc == NULL && IsUnderPostmaster));
+
+	/* Ensure we will have room to remember the lock */
+	if (num_held_lwlocks >= MAX_SIMUL_LWLOCKS)
+		elog(ERROR, "too many LWLocks taken");
+
+	/*
+	 * Lock out cancel/die interrupts until we exit the code section protected
+	 * by the LWLock.  This ensures that interrupts will not interfere with
+	 * manipulations of data structures in shared memory.
+	 */
+	HOLD_INTERRUPTS();
+
+	/*
+	 * Loop here to try to acquire lock after each time we are signaled by
+	 * LWLockRelease.
+	 *
+	 * NOTE: it might seem better to have LWLockRelease actually grant us the
+	 * lock, rather than retrying and possibly having to go back to sleep. But
+	 * in practice that is no good because it means a process swap for every
+	 * lock acquisition when two or more processes are contending for the same
+	 * lock.  Since LWLocks are normally used to protect not-very-long
+	 * sections of computation, a process needs to be able to acquire and
+	 * release the same lock many times during a single CPU time slice, even
+	 * in the presence of contention.  The efficiency of being able to do that
+	 * outweighs the inefficiency of sometimes wasting a process dispatch
+	 * cycle because the lock is not free when a released waiter finally gets
+	 * to run.  See pgsql-hackers archives for 29-Dec-01.
+	 */
+	for (;;)
+	{
+		if (!LWLockAttemptLock(lock, LW_EXCLUSIVE, LW_EXCLUSIVE_CALLBACK, true, wakeup))
+		{
+			LOG_LWDEBUG("LWLockAcquire", lock, "immediately acquired lock");
+
+			if (TRACE_POSTGRESQL_LWLOCK_ACQUIRE_ENABLED())
+				TRACE_POSTGRESQL_LWLOCK_ACQUIRE(T_NAME(lock), mode);
+
+			/* Add lock to list of locks held by this backend */
+			held_lwlocks[num_held_lwlocks].lock = lock;
+			held_lwlocks[num_held_lwlocks++].mode = LW_EXCLUSIVE;
+
+			Assert(lock->tranche < NUM_INDIVIDUAL_LWLOCKS);
+			Assert(fixedLWLockCallbacks[lock->tranche] != NULL);
+			fixedLWLockCallbacks[lock->tranche](lock, proc);
+
+			LWLockRelease(lock);
+
+			break;				/* got the lock */
+		}
+
+		/*
+		 * Wait until awakened.
+		 *
+		 * It is possible that we get awakened for a reason other than being
+		 * signaled by LWLockRelease.  If so, loop back and wait again.  Once
+		 * we've gotten the LWLock, re-increment the sema by the number of
+		 * additional signals received.
+		 */
+		LOG_LWDEBUG("LWLockAcquire", lock, "waiting");
+
+#ifdef LWLOCK_STATS
+		lwstats->block_count++;
+#endif
+
+		LWLockReportWaitStart(lock);
+		if (TRACE_POSTGRESQL_LWLOCK_WAIT_START_ENABLED())
+			TRACE_POSTGRESQL_LWLOCK_WAIT_START(T_NAME(lock), mode);
+
+		for (;;)
+		{
+			PGSemaphoreLock(proc->sem);
+			if (!proc->lwWaiting)
+				break;
+			extraWaits++;
+		}
+		wakeup = true;
+
+#ifdef LOCK_DEBUG
+		{
+			/* not waiting anymore */
+			uint32		nwaiters PG_USED_FOR_ASSERTS_ONLY = pg_atomic_fetch_sub_u32(&lock->nwaiters, 1);
+
+			Assert(nwaiters < MAX_BACKENDS);
+		}
+#endif
+
+		if (TRACE_POSTGRESQL_LWLOCK_WAIT_DONE_ENABLED())
+			TRACE_POSTGRESQL_LWLOCK_WAIT_DONE(T_NAME(lock), mode);
+		LWLockReportWaitEnd();
+
+		LOG_LWDEBUG("LWLockAcquire", lock, "awakened");
+
+		pg_read_barrier();
+
+		/* Now loop back and try to acquire lock again. */
+		if (proc->lwWaitMode == LW_EXCLUSIVE_CALLBACK)
+			break;
+		Assert(proc->lwWaitMode == LW_EXCLUSIVE);
+	}
+
+	/*
+	 * Fix the process wait semaphore's count for any absorbed wakeups.
+	 */
+	while (extraWaits-- > 0)
+		PGSemaphoreUnlock(proc->sem);
 }
 
 /*
@@ -1581,14 +1714,23 @@ awakenWaiters(uint32 pgprocno, LWLock *lock)
 	while (pgprocno != INVALID_LOCK_PROCNO)
 	{
 		/* Must read this before wakeup! */
-		uint32		nextlink = NextReleaseLink(pgprocno);
+		PGPROC	   *proc = GetPGProcByNumber(pgprocno);
+		uint32		nextlink = proc->lwReleaseLink;
+
+		if (proc->lwWaitMode == LW_EXCLUSIVE_CALLBACK)
+		{
+			Assert(lock->tranche < NUM_INDIVIDUAL_LWLOCKS);
+			Assert(fixedLWLockCallbacks[lock->tranche] != NULL);
+			fixedLWLockCallbacks[lock->tranche](lock, proc);
+		}
 
 		LOG_LWDEBUG("LWLockRelease", lock, "release waiter");
 
 		pg_read_barrier();
-		CurIsWaiting(pgprocno) = false;
+		proc->lwWaiting = false;
 		pg_write_barrier();
-		PGSemaphoreUnlock(CurSem(pgprocno));
+
+		PGSemaphoreUnlock(proc->sem);
 
 		pgprocno = nextlink;
 	}
@@ -1614,7 +1756,8 @@ LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 val)
 				oldHead = INVALID_LOCK_PROCNO,
 				oldTail = INVALID_LOCK_PROCNO,
 				oldReplaceHead = INVALID_LOCK_PROCNO,
-				wakeupTail = INVALID_LOCK_PROCNO;
+				wakeupTail = INVALID_LOCK_PROCNO,
+				prevPgprocno;
 
 	PRINT_LWDEBUG("LWLockUpdateVar", lock, LW_EXCLUSIVE);
 
@@ -1649,10 +1792,12 @@ LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 val)
 		if (newHead != oldHead)
 		{
 			pgprocno = newHead;
+			prevPgprocno = INVALID_LOCK_PROCNO;
 		}
 		else
 		{
 			pgprocno = INVALID_LOCK_PROCNO;
+			prevPgprocno = INVALID_LOCK_PROCNO;
 			if (oldReplaceHead != INVALID_LOCK_PROCNO)
 			{
 				newHead = oldReplaceHead;
@@ -1675,7 +1820,8 @@ LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 val)
 		while (pgprocno != INVALID_LOCK_PROCNO)
 		{
 			uint32		nextPgprocno = (pgprocno != newTail ? NextWaitLink(pgprocno) : INVALID_LOCK_PROCNO),
-						nextStepPgprocno;
+						nextStepPgprocno,
+						nextStepPrevPgprocno = pgprocno;
 
 			/* Lock tail is updated but queue tail haven't relinked yet. */
 			if (pgprocno != newTail &&
@@ -1721,16 +1867,36 @@ LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 val)
 			/* Remove LW_WAIT_UNTIL_FREE from the list head */
 			if (CurWaitMode(pgprocno) == LW_WAIT_UNTIL_FREE)
 			{
-				newHead = nextPgprocno;
-				if (newHead == INVALID_LOCK_PROCNO)
-					newTail = newHead;
+				if (prevPgprocno == INVALID_LOCK_PROCNO)
+				{
+					newHead = nextPgprocno;
+				}
+				else
+				{
+					Assert(prevPgprocno != nextPgprocno);
+					NextWaitLink(prevPgprocno) = nextPgprocno;
+					if (nextPgprocno == INVALID_LOCK_PROCNO)
+					{
+						Assert(newTail == pgprocno);
+						newTail = prevPgprocno;
+					}
+				}
+
+				nextStepPrevPgprocno = prevPgprocno;
+
+				if (newHead == INVALID_LOCK_PROCNO ||
+					newTail == INVALID_LOCK_PROCNO)
+				{
+					newHead = INVALID_LOCK_PROCNO;
+					newTail = INVALID_LOCK_PROCNO;
+				}
 
 				/* Push to the wakeup list */
 				Assert(pgprocno != wakeupTail);
 				NextReleaseLink(pgprocno) = wakeupTail;
 				wakeupTail = pgprocno;
 			}
-			else
+			else if (CurWaitMode(pgprocno) != LW_EXCLUSIVE_CALLBACK)
 			{
 				/*
 				 * At the tail part of a list there could be only LW_EXCLUSIVE
@@ -1740,6 +1906,7 @@ LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 val)
 			}
 
 			pgprocno = nextStepPgprocno;
+			prevPgprocno = nextStepPrevPgprocno;
 		}
 
 		newState = LW_SET_STATE(newState & ~LW_FLAG_LOCK_VAR, newHead, newTail);
@@ -1791,10 +1958,6 @@ LWLockRelease(LWLock *lock)
 		elog(ERROR, "lock %s is not held", T_NAME(lock));
 
 	mode = held_lwlocks[i].mode;
-
-	num_held_lwlocks--;
-	for (; i < num_held_lwlocks; i++)
-		held_lwlocks[i] = held_lwlocks[i + 1];
 
 	PRINT_LWDEBUG("LWLockRelease", lock, mode);
 
@@ -1948,30 +2111,27 @@ LWLockRelease(LWLock *lock)
 						newTail = oldReplaceTail;
 				}
 
-				/* Remove LW_WAIT_UNTIL_FREE waiters from the list head */
-				if (curMode == LW_WAIT_UNTIL_FREE)
-				{
-					Assert(prevPgprocno == INVALID_LOCK_PROCNO);
-					newHead = nextPgprocno;
-					if (newHead == INVALID_LOCK_PROCNO)
-						newTail = newHead;
-					if (nextStepPrevPgprocno == pgprocno)
-						nextStepPrevPgprocno = prevPgprocno;
+				if (lastMode == LW_EXCLUSIVE &&
+					curMode != LW_WAIT_UNTIL_FREE &&
+					curMode != LW_EXCLUSIVE_CALLBACK)
+					break;
 
-					/* Push to the wakeup list */
-					Assert(pgprocno != wakeupTail);
-					NextReleaseLink(pgprocno) = wakeupTail;
-					wakeupTail = pgprocno;
+				if (mode == LW_SHARED &&
+					lastMode == LW_WAIT_UNTIL_FREE &&
+					curMode == LW_EXCLUSIVE_CALLBACK)
+				{
+					CurWaitMode(pgprocno) = curMode = lastMode = LW_EXCLUSIVE;
 				}
-				else
+				else if (lastMode == LW_WAIT_UNTIL_FREE &&
+					curMode != LW_WAIT_UNTIL_FREE &&
+					curMode != LW_EXCLUSIVE_CALLBACK)
+					lastMode = curMode;
+
+				if (lastMode == curMode || curMode == LW_WAIT_UNTIL_FREE ||
+					(curMode == LW_EXCLUSIVE_CALLBACK && mode == LW_EXCLUSIVE))
 				{
-					if (lastMode == LW_EXCLUSIVE)
-						break;
-
-					if (lastMode == LW_WAIT_UNTIL_FREE)
-						lastMode = curMode;
-
-					if (lastMode == curMode)
+					if (curMode != LW_WAIT_UNTIL_FREE &&
+						curMode != LW_EXCLUSIVE_CALLBACK)
 					{
 						/*
 						 * Prevent additional wakeups until retrier gets to
@@ -1979,37 +2139,37 @@ LWLockRelease(LWLock *lock)
 						 * become free don't retry automatically.
 						 */
 						new_release_ok = false;
-
-						if (prevPgprocno == INVALID_LOCK_PROCNO)
-						{
-							newHead = nextPgprocno;
-						}
-						else
-						{
-							Assert(prevPgprocno != nextPgprocno);
-							NextWaitLink(prevPgprocno) = nextPgprocno;
-							if (nextPgprocno == INVALID_LOCK_PROCNO)
-							{
-								Assert(newTail == pgprocno);
-								newTail = prevPgprocno;
-							}
-						}
-
-						if (nextStepPrevPgprocno == pgprocno)
-							nextStepPrevPgprocno = prevPgprocno;
-
-						if (newHead == INVALID_LOCK_PROCNO ||
-							newTail == INVALID_LOCK_PROCNO)
-						{
-							newHead = INVALID_LOCK_PROCNO;
-							newTail = INVALID_LOCK_PROCNO;
-						}
-
-						/* Push to the wakeup list */
-						Assert(pgprocno != wakeupTail);
-						NextReleaseLink(pgprocno) = wakeupTail;
-						wakeupTail = pgprocno;
 					}
+
+					if (prevPgprocno == INVALID_LOCK_PROCNO)
+					{
+						newHead = nextPgprocno;
+					}
+					else
+					{
+						Assert(prevPgprocno != nextPgprocno);
+						NextWaitLink(prevPgprocno) = nextPgprocno;
+						if (nextPgprocno == INVALID_LOCK_PROCNO)
+						{
+							Assert(newTail == pgprocno);
+							newTail = prevPgprocno;
+						}
+					}
+
+					if (nextStepPrevPgprocno == pgprocno)
+						nextStepPrevPgprocno = prevPgprocno;
+
+					if (newHead == INVALID_LOCK_PROCNO ||
+						newTail == INVALID_LOCK_PROCNO)
+					{
+						newHead = INVALID_LOCK_PROCNO;
+						newTail = INVALID_LOCK_PROCNO;
+					}
+
+					/* Push to the wakeup list */
+					Assert(pgprocno != wakeupTail);
+					NextReleaseLink(pgprocno) = wakeupTail;
+					wakeupTail = pgprocno;
 				}
 
 				prevPgprocno = nextStepPrevPgprocno;
@@ -2038,6 +2198,10 @@ LWLockRelease(LWLock *lock)
 
 	/* Awaken any waiters removed from the queue. */
 	awakenWaiters(wakeupTail, lock);
+
+	num_held_lwlocks--;
+	for (; i < num_held_lwlocks; i++)
+		held_lwlocks[i] = held_lwlocks[i + 1];
 
 	/* Now okay to allow cancel/die interrupts. */
 	RESUME_INTERRUPTS();

@@ -668,18 +668,7 @@ ProcArrayEndTransaction(PGPROC *proc, TransactionId latestXid)
 		 */
 		Assert(TransactionIdIsValid(proc->xid));
 
-		/*
-		 * If we can immediately acquire ProcArrayLock, we clear our own XID
-		 * and release the lock.  If not, use group XID clearing to improve
-		 * efficiency.
-		 */
-		if (LWLockConditionalAcquire(ProcArrayLock, LW_EXCLUSIVE))
-		{
-			ProcArrayEndTransactionInternal(proc, latestXid);
-			LWLockRelease(ProcArrayLock);
-		}
-		else
-			ProcArrayGroupClearXid(proc, latestXid);
+		ProcArrayGroupClearXid(proc, latestXid);
 	}
 	else
 	{
@@ -768,6 +757,12 @@ ProcArrayEndTransactionInternal(PGPROC *proc, TransactionId latestXid)
 	ShmemVariableCache->xactCompletionCount++;
 }
 
+void
+ProcArrayLWLockCallback(LWLock *lwlock, PGPROC *proc)
+{
+	ProcArrayEndTransactionInternal(proc, proc->procArrayGroupMemberXid);
+}
+
 /*
  * ProcArrayGroupClearXid -- group XID clearing
  *
@@ -783,107 +778,12 @@ ProcArrayEndTransactionInternal(PGPROC *proc, TransactionId latestXid)
 static void
 ProcArrayGroupClearXid(PGPROC *proc, TransactionId latestXid)
 {
-	PROC_HDR   *procglobal = ProcGlobal;
-	uint32		nextidx;
-	uint32		wakeidx;
-
 	/* We should definitely have an XID to clear. */
 	Assert(TransactionIdIsValid(proc->xid));
 
 	/* Add ourselves to the list of processes needing a group XID clear. */
-	proc->procArrayGroupMember = true;
 	proc->procArrayGroupMemberXid = latestXid;
-	nextidx = pg_atomic_read_u32(&procglobal->procArrayGroupFirst);
-	while (true)
-	{
-		pg_atomic_write_u32(&proc->procArrayGroupNext, nextidx);
-
-		if (pg_atomic_compare_exchange_u32(&procglobal->procArrayGroupFirst,
-										   &nextidx,
-										   (uint32) proc->pgprocno))
-			break;
-	}
-
-	/*
-	 * If the list was not empty, the leader will clear our XID.  It is
-	 * impossible to have followers without a leader because the first process
-	 * that has added itself to the list will always have nextidx as
-	 * INVALID_PGPROCNO.
-	 */
-	if (nextidx != INVALID_PGPROCNO)
-	{
-		int			extraWaits = 0;
-
-		/* Sleep until the leader clears our XID. */
-		pgstat_report_wait_start(WAIT_EVENT_PROCARRAY_GROUP_UPDATE);
-		for (;;)
-		{
-			/* acts as a read barrier */
-			PGSemaphoreLock(proc->sem);
-			if (!proc->procArrayGroupMember)
-				break;
-			extraWaits++;
-		}
-		pgstat_report_wait_end();
-
-		Assert(pg_atomic_read_u32(&proc->procArrayGroupNext) == INVALID_PGPROCNO);
-
-		/* Fix semaphore count for any absorbed wakeups */
-		while (extraWaits-- > 0)
-			PGSemaphoreUnlock(proc->sem);
-		return;
-	}
-
-	/* We are the leader.  Acquire the lock on behalf of everyone. */
-	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
-
-	/*
-	 * Now that we've got the lock, clear the list of processes waiting for
-	 * group XID clearing, saving a pointer to the head of the list.  Trying
-	 * to pop elements one at a time could lead to an ABA problem.
-	 */
-	nextidx = pg_atomic_exchange_u32(&procglobal->procArrayGroupFirst,
-									 INVALID_PGPROCNO);
-
-	/* Remember head of list so we can perform wakeups after dropping lock. */
-	wakeidx = nextidx;
-
-	/* Walk the list and clear all XIDs. */
-	while (nextidx != INVALID_PGPROCNO)
-	{
-		PGPROC	   *nextproc = &allProcs[nextidx];
-
-		ProcArrayEndTransactionInternal(nextproc, nextproc->procArrayGroupMemberXid);
-
-		/* Move to next proc in list. */
-		nextidx = pg_atomic_read_u32(&nextproc->procArrayGroupNext);
-	}
-
-	/* We're done with the lock now. */
-	LWLockRelease(ProcArrayLock);
-
-	/*
-	 * Now that we've released the lock, go back and wake everybody up.  We
-	 * don't do this under the lock so as to keep lock hold times to a
-	 * minimum.  The system calls we need to perform to wake other processes
-	 * up are probably much slower than the simple memory writes we did while
-	 * holding the lock.
-	 */
-	while (wakeidx != INVALID_PGPROCNO)
-	{
-		PGPROC	   *nextproc = &allProcs[wakeidx];
-
-		wakeidx = pg_atomic_read_u32(&nextproc->procArrayGroupNext);
-		pg_atomic_write_u32(&nextproc->procArrayGroupNext, INVALID_PGPROCNO);
-
-		/* ensure all previous writes are visible before follower continues. */
-		pg_write_barrier();
-
-		nextproc->procArrayGroupMember = false;
-
-		if (nextproc != MyProc)
-			PGSemaphoreUnlock(nextproc->sem);
-	}
+	LWLockDoCallback(ProcArrayLock);
 }
 
 /*
