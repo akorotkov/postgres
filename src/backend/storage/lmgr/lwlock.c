@@ -106,6 +106,7 @@ extern slock_t *ShmemLock;
 #define LW_WAITERS_LIST_MASK 		((uint64) 0xFFFFFFFFF0000000)
 #define LW_WAITERS_HEAD_MASK		((uint64) 0xFFFFC00000000000)
 #define LW_WAITERS_TAIL_MASK		((uint64) 0x00003FFFF0000000)
+#define LW_FLAG_WAKE_UP_LOCK		((uint64) 1 << 22)
 #define LW_FLAG_RELEASE_OK			((uint64) 1 << 21)	/* Wake up waiters only if set */
 #define LW_FLAG_LOCK_VAR			((uint64) 1 << 20)
 
@@ -1786,8 +1787,39 @@ LWLockRelease(LWLock *lock)
 	 */
 	oldState = pg_atomic_read_u64(&lock->state);
 
+	while (true)
+	{
+		uint64		newState = oldState;
+
+		if (mode == LW_EXCLUSIVE)
+			newState -= LW_VAL_EXCLUSIVE;
+		else
+			newState -= LW_VAL_SHARED;
+
+		if (LW_HAS_WAITERS(oldState) &&
+			(newState & LW_LOCK_MASK) == 0 &&
+			(newState & LW_FLAG_RELEASE_OK) == LW_FLAG_RELEASE_OK)
+			newState |= LW_FLAG_WAKE_UP_LOCK;
+		newState &= ~LW_FLAG_LOCK_VAR;
+
+		if (pg_atomic_compare_exchange_u64(&lock->state, &oldState, newState))
+		{
+			if (!(oldState & LW_FLAG_WAKE_UP_LOCK) &&
+				(newState & LW_FLAG_WAKE_UP_LOCK))
+				wakeup = true;
+			oldState = newState;
+			break;
+		}
+	}
+
 	if (TRACE_POSTGRESQL_LWLOCK_RELEASE_ENABLED())
 		TRACE_POSTGRESQL_LWLOCK_RELEASE(T_NAME(lock));
+
+	if (!wakeup)
+	{
+		RESUME_INTERRUPTS();
+		return;
+	}
 
 	/* XXX: remove before commit? */
 	LOG_LWDEBUG("LWLockRelease", lock, "releasing waiters");
@@ -1815,209 +1847,193 @@ LWLockRelease(LWLock *lock)
 		newTail = LW_GET_WAIT_TAIL(newState);
 		prevPgprocno = INVALID_LOCK_PROCNO;
 
-		if (mode == LW_EXCLUSIVE)
-			newState -= LW_VAL_EXCLUSIVE;
-		else
-			newState -= LW_VAL_SHARED;
-
-		if (LW_HAS_WAITERS(oldState) &&
-			(newState & LW_LOCK_MASK) == 0 &&
-			(newState & LW_FLAG_RELEASE_OK) == LW_FLAG_RELEASE_OK)
-			wakeup = true;
-
-		if (wakeup)
+		/* Move all LW_WAIT_UNTIL_FREE waiters into wakeup list. */
+		if (oldHead == INVALID_LOCK_PROCNO ||
+			oldTail == INVALID_LOCK_PROCNO ||
+			newHead != oldHead)
 		{
-			/* Move all LW_WAIT_UNTIL_FREE waiters into wakeup list. */
-			if (oldHead == INVALID_LOCK_PROCNO ||
-				oldTail == INVALID_LOCK_PROCNO ||
-				newHead != oldHead)
-			{
-				pgprocno = newHead;
+			pgprocno = newHead;
 
-			}
-			else if (oldTail != newTail)
-			{
-				Assert(newHead != INVALID_LOCK_PROCNO &&
-					   newTail != INVALID_LOCK_PROCNO &&
-					   oldHead != INVALID_LOCK_PROCNO &&
-					   oldTail != INVALID_LOCK_PROCNO);
+		}
+		else if (oldTail != newTail)
+		{
+			Assert(newHead != INVALID_LOCK_PROCNO &&
+					newTail != INVALID_LOCK_PROCNO &&
+					oldHead != INVALID_LOCK_PROCNO &&
+					oldTail != INVALID_LOCK_PROCNO);
 
+			pgprocno = NextWaitLink(oldTail);
+			if (pgprocno == INVALID_LOCK_PROCNO)
+			{
+				waitForQueueRelink(oldTail);
 				pgprocno = NextWaitLink(oldTail);
-				if (pgprocno == INVALID_LOCK_PROCNO)
+			}
+			prevPgprocno = oldReplaceTail;
+
+			if (oldReplaceHead != INVALID_LOCK_PROCNO)
+				newHead = oldReplaceHead;
+			else
+				newHead = pgprocno;
+
+			if (oldTail != oldReplaceTail &&
+				oldReplaceTail != INVALID_LOCK_PROCNO)
+			{
+				Assert(prevPgprocno != pgprocno);
+				NextWaitLink(prevPgprocno) = pgprocno;
+			}
+		}
+		else
+		{
+			Assert(newHead == oldHead);
+			Assert(oldTail == newTail);
+			newHead = oldReplaceHead;
+			newTail = oldReplaceTail;
+			pgprocno = INVALID_LOCK_PROCNO;
+		}
+
+		while (pgprocno != INVALID_LOCK_PROCNO)
+		{
+			LWLockMode	curMode = CurWaitMode(pgprocno);
+			uint32		nextPgprocno = (pgprocno != newTail ? NextWaitLink(pgprocno) : INVALID_LOCK_PROCNO),
+						nextStepPgprocno,
+						nextStepPrevPgprocno = pgprocno;
+
+			/* Lock tail is updated but queue tail haven't relinked yet. */
+			if (pgprocno != newTail &&
+				nextPgprocno == INVALID_LOCK_PROCNO)
+			{
+				waitForQueueRelink(pgprocno);
+				nextPgprocno = NextWaitLink(pgprocno);
+			}
+			nextStepPgprocno = nextPgprocno;
+
+			if (nextPgprocno == oldHead &&
+				nextPgprocno != INVALID_LOCK_PROCNO)
+			{
+				Assert(oldTail != INVALID_LOCK_PROCNO);
+				Assert(newTail != INVALID_LOCK_PROCNO);
+
+				nextStepPrevPgprocno = (oldReplaceTail != INVALID_LOCK_PROCNO ? oldReplaceTail : pgprocno);
+				nextStepPgprocno = (oldTail != newTail ? NextWaitLink(oldTail) : INVALID_LOCK_PROCNO);
+				if (nextStepPgprocno == INVALID_LOCK_PROCNO &&
+					oldTail != newTail)
 				{
 					waitForQueueRelink(oldTail);
-					pgprocno = NextWaitLink(oldTail);
+					nextStepPgprocno = NextWaitLink(oldTail);
 				}
-				prevPgprocno = oldReplaceTail;
-
-				if (oldReplaceHead != INVALID_LOCK_PROCNO)
-					newHead = oldReplaceHead;
-				else
-					newHead = pgprocno;
 
 				if (oldTail != oldReplaceTail &&
 					oldReplaceTail != INVALID_LOCK_PROCNO)
 				{
-					Assert(prevPgprocno != pgprocno);
-					NextWaitLink(prevPgprocno) = pgprocno;
+					Assert(oldReplaceTail != nextStepPgprocno);
+					NextWaitLink(oldReplaceTail) = nextStepPgprocno;
 				}
+
+				if (oldReplaceHead != INVALID_LOCK_PROCNO)
+				{
+					if (oldReplaceHead != nextPgprocno)
+					{
+						Assert(pgprocno != oldReplaceHead);
+						nextPgprocno = NextWaitLink(pgprocno) = oldReplaceHead;
+					}
+				}
+				else
+				{
+					if (nextStepPgprocno != nextPgprocno)
+					{
+						Assert(pgprocno != nextStepPgprocno);
+						nextPgprocno = NextWaitLink(pgprocno) = nextStepPgprocno;
+					}
+				}
+
+				if (oldTail == newTail)
+				{
+					if (oldReplaceTail != INVALID_LOCK_PROCNO)
+						newTail = oldReplaceTail;
+					else
+						newTail = pgprocno;
+				}
+			}
+
+			/* Remove LW_WAIT_UNTIL_FREE waiters from the list head */
+			if (curMode == LW_WAIT_UNTIL_FREE)
+			{
+				Assert(prevPgprocno == INVALID_LOCK_PROCNO);
+				newHead = nextPgprocno;
+				if (newHead == INVALID_LOCK_PROCNO)
+					newTail = newHead;
+				if (nextStepPrevPgprocno == pgprocno)
+					nextStepPrevPgprocno = prevPgprocno;
+
+				/* Push to the wakeup list */
+				Assert(pgprocno != wakeupTail);
+				NextReleaseLink(pgprocno) = wakeupTail;
+				wakeupTail = pgprocno;
 			}
 			else
 			{
-				Assert(newHead == oldHead);
-				Assert(oldTail == newTail);
-				newHead = oldReplaceHead;
-				newTail = oldReplaceTail;
-				pgprocno = INVALID_LOCK_PROCNO;
-			}
+				if (lastMode == LW_EXCLUSIVE)
+					break;
 
-			while (pgprocno != INVALID_LOCK_PROCNO)
-			{
-				LWLockMode	curMode = CurWaitMode(pgprocno);
-				uint32		nextPgprocno = (pgprocno != newTail ? NextWaitLink(pgprocno) : INVALID_LOCK_PROCNO),
-							nextStepPgprocno,
-							nextStepPrevPgprocno = pgprocno;
+				if (lastMode == LW_WAIT_UNTIL_FREE)
+					lastMode = curMode;
 
-				/* Lock tail is updated but queue tail haven't relinked yet. */
-				if (pgprocno != newTail &&
-					nextPgprocno == INVALID_LOCK_PROCNO)
+				if (lastMode == curMode)
 				{
-					waitForQueueRelink(pgprocno);
-					nextPgprocno = NextWaitLink(pgprocno);
-				}
-				nextStepPgprocno = nextPgprocno;
+					/*
+					 * Prevent additional wakeups until retrier gets to
+						* run. Backends that are just waiting for the lock to
+						* become free don't retry automatically.
+						*/
+					new_release_ok = false;
 
-				if (nextPgprocno == oldHead &&
-					nextPgprocno != INVALID_LOCK_PROCNO)
-				{
-					Assert(oldTail != INVALID_LOCK_PROCNO);
-					Assert(newTail != INVALID_LOCK_PROCNO);
-
-					nextStepPrevPgprocno = (oldReplaceTail != INVALID_LOCK_PROCNO ? oldReplaceTail : pgprocno);
-					nextStepPgprocno = (oldTail != newTail ? NextWaitLink(oldTail) : INVALID_LOCK_PROCNO);
-					if (nextStepPgprocno == INVALID_LOCK_PROCNO &&
-						oldTail != newTail)
+					if (prevPgprocno == INVALID_LOCK_PROCNO)
 					{
-						waitForQueueRelink(oldTail);
-						nextStepPgprocno = NextWaitLink(oldTail);
-					}
-
-					if (oldTail != oldReplaceTail &&
-						oldReplaceTail != INVALID_LOCK_PROCNO)
-					{
-						Assert(oldReplaceTail != nextStepPgprocno);
-						NextWaitLink(oldReplaceTail) = nextStepPgprocno;
-					}
-
-					if (oldReplaceHead != INVALID_LOCK_PROCNO)
-					{
-						if (oldReplaceHead != nextPgprocno)
-						{
-							Assert(pgprocno != oldReplaceHead);
-							nextPgprocno = NextWaitLink(pgprocno) = oldReplaceHead;
-						}
+						newHead = nextPgprocno;
 					}
 					else
 					{
-						if (nextStepPgprocno != nextPgprocno)
+						Assert(prevPgprocno != nextPgprocno);
+						NextWaitLink(prevPgprocno) = nextPgprocno;
+						if (nextPgprocno == INVALID_LOCK_PROCNO)
 						{
-							Assert(pgprocno != nextStepPgprocno);
-							nextPgprocno = NextWaitLink(pgprocno) = nextStepPgprocno;
+							Assert(newTail == pgprocno);
+							newTail = prevPgprocno;
 						}
 					}
 
-					if (oldTail == newTail)
-					{
-						if (oldReplaceTail != INVALID_LOCK_PROCNO)
-							newTail = oldReplaceTail;
-						else
-							newTail = pgprocno;
-					}
-				}
-
-				/* Remove LW_WAIT_UNTIL_FREE waiters from the list head */
-				if (curMode == LW_WAIT_UNTIL_FREE)
-				{
-					Assert(prevPgprocno == INVALID_LOCK_PROCNO);
-					newHead = nextPgprocno;
-					if (newHead == INVALID_LOCK_PROCNO)
-						newTail = newHead;
 					if (nextStepPrevPgprocno == pgprocno)
 						nextStepPrevPgprocno = prevPgprocno;
+
+					if (newHead == INVALID_LOCK_PROCNO ||
+						newTail == INVALID_LOCK_PROCNO)
+					{
+						newHead = INVALID_LOCK_PROCNO;
+						newTail = INVALID_LOCK_PROCNO;
+					}
 
 					/* Push to the wakeup list */
 					Assert(pgprocno != wakeupTail);
 					NextReleaseLink(pgprocno) = wakeupTail;
 					wakeupTail = pgprocno;
 				}
-				else
-				{
-					if (lastMode == LW_EXCLUSIVE)
-						break;
-
-					if (lastMode == LW_WAIT_UNTIL_FREE)
-						lastMode = curMode;
-
-					if (lastMode == curMode)
-					{
-						/*
-						 * Prevent additional wakeups until retrier gets to
-						 * run. Backends that are just waiting for the lock to
-						 * become free don't retry automatically.
-						 */
-						new_release_ok = false;
-
-						if (prevPgprocno == INVALID_LOCK_PROCNO)
-						{
-							newHead = nextPgprocno;
-						}
-						else
-						{
-							Assert(prevPgprocno != nextPgprocno);
-							NextWaitLink(prevPgprocno) = nextPgprocno;
-							if (nextPgprocno == INVALID_LOCK_PROCNO)
-							{
-								Assert(newTail == pgprocno);
-								newTail = prevPgprocno;
-							}
-						}
-
-						if (nextStepPrevPgprocno == pgprocno)
-							nextStepPrevPgprocno = prevPgprocno;
-
-						if (newHead == INVALID_LOCK_PROCNO ||
-							newTail == INVALID_LOCK_PROCNO)
-						{
-							newHead = INVALID_LOCK_PROCNO;
-							newTail = INVALID_LOCK_PROCNO;
-						}
-
-						/* Push to the wakeup list */
-						Assert(pgprocno != wakeupTail);
-						NextReleaseLink(pgprocno) = wakeupTail;
-						wakeupTail = pgprocno;
-					}
-				}
-
-				prevPgprocno = nextStepPrevPgprocno;
-				pgprocno = nextStepPgprocno;
 			}
+
+			prevPgprocno = nextStepPrevPgprocno;
+			pgprocno = nextStepPgprocno;
 		}
 
-		newState = LW_SET_STATE(newState & ~LW_FLAG_LOCK_VAR , newHead, newTail);
+		newState = LW_SET_STATE(newState & ~LW_FLAG_WAKE_UP_LOCK, newHead, newTail);
 
 		if (new_release_ok)
 			newState |= LW_FLAG_RELEASE_OK;
 		else
 			newState &= ~LW_FLAG_RELEASE_OK;
 
-		if (wakeup)
-		{
-			oldHead = LW_GET_WAIT_HEAD(oldState);
-			oldTail = LW_GET_WAIT_TAIL(oldState);
-			oldReplaceHead = newHead;
-			oldReplaceTail = newTail;
-		}
+		oldHead = LW_GET_WAIT_HEAD(oldState);
+		oldTail = LW_GET_WAIT_TAIL(oldState);
+		oldReplaceHead = newHead;
+		oldReplaceTail = newTail;
 
 		if (pg_atomic_compare_exchange_u64(&lock->state, &oldState, newState))
 			break;
