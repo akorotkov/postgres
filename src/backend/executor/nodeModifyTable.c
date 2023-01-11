@@ -1557,6 +1557,21 @@ ldelete:
 					{
 						case TM_Ok:
 							Assert(context->tmfd.traversed);
+
+							/*
+							 * Save locked table for further processing for
+							 * RETURNING clause.
+							 */
+							if (processReturning &&
+								resultRelInfo->ri_projectReturning &&
+								!resultRelInfo->ri_FdwRoutine)
+							{
+								TupleTableSlot *returningSlot;
+								returningSlot = ExecGetReturningSlot(estate, resultRelInfo);
+								ExecCopySlot(returningSlot, inputslot);
+								ExecMaterializeSlot(returningSlot);
+							}
+
 							epqslot = EvalPlanQual(context->epqstate,
 												   resultRelationDesc,
 												   resultRelInfo->ri_RangeTableIndex,
@@ -1676,7 +1691,7 @@ ldelete:
 			{
 				ExecForceStoreHeapTuple(oldtuple, slot, false);
 			}
-			else
+			else if (TupIsNull(slot))
 			{
 				if (!table_tuple_fetch_row_version(resultRelationDesc, tupleid,
 												   SnapshotAny, slot))
@@ -2390,6 +2405,19 @@ redo_act:
 						case TM_Ok:
 							Assert(context->tmfd.traversed);
 
+							/* Make sure ri_oldTupleSlot is initialized. */
+							if (unlikely(!resultRelInfo->ri_projectNewInfoValid))
+								ExecInitUpdateProjection(context->mtstate,
+														 resultRelInfo);
+
+							/*
+							 * Save the locked tuple for further calculation of
+							 * the new tuple.
+							 */
+							oldSlot = resultRelInfo->ri_oldTupleSlot;
+							ExecCopySlot(oldSlot, inputslot);
+							ExecMaterializeSlot(oldSlot);
+
 							epqslot = EvalPlanQual(context->epqstate,
 												   resultRelationDesc,
 												   resultRelInfo->ri_RangeTableIndex,
@@ -2398,18 +2426,6 @@ redo_act:
 								/* Tuple not passing quals anymore, exiting... */
 								return NULL;
 
-							/* Make sure ri_oldTupleSlot is initialized. */
-							if (unlikely(!resultRelInfo->ri_projectNewInfoValid))
-								ExecInitUpdateProjection(context->mtstate,
-														 resultRelInfo);
-
-							/* Fetch the most recent version of old tuple. */
-							oldSlot = resultRelInfo->ri_oldTupleSlot;
-							if (!table_tuple_fetch_row_version(resultRelationDesc,
-															   tupleid,
-															   SnapshotAny,
-															   oldSlot))
-								elog(ERROR, "failed to fetch tuple being updated");
 							slot = ExecGetUpdateNewTuple(resultRelInfo,
 														 epqslot, oldSlot);
 							goto redo_act;
