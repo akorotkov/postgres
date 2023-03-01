@@ -2463,7 +2463,7 @@ TM_Result
 heap_delete(Relation relation, ItemPointer tid,
 			CommandId cid, Snapshot crosscheck, bool wait,
 			TM_FailureData *tmfd, bool changingPart, Snapshot snapshot,
-			GetSlotCallback lockedSlotCallback, void *lockedSlotCallbackArg)
+			LazyTupleTableSlot *lockedSlot)
 {
 	TM_Result	result;
 	TransactionId xid = GetCurrentTransactionId();
@@ -2662,15 +2662,13 @@ l1:
 			result = TM_Updated;
 	}
 
-	if (result == TM_Updated && lockedSlotCallback)
+	if (result == TM_Updated && lockedSlot)
 	{
 		HeapLockContext context = {buffer, vmbuffer, have_tuple_lock};
-		TupleTableSlot *slot;
-
-		slot = lockedSlotCallback(lockedSlotCallbackArg);
 
 		result = heapam_tuple_lock_internal(relation, tid, snapshot,
-											slot, cid, LockTupleExclusive,
+											LAZY_TTS_EVAL(lockedSlot),
+											cid, LockTupleExclusive,
 											wait ? LockWaitBlock : LockWaitError,
 											TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
 											tmfd, &context);
@@ -2906,7 +2904,7 @@ simple_heap_delete(Relation relation, ItemPointer tid)
 						 GetCurrentCommandId(true), InvalidSnapshot,
 						 true /* wait for commit */ ,
 						 &tmfd, false /* changingPart */ ,
-						 SnapshotAny, NULL, NULL);
+						 SnapshotAny, NULL);
 	switch (result)
 	{
 		case TM_SelfModified:
@@ -2947,7 +2945,7 @@ TM_Result
 heap_update(Relation relation, ItemPointer otid, HeapTuple newtup,
 			CommandId cid, Snapshot crosscheck, bool wait,
 			TM_FailureData *tmfd, LockTupleMode *lockmode, Snapshot snapshot,
-			GetSlotCallback lockedSlotCallback, void *lockedSlotCallbackArg)
+			LazyTupleTableSlot *lockedSlot)
 {
 	TM_Result	result;
 	TransactionId xid = GetCurrentTransactionId();
@@ -3314,15 +3312,13 @@ l2:
 		}
 	}
 
-	if (result == TM_Updated && lockedSlotCallback)
+	if (result == TM_Updated && lockedSlot)
 	{
 		HeapLockContext context = {buffer, vmbuffer, have_tuple_lock};
-		TupleTableSlot *slot;
-
-		slot = lockedSlotCallback(lockedSlotCallbackArg);
 
 		result = heapam_tuple_lock_internal(relation, otid, snapshot,
-											slot, cid, *lockmode,
+											LAZY_TTS_EVAL(lockedSlot),
+											cid, *lockmode,
 											wait ? LockWaitBlock : LockWaitError,
 											TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
 											tmfd, &context);
@@ -4008,7 +4004,7 @@ simple_heap_update(Relation relation, ItemPointer otid, HeapTuple tup)
 	result = heap_update(relation, otid, tup,
 						 GetCurrentCommandId(true), InvalidSnapshot,
 						 true /* wait for commit */ ,
-						 &tmfd, &lockmode, SnapshotAny, NULL, NULL);
+						 &tmfd, &lockmode, SnapshotAny, NULL);
 	switch (result)
 	{
 		case TM_SelfModified:

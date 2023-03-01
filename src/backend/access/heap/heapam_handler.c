@@ -300,8 +300,7 @@ static TM_Result
 heapam_tuple_delete(Relation relation, ItemPointer tid, CommandId cid,
 					Snapshot snapshot, Snapshot crosscheck, bool wait,
 					TM_FailureData *tmfd, bool changingPart,
-					GetSlotCallback lockedSlotCallback,
-					void *lockedSlotCallbackArg)
+					LazyTupleTableSlot *lockedSlot)
 {
 	TM_Result	result;
 
@@ -311,7 +310,7 @@ heapam_tuple_delete(Relation relation, ItemPointer tid, CommandId cid,
 	 * time to call the index tuple deletion also.
 	 */
 	result = heap_delete(relation, tid, cid, crosscheck, wait, tmfd, changingPart,
-						 snapshot, lockedSlotCallback, lockedSlotCallbackArg);
+						 snapshot, lockedSlot);
 
 	return result;
 }
@@ -322,8 +321,7 @@ heapam_tuple_update(Relation relation, ItemPointer otid, TupleTableSlot *slot,
 					CommandId cid, Snapshot snapshot, Snapshot crosscheck,
 					bool wait, TM_FailureData *tmfd,
 					LockTupleMode *lockmode, bool *update_indexes,
-					GetSlotCallback lockedSlotCallback,
-					void *lockedSlotCallbackArg)
+					LazyTupleTableSlot *lockedSlot)
 {
 	bool		shouldFree = true;
 	HeapTuple	tuple = ExecFetchSlotHeapTuple(slot, true, &shouldFree);
@@ -334,7 +332,7 @@ heapam_tuple_update(Relation relation, ItemPointer otid, TupleTableSlot *slot,
 	tuple->t_tableOid = slot->tts_tableOid;
 
 	result = heap_update(relation, otid, tuple, cid, crosscheck, wait,
-						 tmfd, lockmode, snapshot, lockedSlotCallback, lockedSlotCallbackArg);
+						 tmfd, lockmode, snapshot, lockedSlot);
 	ItemPointerCopy(&tuple->t_self, &slot->tts_tid);
 
 	/*

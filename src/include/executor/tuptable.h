@@ -300,6 +300,27 @@ typedef struct MinimalTupleTableSlot
 #define TupIsNull(slot) \
 	((slot) == NULL || TTS_EMPTY(slot))
 
+typedef struct
+{
+	TupleTableSlot *slot;
+	TupleTableSlot *(*getSlot) (void *arg);
+	void	   *getSlotArg;
+} LazyTupleTableSlot;
+
+#define MAKE_LAZY_TTS(lazySlot, callback, arg) \
+	do { \
+		(lazySlot)->slot = NULL; \
+		(lazySlot)->getSlot = callback; \
+		(lazySlot)->getSlotArg = arg; \
+	} while (false)
+
+#define LAZY_TTS_EVAL(lazySlot) \
+	((lazySlot) ? \
+		((lazySlot)->slot ? \
+			(lazySlot)->slot : \
+			(lazySlot)->getSlot((lazySlot)->getSlotArg)) : \
+		NULL)
+
 /* in executor/execTuples.c */
 extern TupleTableSlot *MakeTupleTableSlot(TupleDesc tupleDesc,
 										  const TupleTableSlotOps *tts_ops);

@@ -252,9 +252,6 @@ typedef void (*IndexBuildCallback) (Relation index,
 									bool tupleIsAlive,
 									void *state);
 
-/* Typedef for callback function for table_index_build_scan */
-typedef TupleTableSlot *(*GetSlotCallback) (void *arg);
-
 /*
  * API struct for a table AM.  Note this must be allocated in a
  * server-lifetime manner, typically as a static const struct, which then gets
@@ -518,8 +515,7 @@ typedef struct TableAmRoutine
 								 bool wait,
 								 TM_FailureData *tmfd,
 								 bool changingPart,
-								 GetSlotCallback lockedSlotCallback,
-								 void *lockedSlotCallbackArg);
+								 LazyTupleTableSlot *lockedSlot);
 
 	/* see table_tuple_update() for reference about parameters */
 	TM_Result	(*tuple_update) (Relation rel,
@@ -532,8 +528,7 @@ typedef struct TableAmRoutine
 								 TM_FailureData *tmfd,
 								 LockTupleMode *lockmode,
 								 bool *update_indexes,
-								 GetSlotCallback lockedSlotCallback,
-								 void *lockedSlotCallbackArg);
+								 LazyTupleTableSlot *lockedSlot);
 
 	/* see table_tuple_lock() for reference about parameters */
 	TM_Result	(*tuple_lock) (Relation rel,
@@ -1479,14 +1474,12 @@ static inline TM_Result
 table_tuple_delete(Relation rel, ItemPointer tid, CommandId cid,
 				   Snapshot snapshot, Snapshot crosscheck, bool wait,
 				   TM_FailureData *tmfd, bool changingPart,
-				   GetSlotCallback lockedSlotCallback,
-				   void *lockedSlotCallbackArg)
+				   LazyTupleTableSlot *lockedSlot)
 {
 	return rel->rd_tableam->tuple_delete(rel, tid, cid,
 										 snapshot, crosscheck,
 										 wait, tmfd, changingPart,
-										 lockedSlotCallback,
-										 lockedSlotCallbackArg);
+										 lockedSlot);
 }
 
 /*
@@ -1529,15 +1522,13 @@ static inline TM_Result
 table_tuple_update(Relation rel, ItemPointer otid, TupleTableSlot *slot,
 				   CommandId cid, Snapshot snapshot, Snapshot crosscheck,
 				   bool wait, TM_FailureData *tmfd, LockTupleMode *lockmode,
-				   bool *update_indexes, GetSlotCallback lockedSlotCallback,
-				   void *lockedSlotCallbackArg)
+				   bool *update_indexes, LazyTupleTableSlot *lockedSlot)
 {
 	return rel->rd_tableam->tuple_update(rel, otid, slot,
 										 cid, snapshot, crosscheck,
 										 wait, tmfd,
 										 lockmode, update_indexes,
-										 lockedSlotCallback,
-										 lockedSlotCallbackArg);
+										 lockedSlot);
 }
 
 /*
