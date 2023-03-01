@@ -1352,7 +1352,9 @@ ExecDeleteAct(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 {
 	EState	   *estate = context->estate;
 	GetEPQSlotArg slotArg = {.epqstate = context->epqstate, .resultRelInfo = resultRelInfo};
+	LazyTupleTableSlot lazyEPQSlot;
 
+	MAKE_LAZY_TTS(&lazyEPQSlot, GetEPQSlot, &slotArg);
 	return table_tuple_delete(resultRelInfo->ri_RelationDesc, tupleid,
 							  estate->es_output_cid,
 							  estate->es_snapshot,
@@ -1360,8 +1362,7 @@ ExecDeleteAct(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 							  true /* wait for commit */ ,
 							  &context->tmfd,
 							  changingPart,
-							  GetEPQSlot,
-							  &slotArg);
+							  &lazyEPQSlot);
 }
 
 /*
@@ -1945,6 +1946,7 @@ ExecUpdateAct(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 	bool		partition_constraint_failed;
 	TM_Result	result;
 	GetEPQSlotArg slotArg = {.epqstate = context->epqstate, .resultRelInfo = resultRelInfo};
+	LazyTupleTableSlot lazyEPQSlot;
 
 	updateCxt->crossPartUpdate = false;
 
@@ -2070,6 +2072,7 @@ lreplace:
 	 * for referential integrity updates in transaction-snapshot mode
 	 * transactions.
 	 */
+	MAKE_LAZY_TTS(&lazyEPQSlot, GetEPQSlot, &slotArg);
 	result = table_tuple_update(resultRelationDesc, tupleid, slot,
 								estate->es_output_cid,
 								estate->es_snapshot,
@@ -2077,8 +2080,7 @@ lreplace:
 								true /* wait for commit */ ,
 								&context->tmfd, &updateCxt->lockmode,
 								&updateCxt->updateIndexes,
-								GetEPQSlot,
-								&slotArg);
+								&lazyEPQSlot);
 	if (result == TM_Ok)
 		updateCxt->updated = true;
 

@@ -306,8 +306,7 @@ static TM_Result
 heapam_tuple_delete(Relation relation, ItemPointer tid, CommandId cid,
 					Snapshot snapshot, Snapshot crosscheck, bool wait,
 					TM_FailureData *tmfd, bool changingPart,
-					GetSlotCallback lockedSlotCallback,
-					void *lockedSlotCallbackArg)
+					LazyTupleTableSlot *lockedSlot)
 {
 	TM_Result	result;
 
@@ -323,15 +322,15 @@ heapam_tuple_delete(Relation relation, ItemPointer tid, CommandId cid,
 	 * retry it will succeed, provided that the caller asked to do this by
 	 * providing a lockedSlot.
 	 */
-	if (result == TM_Updated && lockedSlotCallback)
+	if (result == TM_Updated && lockedSlot)
 	{
-		TupleTableSlot *lockedSlot;
+		TupleTableSlot *evalSlot;
 
 		Assert(wait);
 
-		lockedSlot = lockedSlotCallback(lockedSlotCallbackArg);
+		evalSlot = LAZY_TTS_EVAL(lockedSlot);
 		result = heapam_tuple_lock_internal(relation, tid, snapshot,
-											lockedSlot, cid, LockTupleExclusive,
+											evalSlot, cid, LockTupleExclusive,
 											LockWaitBlock,
 											TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
 											tmfd, true);
@@ -352,8 +351,7 @@ heapam_tuple_update(Relation relation, ItemPointer otid, TupleTableSlot *slot,
 					CommandId cid, Snapshot snapshot, Snapshot crosscheck,
 					bool wait, TM_FailureData *tmfd,
 					LockTupleMode *lockmode, bool *update_indexes,
-					GetSlotCallback lockedSlotCallback,
-					void *lockedSlotCallbackArg)
+					LazyTupleTableSlot *lockedSlot)
 {
 	bool		shouldFree = true;
 	HeapTuple	tuple = ExecFetchSlotHeapTuple(slot, true, &shouldFree);
@@ -385,15 +383,15 @@ heapam_tuple_update(Relation relation, ItemPointer otid, TupleTableSlot *slot,
 	 * retry it will succeed, provided that the caller asked to do this by
 	 * providing a lockedSlot.
 	 */
-	if (result == TM_Updated && lockedSlotCallback)
+	if (result == TM_Updated && lockedSlot)
 	{
-		TupleTableSlot *lockedSlot;
+		TupleTableSlot *evalSlot;
 
 		Assert(wait);
 
-		lockedSlot = lockedSlotCallback(lockedSlotCallbackArg);
+		evalSlot = LAZY_TTS_EVAL(lockedSlot);
 		result = heapam_tuple_lock_internal(relation, otid, snapshot,
-											lockedSlot, cid, *lockmode,
+											evalSlot, cid, *lockmode,
 											LockWaitBlock,
 											TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
 											tmfd, true);
