@@ -2665,10 +2665,12 @@ l1:
 	if (result == TM_Updated && lockedSlot)
 	{
 		HeapLockContext context = {buffer, vmbuffer, have_tuple_lock};
+		TupleTableSlot *slot;
+
+		slot = lockedSlot->getSlot(lockedSlot->getSlotArg);
 
 		result = heapam_tuple_lock_internal(relation, tid, snapshot,
-											LAZY_TTS_EVAL(lockedSlot),
-											cid, LockTupleExclusive,
+											slot, cid, LockTupleExclusive,
 											wait ? LockWaitBlock : LockWaitError,
 											TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
 											tmfd, &context);
@@ -3315,10 +3317,12 @@ l2:
 	if (result == TM_Updated && lockedSlot)
 	{
 		HeapLockContext context = {buffer, vmbuffer, have_tuple_lock};
+		TupleTableSlot *slot;
+
+		slot = lockedSlot->getSlot(lockedSlot->getSlotArg);
 
 		result = heapam_tuple_lock_internal(relation, otid, snapshot,
-											LAZY_TTS_EVAL(lockedSlot),
-											cid, *lockmode,
+											slot, cid, *lockmode,
 											wait ? LockWaitBlock : LockWaitError,
 											TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
 											tmfd, &context);
